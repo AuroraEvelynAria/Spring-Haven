@@ -1,8 +1,8 @@
-extends Node
+extends SceneTree
 
 const VOICE_INPUT_SCRIPT := preload("res://scripts/autoload/VoiceInputService.gd")
 
-func _ready() -> void:
+func _initialize() -> void:
 	var service := VOICE_INPUT_SCRIPT.new()
 	var source := PackedFloat32Array()
 	source.resize(48000)
@@ -18,7 +18,7 @@ func _ready() -> void:
 	_expect(_u32(wav, 40) == 16000 * 2, "WAV data 长度错误")
 	service.free()
 	print("VOICE_INPUT_ENCODING_CHECK passed")
-	get_tree().quit(0)
+	quit(0)
 
 func _ascii(bytes: PackedByteArray, offset: int, length: int) -> String:
 	return bytes.slice(offset, offset + length).get_string_from_ascii()
@@ -38,4 +38,4 @@ func _expect(condition: bool, message: String) -> void:
 	if condition:
 		return
 	printerr("VOICE_INPUT_ENCODING_CHECK failed: " + message)
-	get_tree().quit(1)
+	quit(1)

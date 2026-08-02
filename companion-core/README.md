@@ -73,10 +73,13 @@ The same panel now exposes independent capability profiles:
 - **TTS** — character speech through OpenAI-compatible `/audio/speech`, Open-LLM-VTuber `/tts-ws`, or GPT-SoVITS `/tts`.
 
 TTS role voice IDs can be supplied with `SPRING_HEAVEN_TTS_LING_VOICE` and
-`SPRING_HEAVEN_TTS_NAI_VOICE`; leaving them empty lets the configured Voicebox or
-OpenAI-compatible server choose its default voice. The UI stores the provider
-URL, model, protocol, enable flag, and encrypted key; voice IDs stay optional
-runtime presentation settings.
+`SPRING_HEAVEN_TTS_NAI_VOICE`, or saved per-character in the Godot **TTS** profile
+as `Voice ID (Ling)` and `Voice ID (Nai)`. Saved UI values are local presentation
+settings and are passed only with that character's synthesis request; they are
+not stored in the Core provider key bundle. Environment variables override saved
+UI values for managed deployments. Leaving both empty lets the configured
+Voicebox or OpenAI-compatible server choose its default voice. The UI stores the
+provider URL, model, protocol, enable flag, and encrypted key separately.
 
 Vision and Embedding use OpenAI-compatible chat/embedding contracts. Rerank
 supports Jina-style `/rerank` and Cohere v2 `/rerank` contracts. Each advanced
