@@ -1,0 +1,14 @@
+{
+  "port": 18340,
+  "api_key": "replace-with-a-random-key-of-at-least-32-characters",
+  "provider_base_url": "https://api.deepseek.com/v1",
+  "provider_model": "deepseek-chat",
+  "request_timeout_seconds": 90,
+  "max_output_tokens": 1200,
+  "temperature": 0.8,
+  "memory_db_path": "heartloom.sqlite3",
+  "memory_recall_limit": 8,
+  "memory_recent_messages": 24,
+  "memory_organizer_enabled": true,
+  "memory_organizer_max_entries": 3
+}

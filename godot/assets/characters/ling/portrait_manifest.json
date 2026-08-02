@@ -1,0 +1,25 @@
+{
+  "schema": "spring_haven.portrait_rig.v1",
+  "role_id": "ling",
+  "display_name": "小玲",
+  "canvas_size": [1600, 1200],
+  "palette": {
+    "background": "#182126",
+    "accent": "#F29A7D",
+    "secondary": "#6FB7A7",
+    "hair": "#70483F",
+    "hair_shadow": "#4B3132",
+    "skin": "#F8D4C2",
+    "skin_shadow": "#DFAE9E",
+    "eye": "#67B5A5",
+    "line": "#46343A",
+    "outfit": "#4E8D82",
+    "blush": "#E97E92",
+    "mouth": "#7A394B"
+  },
+  "layers": [],
+  "expressions": {},
+  "mouth_shapes": [],
+  "blink_layer": "",
+  "asset_notes": "Export transparent PNG layers from one aligned PSD canvas. Keep layer IDs stable when replacing art."
+}

@@ -1,0 +1,96 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scenes/LifeLab/LifeLabWorld.gd" id="1_world"]
+[ext_resource type="Script" path="res://scenes/LifeLab/LifeLabRoom.gd" id="2_room"]
+[ext_resource type="PackedScene" path="res://scenes/Exploration/Characters/LingAgent3D.tscn" id="3_agent"]
+[ext_resource type="Script" path="res://scenes/LifeLab/LifeLabPlayer.gd" id="4_player"]
+[ext_resource type="Script" path="res://scenes/LifeLab/LifeLabCamera.gd" id="5_camera"]
+[ext_resource type="Script" path="res://scenes/LifeLab/LifeLabTaskController.gd" id="6_tasks"]
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_lab"]
+agent_height = 0.95
+agent_radius = 0.35
+agent_max_climb = 0.2
+agent_max_slope = 42.0
+cell_size = 0.05
+cell_height = 0.05
+
+[sub_resource type="Environment" id="Environment_lab"]
+background_mode = 1
+background_color = Color(0.27, 0.31, 0.34, 1)
+background_energy_multiplier = 0.62
+ambient_light_source = 3
+ambient_light_color = Color(0.93, 0.89, 0.8, 1)
+ambient_light_energy = 0.42
+tonemap_mode = 2
+tonemap_exposure = 0.92
+
+[node name="LifeLabWorld" type="Node3D"]
+script = ExtResource("1_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_lab")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-58, -28, 0)
+light_color = Color(1, 0.92, 0.8, 1)
+light_energy = 0.72
+shadow_enabled = true
+directional_shadow_max_distance = 28.0
+
+[node name="FillLight" type="OmniLight3D" parent="."]
+position = Vector3(-2, 5.5, 1)
+light_color = Color(0.68, 0.82, 1, 1)
+light_energy = 0.42
+omni_range = 13.0
+
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavigationMesh_lab")
+use_edge_connections = true
+
+[node name="LifeLabRoom" type="Node3D" parent="NavigationRegion3D"]
+script = ExtResource("2_room")
+
+[node name="PlayerMarker" type="CharacterBody3D" parent="."]
+position = Vector3(0, 0.05, 4.35)
+collision_layer = 2
+collision_mask = 3
+floor_snap_length = 0.25
+script = ExtResource("4_player")
+
+[node name="LingChibi" parent="." instance=ExtResource("3_agent")]
+position = Vector3(2, 0.05, 3.5)
+display_name = "小玲"
+move_speed = 2.35
+follow_distance = 1.2
+enable_dynamic_avoidance = true
+avoidance_priority = 0.45
+local_model_path = "res://local_assets/life_lab/ling_chibi.glb"
+local_visual_scale = 0.72
+body_height = 0.8
+body_radius = 0.38
+name_label_height = 0.96
+
+[node name="NaiChibi" parent="." instance=ExtResource("3_agent")]
+position = Vector3(-2, 0.05, 3.5)
+role_id = "nai"
+display_name = "小奈"
+move_speed = 2.55
+follow_distance = 1.25
+enable_dynamic_avoidance = true
+avoidance_priority = 0.55
+local_model_path = "res://local_assets/life_lab/nai_chibi.glb"
+local_visual_scale = 0.82
+body_height = 0.82
+body_radius = 0.4
+name_label_height = 0.98
+
+[node name="ObserverCamera" type="Camera3D" parent="."]
+script = ExtResource("5_camera")
+
+[node name="LifeLabTaskController" type="Node" parent="."]
+script = ExtResource("6_tasks")
+ling_path = NodePath("../LingChibi")
+nai_path = NodePath("../NaiChibi")
+player_path = NodePath("../PlayerMarker")
+room_path = NodePath("../NavigationRegion3D/LifeLabRoom")

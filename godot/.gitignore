@@ -1,0 +1,10 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Local Companion Core credentials
+companion_core_key.txt
+*jwt_token*.txt
+
+# Licensed/local-only test assets. Never commit these files.
+/local_assets/

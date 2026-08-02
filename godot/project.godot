@@ -1,0 +1,56 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Spring Heaven"
+run/main_scene="res://scenes/MainMenu/MainMenu.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[audio]
+
+driver/enable_input=true
+
+[autoload]
+
+Global="*res://scripts/autoload/Global.gd"
+ThemeMgr="*res://scripts/autoload/ThemeManager.gd"
+Settings="*res://scripts/autoload/SettingsManager.gd"
+UI="*res://scripts/autoload/UIManager.gd"
+CompanionCore="*res://scripts/autoload/CompanionCoreClient.gd"
+MessageScheduler="*res://scripts/autoload/MessageScheduler.gd"
+Audio="*res://scripts/autoload/AudioManager.gd"
+Notifier="*res://scripts/autoload/WindowsNotificationService.gd"
+LifeSim="*res://scripts/autoload/LifeSimulation.gd"
+Photos="*res://scripts/autoload/PhotoAlbum.gd"
+Vision="*res://scripts/autoload/LMStudioVisionClient.gd"
+Multimodal="*res://scripts/autoload/MultimodalSessionService.gd"
+VoiceInput="*res://scripts/autoload/VoiceInputService.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/local_asset_release_guard/plugin.cfg")
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

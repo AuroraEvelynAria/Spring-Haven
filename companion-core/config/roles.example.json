@@ -1,0 +1,26 @@
+{
+  "conversation_policy": {
+    "user_is_adult": false,
+    "allow_consensual_adult_content": false
+  },
+  "roles": [
+    {
+      "role_id": "ling",
+      "display_name": "小玲",
+      "full_name": "春日 铃音",
+      "age": 21,
+      "aliases": ["小玲", "铃音", "春日铃音"],
+      "prompt_file": "personas/ling.md",
+      "memory_prompt_file": "memory_prompts/ling.md"
+    },
+    {
+      "role_id": "nai",
+      "display_name": "小奈",
+      "full_name": "白濑 雪奈",
+      "age": 19,
+      "aliases": ["小奈", "雪奈", "白濑雪奈"],
+      "prompt_file": "personas/nai.md",
+      "memory_prompt_file": "memory_prompts/nai.md"
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+[gd_scene load_steps=23 format=3]
+
+[ext_resource type="Script" path="res://scenes/Exploration/Player/Player3D.gd" id="1_player"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape_player"]
+radius = 0.29
+height = 1.66
+
+[sub_resource type="StandardMaterial3D" id="Material_skin"]
+albedo_color = Color(0.88, 0.63, 0.49, 1)
+roughness = 0.88
+
+[sub_resource type="StandardMaterial3D" id="Material_hair"]
+albedo_color = Color(0.12, 0.075, 0.12, 1)
+roughness = 0.82
+
+[sub_resource type="StandardMaterial3D" id="Material_coat"]
+albedo_color = Color(0.16, 0.48, 0.49, 1)
+roughness = 0.8
+
+[sub_resource type="StandardMaterial3D" id="Material_shirt"]
+albedo_color = Color(0.93, 0.84, 0.65, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="Material_trousers"]
+albedo_color = Color(0.12, 0.19, 0.29, 1)
+roughness = 0.84
+
+[sub_resource type="StandardMaterial3D" id="Material_shoes"]
+albedo_color = Color(0.52, 0.19, 0.19, 1)
+roughness = 0.78
+
+[sub_resource type="StandardMaterial3D" id="Material_accent"]
+albedo_color = Color(0.96, 0.45, 0.31, 1)
+roughness = 0.76
+
+[sub_resource type="BoxMesh" id="BoxMesh_torso"]
+material = SubResource("Material_coat")
+size = Vector3(0.82, 0.82, 0.42)
+
+[sub_resource type="BoxMesh" id="BoxMesh_chest"]
+material = SubResource("Material_shirt")
+size = Vector3(0.5, 0.5, 0.035)
+
+[sub_resource type="BoxMesh" id="BoxMesh_accent"]
+material = SubResource("Material_accent")
+size = Vector3(0.52, 0.11, 0.045)
+
+[sub_resource type="BoxMesh" id="BoxMesh_head"]
+material = SubResource("Material_skin")
+size = Vector3(0.64, 0.64, 0.64)
+
+[sub_resource type="BoxMesh" id="BoxMesh_hair_cap"]
+material = SubResource("Material_hair")
+size = Vector3(0.68, 0.16, 0.68)
+
+[sub_resource type="BoxMesh" id="BoxMesh_hair_side"]
+material = SubResource("Material_hair")
+size = Vector3(0.1, 0.42, 0.64)
+
+[sub_resource type="BoxMesh" id="BoxMesh_hair_back"]
+material = SubResource("Material_hair")
+size = Vector3(0.68, 0.44, 0.1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_eye"]
+material = SubResource("Material_hair")
+size = Vector3(0.09, 0.105, 0.03)
+
+[sub_resource type="BoxMesh" id="BoxMesh_mouth"]
+material = SubResource("Material_accent")
+size = Vector3(0.13, 0.04, 0.032)
+
+[sub_resource type="BoxMesh" id="BoxMesh_arm"]
+material = SubResource("Material_coat")
+size = Vector3(0.3, 0.68, 0.34)
+
+[sub_resource type="BoxMesh" id="BoxMesh_hand"]
+material = SubResource("Material_skin")
+size = Vector3(0.31, 0.23, 0.35)
+
+[sub_resource type="BoxMesh" id="BoxMesh_leg"]
+material = SubResource("Material_trousers")
+size = Vector3(0.34, 0.74, 0.36)
+
+[sub_resource type="BoxMesh" id="BoxMesh_shoe"]
+material = SubResource("Material_shoes")
+size = Vector3(0.36, 0.22, 0.5)
+
+[node name="Player3D" type="CharacterBody3D"]
+collision_layer = 1
+collision_mask = 3
+floor_max_angle = 0.872665
+floor_snap_length = 0.25
+safe_margin = 0.03
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.83, 0)
+shape = SubResource("CapsuleShape_player")
+
+[node name="VisualRoot" type="Node3D" parent="."]
+scale = Vector3(0.68, 0.68, 0.68)
+
+[node name="Torso" type="MeshInstance3D" parent="VisualRoot"]
+position = Vector3(0, 1.39, 0)
+mesh = SubResource("BoxMesh_torso")
+
+[node name="ChestPanel" type="MeshInstance3D" parent="VisualRoot"]
+position = Vector3(0, 1.39, -0.228)
+mesh = SubResource("BoxMesh_chest")
+
+[node name="ChestAccent" type="MeshInstance3D" parent="VisualRoot"]
+position = Vector3(0, 1.62, -0.234)
+mesh = SubResource("BoxMesh_accent")
+
+[node name="HeadPivot" type="Node3D" parent="VisualRoot"]
+position = Vector3(0, 1.87, 0)
+
+[node name="Head" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0, 0.22, 0)
+mesh = SubResource("BoxMesh_head")
+
+[node name="HairCap" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0, 0.48, 0)
+mesh = SubResource("BoxMesh_hair_cap")
+
+[node name="HairLeft" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(-0.295, 0.22, 0)
+mesh = SubResource("BoxMesh_hair_side")
+
+[node name="HairRight" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0.295, 0.22, 0)
+mesh = SubResource("BoxMesh_hair_side")
+
+[node name="HairBack" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0, 0.22, 0.295)
+mesh = SubResource("BoxMesh_hair_back")
+
+[node name="EyeLeft" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(-0.145, 0.26, -0.326)
+mesh = SubResource("BoxMesh_eye")
+
+[node name="EyeRight" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0.145, 0.26, -0.326)
+mesh = SubResource("BoxMesh_eye")
+
+[node name="Mouth" type="MeshInstance3D" parent="VisualRoot/HeadPivot"]
+position = Vector3(0, 0.075, -0.328)
+mesh = SubResource("BoxMesh_mouth")
+
+[node name="LeftArm" type="Node3D" parent="VisualRoot"]
+position = Vector3(-0.55, 1.74, 0)
+
+[node name="Sleeve" type="MeshInstance3D" parent="VisualRoot/LeftArm"]
+position = Vector3(0, -0.34, 0)
+mesh = SubResource("BoxMesh_arm")
+
+[node name="Hand" type="MeshInstance3D" parent="VisualRoot/LeftArm"]
+position = Vector3(0, -0.76, 0)
+mesh = SubResource("BoxMesh_hand")
+
+[node name="RightArm" type="Node3D" parent="VisualRoot"]
+position = Vector3(0.55, 1.74, 0)
+
+[node name="Sleeve" type="MeshInstance3D" parent="VisualRoot/RightArm"]
+position = Vector3(0, -0.34, 0)
+mesh = SubResource("BoxMesh_arm")
+
+[node name="Hand" type="MeshInstance3D" parent="VisualRoot/RightArm"]
+position = Vector3(0, -0.76, 0)
+mesh = SubResource("BoxMesh_hand")
+
+[node name="LeftLeg" type="Node3D" parent="VisualRoot"]
+position = Vector3(-0.22, 1.07, 0)
+
+[node name="Trouser" type="MeshInstance3D" parent="VisualRoot/LeftLeg"]
+position = Vector3(0, -0.37, 0)
+mesh = SubResource("BoxMesh_leg")
+
+[node name="Shoe" type="MeshInstance3D" parent="VisualRoot/LeftLeg"]
+position = Vector3(0, -0.81, -0.07)
+mesh = SubResource("BoxMesh_shoe")
+
+[node name="RightLeg" type="Node3D" parent="VisualRoot"]
+position = Vector3(0.22, 1.07, 0)
+
+[node name="Trouser" type="MeshInstance3D" parent="VisualRoot/RightLeg"]
+position = Vector3(0, -0.37, 0)
+mesh = SubResource("BoxMesh_leg")
+
+[node name="Shoe" type="MeshInstance3D" parent="VisualRoot/RightLeg"]
+position = Vector3(0, -0.81, -0.07)
+mesh = SubResource("BoxMesh_shoe")
+
+[node name="CameraRig" type="Node3D" parent="."]
+position = Vector3(0, 1.18, 0)
+
+[node name="Pitch" type="Node3D" parent="CameraRig"]
+rotation = Vector3(-0.20944, 0, 0)
+
+[node name="SpringArm3D" type="SpringArm3D" parent="CameraRig/Pitch"]
+collision_mask = 1
+spring_length = 2.7
+margin = 0.1
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig/Pitch/SpringArm3D"]
+current = true
+fov = 72.0
+near = 0.08

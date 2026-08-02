@@ -1,0 +1,258 @@
+[gd_scene load_steps=11 format=3]
+
+[ext_resource type="Script" path="res://scenes/Exploration/ExplorationWorld.gd" id="1_world"]
+[ext_resource type="Script" path="res://scenes/Exploration/GrayboxRoom.gd" id="2_room"]
+[ext_resource type="PackedScene" path="res://scenes/Exploration/Player/Player3D.tscn" id="3_player"]
+[ext_resource type="PackedScene" path="res://scenes/Exploration/Characters/LingAgent3D.tscn" id="4_ling"]
+[ext_resource type="Script" path="res://scenes/Exploration/ExplorationAIController.gd" id="5_ai"]
+[ext_resource type="Script" path="res://scenes/Exploration/LocalRoomVisual.gd" id="6_room_visual"]
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_room"]
+agent_height = 1.65
+agent_radius = 0.3
+agent_max_climb = 0.25
+agent_max_slope = 42.0
+cell_size = 0.05
+cell_height = 0.05
+
+[sub_resource type="Environment" id="Environment_warm"]
+background_mode = 1
+background_color = Color(0.42, 0.48, 0.53, 1)
+background_energy_multiplier = 0.52
+ambient_light_source = 3
+ambient_light_color = Color(0.93, 0.85, 0.72, 1)
+ambient_light_energy = 0.3
+reflected_light_source = 2
+tonemap_mode = 2
+tonemap_exposure = 0.82
+
+[sub_resource type="BoxShape3D" id="BoxShape_kill"]
+size = Vector3(40, 2, 34)
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_hud"]
+bg_color = Color(0.075, 0.069, 0.064, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.76, 0.64, 0.48, 0.42)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+shadow_color = Color(0, 0, 0, 0.26)
+shadow_size = 8
+
+[node name="ExplorationWorld" type="Node3D"]
+script = ExtResource("1_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_warm")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-54, -32, 0)
+light_color = Color(1, 0.91, 0.78, 1)
+light_energy = 0.72
+shadow_enabled = true
+directional_shadow_max_distance = 24.0
+
+[node name="LivingWarmLight" type="OmniLight3D" parent="."]
+position = Vector3(1.4, 2.5, 0.5)
+light_color = Color(1, 0.71, 0.47, 1)
+light_energy = 0.42
+omni_range = 8.0
+omni_attenuation = 1.25
+
+[node name="DiningWarmLight" type="OmniLight3D" parent="."]
+position = Vector3(1.3, 2.55, -2.4)
+light_color = Color(1, 0.76, 0.55, 1)
+light_energy = 0.4
+omni_range = 7.5
+omni_attenuation = 1.25
+
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavigationMesh_room")
+use_edge_connections = true
+
+[node name="GrayboxRoom" type="Node3D" parent="NavigationRegion3D"]
+script = ExtResource("2_room")
+
+[node name="DiningSeatLing" type="Marker3D" parent="NavigationRegion3D/GrayboxRoom"]
+position = Vector3(-0.68, 0.04, -2.48)
+
+[node name="SofaSpot" type="Marker3D" parent="NavigationRegion3D/GrayboxRoom"]
+position = Vector3(-0.85, 0.04, 1.3)
+
+[node name="PlantPhotoSpot" type="Marker3D" parent="NavigationRegion3D/GrayboxRoom"]
+position = Vector3(2.18, 0.04, -3.2)
+
+[node name="LocalRoomVisual" type="Node3D" parent="."]
+position = Vector3(-1.079417, 0, -1.211583)
+script = ExtResource("6_room_visual")
+
+[node name="Player3D" parent="." instance=ExtResource("3_player")]
+position = Vector3(-2.5, 0.05, 2.7)
+
+[node name="LingAgent3D" parent="." instance=ExtResource("4_ling")]
+position = Vector3(-1.1, 0.05, 2.6)
+
+[node name="ExplorationAIController" type="Node" parent="."]
+script = ExtResource("5_ai")
+player_path = NodePath("../Player3D")
+ling_path = NodePath("../LingAgent3D")
+dining_anchor_path = NodePath("../NavigationRegion3D/GrayboxRoom/DiningSeatLing")
+sofa_anchor_path = NodePath("../NavigationRegion3D/GrayboxRoom/SofaSpot")
+
+[node name="KillPlane" type="Area3D" parent="."]
+position = Vector3(0, -5.5, 0)
+collision_layer = 0
+collision_mask = 3
+monitoring = true
+monitorable = false
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="KillPlane"]
+shape = SubResource("BoxShape_kill")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+layer = 20
+
+[node name="SafeMargin" type="MarginContainer" parent="HUD"]
+offset_left = 18.0
+offset_top = 18.0
+offset_right = 430.0
+offset_bottom = 702.0
+theme_override_constants/margin_left = 4
+theme_override_constants/margin_top = 4
+theme_override_constants/margin_right = 4
+theme_override_constants/margin_bottom = 4
+
+[node name="CommandPanel" type="PanelContainer" parent="HUD/SafeMargin"]
+custom_minimum_size = Vector2(404, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="PanelMargin" type="MarginContainer" parent="HUD/SafeMargin/CommandPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 14
+
+[node name="Commands" type="VBoxContainer" parent="HUD/SafeMargin/CommandPanel/PanelMargin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.86, 0.71, 1)
+theme_override_font_sizes/font_size = 20
+text = "探索测试 · 小玲"
+
+[node name="StatusLabel" type="Label" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.9, 0.94, 1)
+text = "正在准备导航……"
+autowrap_mode = 2
+vertical_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+layout_mode = 2
+
+[node name="ChatTitle" type="Label" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.78, 0.82, 1)
+theme_override_font_sizes/font_size = 15
+text = "与小玲对话（共享主对话上下文）"
+
+[node name="ChatLog" type="RichTextLabel" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 126)
+layout_mode = 2
+mouse_filter = 1
+theme_override_colors/default_color = Color(0.87, 0.88, 0.9, 1)
+theme_override_font_sizes/normal_font_size = 14
+bbcode_enabled = false
+text = "可以直接告诉小玲去餐桌、沙发，或让她跟随你。"
+fit_content = false
+scroll_active = true
+scroll_following = true
+
+[node name="ChatInputRow" type="HBoxContainer" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+layout_mode = 2
+theme_override_constants/separation = 7
+
+[node name="ChatInput" type="LineEdit" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands/ChatInputRow"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+size_flags_horizontal = 3
+max_length = 3000
+placeholder_text = "对小玲说点什么……"
+clear_button_enabled = true
+
+[node name="ChatSendButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands/ChatInputRow"]
+custom_minimum_size = Vector2(92, 38)
+layout_mode = 2
+text = "发送"
+
+[node name="AIWaitingLabel" type="Label" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.84, 0.91, 1)
+theme_override_font_sizes/font_size = 13
+text = "● DeepSeek-V4-Flash · 文本场景感知 · 就绪"
+autowrap_mode = 2
+
+[node name="DiningButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+disabled = true
+text = "小玲去餐桌"
+
+[node name="SofaButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+disabled = true
+text = "小玲去沙发"
+
+[node name="FollowButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+disabled = true
+text = "小玲跟随玩家"
+
+[node name="StopButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+disabled = true
+text = "小玲停止"
+
+[node name="Hint" type="Label" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.69, 0.67, 1)
+theme_override_font_sizes/font_size = 13
+text = "WASD 移动 · 鼠标观察 · Shift 加速\nEsc 释放/捕获鼠标后可点击按钮"
+autowrap_mode = 2
+
+[node name="ReturnButton" type="Button" parent="HUD/SafeMargin/CommandPanel/PanelMargin/Commands"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+text = "返回对话"
+
+[node name="Crosshair" type="Label" parent="HUD"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -14.0
+offset_top = -14.0
+offset_right = 14.0
+offset_bottom = 14.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 1, 1, 0.68)
+theme_override_font_sizes/font_size = 20
+text = "+"
+horizontal_alignment = 1
+vertical_alignment = 1

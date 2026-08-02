@@ -1,0 +1,25 @@
+{
+  "schema": "spring_haven.portrait_rig.v1",
+  "role_id": "nai",
+  "display_name": "小奈",
+  "canvas_size": [1600, 1200],
+  "palette": {
+    "background": "#1C1D2A",
+    "accent": "#B8A6D9",
+    "secondary": "#E2A6B4",
+    "hair": "#D9D1E9",
+    "hair_shadow": "#8C7FA6",
+    "skin": "#F7D5C8",
+    "skin_shadow": "#DCAFA8",
+    "eye": "#B06B8D",
+    "line": "#493947",
+    "outfit": "#596E9D",
+    "blush": "#E585A2",
+    "mouth": "#763C58"
+  },
+  "layers": [],
+  "expressions": {},
+  "mouth_shapes": [],
+  "blink_layer": "",
+  "asset_notes": "Export transparent PNG layers from one aligned PSD canvas. Keep layer IDs stable when replacing art."
+}

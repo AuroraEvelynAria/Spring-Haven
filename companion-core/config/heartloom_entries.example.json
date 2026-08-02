@@ -1,0 +1,23 @@
+{
+  "format": "spring_haven.heartloom.v1",
+  "entries": [
+    {
+      "save_id": "default",
+      "scope_role_id": "*",
+      "kind": "worldbook",
+      "title": "共同照顾的栀子花",
+      "content": "客厅窗边的栀子花是主人和两位角色共同照顾的，对她们有家庭纪念意义。",
+      "trigger_terms": ["栀子花", "窗边的花", "照顾花"],
+      "always_active": false,
+      "priority": 7,
+      "importance": 0.9,
+      "confidence": 1.0,
+      "half_life_days": 0,
+      "influence": {
+        "dialogue": "谈到这盆花时，可以自然回忆共同照料它的经历。",
+        "behavior_hint": "发现盆土变干或主人提到花时，优先考虑查看并照顾它。",
+        "behavior_tags": ["care_plant", "shared_home_memory"]
+      }
+    }
+  ]
+}

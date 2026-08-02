@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Companion Core local configuration and imported private personas
+companion-core/user_data/
+companion-core/*.log
+
+# Godot generated data and local-only assets
+godot/.godot/
+godot/local_assets/
+godot/.codex-staging/
+godot/diagnostic_logs/
+godot/*.log
+
+# Build products
+build/
+dist/
+release/

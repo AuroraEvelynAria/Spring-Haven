@@ -1,0 +1,130 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://scenes/Exploration/Characters/LingAgent3D.gd" id="1_ling"]
+[ext_resource type="Script" path="res://scenes/Exploration/Perception/PerceptionRay3D.gd" id="2_perception"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape_ling"]
+radius = 0.29
+height = 1.62
+
+[sub_resource type="SphereShape3D" id="SphereShape_probe"]
+radius = 0.12
+
+[sub_resource type="StandardMaterial3D" id="Material_orange"]
+albedo_color = Color(1, 0.360784, 0.247059, 1)
+roughness = 0.72
+
+[sub_resource type="StandardMaterial3D" id="Material_pink"]
+albedo_color = Color(1, 0.560784, 0.658824, 1)
+roughness = 0.76
+
+[sub_resource type="StandardMaterial3D" id="Material_cream"]
+albedo_color = Color(1, 0.827451, 0.682353, 1)
+roughness = 0.8
+
+[sub_resource type="BoxMesh" id="BoxMesh_torso"]
+material = SubResource("Material_orange")
+size = Vector3(0.72, 0.78, 0.4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_head"]
+material = SubResource("Material_pink")
+size = Vector3(0.58, 0.58, 0.58)
+
+[sub_resource type="BoxMesh" id="BoxMesh_arm"]
+material = SubResource("Material_pink")
+size = Vector3(0.2, 0.72, 0.24)
+
+[sub_resource type="BoxMesh" id="BoxMesh_leg"]
+material = SubResource("Material_cream")
+size = Vector3(0.26, 0.72, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="Material_face"]
+albedo_color = Color(0.278431, 0.105882, 0.12549, 1)
+roughness = 0.65
+
+[sub_resource type="BoxMesh" id="BoxMesh_eye"]
+material = SubResource("Material_face")
+size = Vector3(0.065, 0.075, 0.025)
+
+[node name="LingAgent3D" type="CharacterBody3D"]
+collision_layer = 2
+collision_mask = 3
+floor_snap_length = 0.3
+floor_max_angle = 0.872665
+script = ExtResource("1_ling")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.81, 0)
+shape = SubResource("CapsuleShape_ling")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="."]
+path_desired_distance = 0.25
+target_desired_distance = 0.34
+path_max_distance = 1.5
+radius = 0.31
+height = 1.62
+neighbor_distance = 3.0
+avoidance_enabled = false
+
+[node name="GroundProbe" type="RayCast3D" parent="."]
+position = Vector3(0, 0.35, 0)
+target_position = Vector3(0, -1.15, 0)
+collision_mask = 1
+exclude_parent = true
+enabled = true
+
+[node name="AheadGroundProbe" type="ShapeCast3D" parent="."]
+position = Vector3(0, 0.45, -0.7)
+target_position = Vector3(0, -1.15, 0)
+collision_mask = 1
+shape = SubResource("SphereShape_probe")
+exclude_parent = true
+enabled = true
+
+[node name="VisualPivot" type="Node3D" parent="."]
+scale = Vector3(0.75, 0.75, 0.75)
+
+[node name="PerceptionRay3D" type="Node3D" parent="VisualPivot"]
+position = Vector3(0, 2.05, -0.38)
+script = ExtResource("2_perception")
+
+[node name="Torso" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(0, 1.16, 0)
+mesh = SubResource("BoxMesh_torso")
+
+[node name="Head" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(0, 1.86, 0)
+mesh = SubResource("BoxMesh_head")
+
+[node name="LeftEye" type="MeshInstance3D" parent="VisualPivot/Head"]
+position = Vector3(-0.13, 0.04, -0.297)
+mesh = SubResource("BoxMesh_eye")
+
+[node name="RightEye" type="MeshInstance3D" parent="VisualPivot/Head"]
+position = Vector3(0.13, 0.04, -0.297)
+mesh = SubResource("BoxMesh_eye")
+
+[node name="LeftArm" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(-0.48, 1.17, 0)
+mesh = SubResource("BoxMesh_arm")
+
+[node name="RightArm" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(0.48, 1.17, 0)
+mesh = SubResource("BoxMesh_arm")
+
+[node name="LeftLeg" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(-0.18, 0.37, 0)
+mesh = SubResource("BoxMesh_leg")
+
+[node name="RightLeg" type="MeshInstance3D" parent="VisualPivot"]
+position = Vector3(0.18, 0.37, 0)
+mesh = SubResource("BoxMesh_leg")
+
+[node name="NameLabel" type="Label3D" parent="."]
+position = Vector3(0, 1.9, 0)
+text = "小玲"
+font_size = 28
+outline_size = 6
+modulate = Color(1, 0.780392, 0.819608, 1)
+billboard = 1
+no_depth_test = true
