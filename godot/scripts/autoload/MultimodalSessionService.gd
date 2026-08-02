@@ -16,12 +16,23 @@ var _screen_context_permission := false
 var _tts_base_url := ""
 var _tts_model := ""
 var _tts_voices := {"ling": "", "nai": ""}
+var _tts_environment_overrides := {"ling": false, "nai": false}
 
 func _ready() -> void:
+	if is_instance_valid(Settings) and Settings.has_method("get_tts_voices"):
+		var saved_voices: Dictionary = Settings.get_tts_voices()
+		for role in ["ling", "nai"]:
+			_tts_voices[role] = str(saved_voices.get(role, "")).strip_edges()
 	_tts_base_url = OS.get_environment("SPRING_HEAVEN_TTS_URL").strip_edges().trim_suffix("/")
 	_tts_model = OS.get_environment("SPRING_HEAVEN_TTS_MODEL").strip_edges()
-	_tts_voices["ling"] = OS.get_environment("SPRING_HEAVEN_TTS_LING_VOICE").strip_edges()
-	_tts_voices["nai"] = OS.get_environment("SPRING_HEAVEN_TTS_NAI_VOICE").strip_edges()
+	var environment_ling_voice := OS.get_environment("SPRING_HEAVEN_TTS_LING_VOICE").strip_edges()
+	var environment_nai_voice := OS.get_environment("SPRING_HEAVEN_TTS_NAI_VOICE").strip_edges()
+	if not environment_ling_voice.is_empty():
+		_tts_voices["ling"] = environment_ling_voice
+		_tts_environment_overrides["ling"] = true
+	if not environment_nai_voice.is_empty():
+		_tts_voices["nai"] = environment_nai_voice
+		_tts_environment_overrides["nai"] = true
 
 func start_session(mode: String, roles: Array[String]) -> Dictionary:
 	if mode not in VALID_MODES:
@@ -54,9 +65,12 @@ func set_screen_context_permission(enabled: bool) -> void:
 func configure_tts(base_url: String, model: String, voices: Dictionary = {}) -> void:
 	_tts_base_url = base_url.strip_edges().trim_suffix("/")
 	_tts_model = model.strip_edges()
+	set_tts_voices(voices)
+
+func set_tts_voices(voices: Dictionary) -> void:
 	for role in ["ling", "nai"]:
-		if voices.has(role):
-			_tts_voices[role] = str(voices[role]).strip_edges()
+		if voices.has(role) and not bool(_tts_environment_overrides.get(role, false)):
+			_tts_voices[role] = str(voices[role]).replace(String.chr(0), " ").strip_edges().left(512)
 
 func get_session_state() -> Dictionary:
 	return {

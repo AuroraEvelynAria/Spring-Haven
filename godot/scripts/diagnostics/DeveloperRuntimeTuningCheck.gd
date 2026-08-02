@@ -92,6 +92,13 @@ func _run() -> void:
 	Settings.settings["developer"] = defaults_before
 	Settings.save()
 
+	var tts_voices_before: Dictionary = Settings.get_tts_voices()
+	_expect(Settings.set_tts_voices({"ling": "diagnostic-ling", "nai": "diagnostic-nai"}), "TTS voice settings save failed")
+	var tts_voices_after: Dictionary = Settings.get_tts_voices()
+	_expect(str(tts_voices_after.get("ling", "")) == "diagnostic-ling", "Ling voice ID was not persisted")
+	_expect(str(tts_voices_after.get("nai", "")) == "diagnostic-nai", "Nai voice ID was not persisted")
+	Settings.set_tts_voices(tts_voices_before)
+
 	if _failures.is_empty():
 		print("DEVELOPER_RUNTIME_TUNING_CHECK passed=", _checks)
 		get_tree().quit(0)

@@ -102,7 +102,11 @@ func stop_and_transcribe(language := "zh") -> Dictionary:
 		return _fail("录音编码失败", false)
 	_transcribing = true
 	transcription_started.emit()
-	var result: Dictionary = await CompanionCore.transcribe_audio(wav_bytes, language)
+	var core := get_node_or_null("/root/CompanionCore")
+	if core == null or not core.has_method("transcribe_audio"):
+		_transcribing = false
+		return _fail("Companion Core 客户端尚未初始化", true)
+	var result: Dictionary = await core.transcribe_audio(wav_bytes, language)
 	_transcribing = false
 	if not bool(result.get("ok", false)):
 		return _fail(

@@ -76,3 +76,5 @@ behavior and recovery boundaries are documented in
 [Journey saves](godot/docs/JourneySaves.md). The
 [presentation architecture](godot/docs/PresentationArchitecture.md) defines how
 the current 2D stage and future Live2D/3D executors share one character core.
+Voicebox server-mode setup and desktop-only limitations are documented in
+[Voicebox integration](godot/docs/VoiceboxIntegration.md).

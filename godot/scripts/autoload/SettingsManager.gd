@@ -44,6 +44,7 @@ var config := ConfigFile.new()
 var settings: Dictionary = {
 	"display": {"view_mode": "2d", "resolution": DEFAULT_RESOLUTION, "fullscreen": false, "vsync": true},
 	"audio": {"master": 0.8, "music": 0.7, "voice": 1.0},
+	"tts": {"voice_ling": "", "voice_nai": ""},
 	"ui": {
 		"theme": "amber",
 		"font_size": 15,
@@ -165,6 +166,21 @@ func set_resolution(key: String) -> void:
 
 func get_setting(section: String, key: String):
 	return settings.get(section, {}).get(key, null)
+
+func get_tts_voices() -> Dictionary:
+	var values: Dictionary = settings.get("tts", {})
+	return {
+		"ling": str(values.get("voice_ling", "")).strip_edges(),
+		"nai": str(values.get("voice_nai", "")).strip_edges(),
+	}
+
+func set_tts_voices(voices: Dictionary) -> bool:
+	if not settings.has("tts"):
+		settings["tts"] = {"voice_ling": "", "voice_nai": ""}
+	for role in ["ling", "nai"]:
+		if voices.has(role):
+			settings.tts["voice_%s" % role] = str(voices[role]).replace(String.chr(0), " ").strip_edges().left(512)
+	return save()
 
 func set_setting(section: String, key: String, value) -> void:
 	if not settings.has(section) or not settings[section].has(key):

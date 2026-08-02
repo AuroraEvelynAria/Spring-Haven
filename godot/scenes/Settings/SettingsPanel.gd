@@ -1841,6 +1841,16 @@ func _build_capability_provider_editor(
 			selected_protocol = index
 	protocol_select.select(selected_protocol)
 	grid.add_child(protocol_select)
+	var ling_voice_input: LineEdit = null
+	var nai_voice_input: LineEdit = null
+	if capability == "tts":
+		var saved_voices := _saved_tts_voices()
+		ling_voice_input = _provider_labeled_line_edit(
+			grid, "Voice ID (Ling)", str(saved_voices.get("ling", "")), "default voice or profile ID"
+		)
+		nai_voice_input = _provider_labeled_line_edit(
+			grid, "Voice ID (Nai)", str(saved_voices.get("nai", "")), "default voice or profile ID"
+		)
 	var key_label := Label.new()
 	key_label.text = "独立 API Key"
 	grid.add_child(key_label)
@@ -1880,6 +1890,8 @@ func _build_capability_provider_editor(
 		"inherit_chat_key": inherit_key,
 		"allow_insecure_http": allow_insecure_http,
 		"protocol": protocol_select,
+		"voice_ling": ling_voice_input,
+		"voice_nai": nai_voice_input,
 		"save": save_button,
 		"clear": clear_button,
 		"diagnose": diagnose_button,
@@ -1888,6 +1900,10 @@ func _build_capability_provider_editor(
 	var capability_id := capability
 	base_input.text_changed.connect(func(_value: String): _update_provider_profile_dirty(capability_id))
 	model_input.text_changed.connect(func(_value: String): _update_provider_profile_dirty(capability_id))
+	if is_instance_valid(ling_voice_input):
+		ling_voice_input.text_changed.connect(func(_value: String): _update_provider_profile_dirty(capability_id))
+	if is_instance_valid(nai_voice_input):
+		nai_voice_input.text_changed.connect(func(_value: String): _update_provider_profile_dirty(capability_id))
 	key_input.text_changed.connect(func(_value: String): _update_provider_profile_dirty(capability_id))
 	enabled.toggled.connect(func(_value: bool): _update_provider_profile_dirty(capability_id))
 	inherit_key.toggled.connect(func(_value: bool): _update_provider_profile_dirty(capability_id))
@@ -2972,9 +2988,19 @@ func _reindex_rag_library() -> void:
 	)
 	await _refresh_rag_library()
 
+func _saved_tts_voices() -> Dictionary:
+	if is_instance_valid(Settings) and Settings.has_method("get_tts_voices"):
+		return Settings.get_tts_voices()
+	return {"ling": "", "nai": ""}
+
 func _capability_loaded_or_default(capability: String) -> Dictionary:
 	if _provider_profile_loaded.get(capability, {}) is Dictionary and not (_provider_profile_loaded.get(capability, {}) as Dictionary).is_empty():
-		return (_provider_profile_loaded[capability] as Dictionary).duplicate(true)
+		var loaded_profile := (_provider_profile_loaded[capability] as Dictionary).duplicate(true)
+		if capability == "tts":
+			var saved_voices := _saved_tts_voices()
+			loaded_profile["voice_ling"] = str(saved_voices.get("ling", ""))
+			loaded_profile["voice_nai"] = str(saved_voices.get("nai", ""))
+		return loaded_profile
 	var definition: Dictionary = CAPABILITY_PROVIDER_UI[capability]
 	var protocols: Dictionary = definition.protocols
 	return {
@@ -2986,6 +3012,8 @@ func _capability_loaded_or_default(capability: String) -> Dictionary:
 		"allow_insecure_http": false,
 		"saved_api_key_configured": false,
 		"credential_source": "none",
+		"voice_ling": _saved_tts_voices().get("ling", "") if capability == "tts" else "",
+		"voice_nai": _saved_tts_voices().get("nai", "") if capability == "tts" else "",
 	}
 
 func _rag_loaded_or_default() -> Dictionary:
@@ -3014,6 +3042,8 @@ func _collect_provider_profile_values(capability: String) -> Dictionary:
 		"inherit_chat_key": ((controls as Dictionary).inherit_chat_key as CheckBox).button_pressed,
 		"allow_insecure_http": ((controls as Dictionary).allow_insecure_http as CheckBox).button_pressed,
 		"protocol": str(protocol_select.get_item_metadata(protocol_select.selected)),
+		"voice_ling": ((controls as Dictionary).voice_ling as LineEdit).text.strip_edges() if is_instance_valid((controls as Dictionary).get("voice_ling")) else "",
+		"voice_nai": ((controls as Dictionary).voice_nai as LineEdit).text.strip_edges() if is_instance_valid((controls as Dictionary).get("voice_nai")) else "",
 	}
 
 func _update_provider_profile_dirty(capability: String) -> void:
@@ -3022,7 +3052,7 @@ func _update_provider_profile_dirty(capability: String) -> void:
 	var current := _collect_provider_profile_values(capability)
 	var loaded := _capability_loaded_or_default(capability)
 	var dirty := not str(current.get("api_key", "")).strip_edges().is_empty()
-	for key in ["base_url", "model", "enabled", "inherit_chat_key", "allow_insecure_http", "protocol"]:
+	for key in ["base_url", "model", "enabled", "inherit_chat_key", "allow_insecure_http", "protocol", "voice_ling", "voice_nai"]:
 		if current.get(key) != loaded.get(key):
 			dirty = true
 	_provider_profile_dirty[capability] = dirty
@@ -3063,6 +3093,22 @@ func _save_provider_profile(capability: String) -> void:
 		_sync_provider_profile_buttons(capability)
 		return
 	var profile_data = result.get("data", {})
+	var tts_settings_saved := true
+	if capability == "tts" and is_instance_valid(Settings) and Settings.has_method("set_tts_voices"):
+		tts_settings_saved = Settings.set_tts_voices({
+			"ling": str(current.get("voice_ling", "")),
+			"nai": str(current.get("voice_nai", "")),
+		})
+		if tts_settings_saved and is_instance_valid(Multimodal) and Multimodal.has_method("set_tts_voices"):
+			Multimodal.set_tts_voices({
+				"ling": str(current.get("voice_ling", "")),
+				"nai": str(current.get("voice_nai", "")),
+			})
+	if not tts_settings_saved:
+		_provider_profile_dirty[capability] = true
+		_set_provider_profile_status(capability, "TTS voice settings could not be saved", Color("#D9534F"))
+		_sync_provider_profile_buttons(capability)
+		return
 	if profile_data is Dictionary:
 		_provider_profile_loaded[capability] = (profile_data as Dictionary).duplicate(true)
 		_apply_provider_profile_values_to_controls(capability, profile_data as Dictionary)
@@ -3440,6 +3486,14 @@ func _apply_provider_profile_values_to_controls(capability: String, values: Dict
 	((controls as Dictionary).enabled as CheckBox).button_pressed = bool(values.get("enabled", false))
 	((controls as Dictionary).inherit_chat_key as CheckBox).button_pressed = bool(values.get("inherit_chat_key", false))
 	((controls as Dictionary).allow_insecure_http as CheckBox).button_pressed = bool(values.get("allow_insecure_http", false))
+	if capability == "tts":
+		var saved_voices := _saved_tts_voices()
+		var ling_voice := (controls as Dictionary).get("voice_ling") as LineEdit
+		var nai_voice := (controls as Dictionary).get("voice_nai") as LineEdit
+		if is_instance_valid(ling_voice):
+			ling_voice.text = str(values.get("voice_ling", saved_voices.get("ling", "")))
+		if is_instance_valid(nai_voice):
+			nai_voice.text = str(values.get("voice_nai", saved_voices.get("nai", "")))
 	var protocol_select := (controls as Dictionary).protocol as OptionButton
 	for index in protocol_select.item_count:
 		if str(protocol_select.get_item_metadata(index)) == str(values.get("protocol", "")):
