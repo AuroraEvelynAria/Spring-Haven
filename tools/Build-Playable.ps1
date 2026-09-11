@@ -1,8 +1,9 @@
-param(
+﻿param(
     [string]$GodotExecutable = "",
     [switch]$InstallBuildDependencies,
     [switch]$SkipGodotExport,
-    [switch]$CreateArchive
+    [switch]$CreateArchive,
+    [switch]$IncludeLocalKnowledge
 )
 
 function Get-GodotPckEntries {
@@ -83,6 +84,8 @@ $pyInstallerDist = Join-Path $pyInstallerWork "dist"
 $pyInstallerBuild = Join-Path $pyInstallerWork "build"
 $entryPoint = Join-Path $coreRoot "tools\core_entry.py"
 
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"  # PyInstaller 将进度写到 stderr，避免 NativeCommandError
 & $python -m PyInstaller `
     --noconfirm `
     --clean `
@@ -93,7 +96,9 @@ $entryPoint = Join-Path $coreRoot "tools\core_entry.py"
     --workpath $pyInstallerBuild `
     --specpath $pyInstallerWork `
     $entryPoint
-if ($LASTEXITCODE -ne 0) { throw "Companion Core packaging failed" }
+$pyInstallerExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+if ($pyInstallerExitCode -ne 0) { throw "Companion Core packaging failed" }
 
 if (Test-Path -LiteralPath $releaseRoot) {
     $resolvedBuild = (Resolve-Path $buildRoot).Path
@@ -110,6 +115,29 @@ Copy-Item -LiteralPath (Join-Path $coreRoot "config") `
     -Destination (Join-Path $releaseRoot "companion-core\config") -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot "PLAYTEST_README.txt") `
     -Destination (Join-Path $releaseRoot "PLAYTEST_README.txt")
+
+$knowledgeTemplate = Join-Path $releaseRoot "companion-core\config\knowledge.sqlite3"
+if ($IncludeLocalKnowledge) {
+    $localUserData = Join-Path $coreRoot "user_data"
+    if (-not (Test-Path -LiteralPath (Join-Path $localUserData "knowledge.sqlite3"))) {
+        throw "IncludeLocalKnowledge requires a local knowledge base: $localUserData\knowledge.sqlite3"
+    }
+    # 先把 WAL 合并进主库文件，确保发行模板包含全部已导入文档。
+    & $python -c "import sqlite3; c = sqlite3.connect(r'$localUserData\knowledge.sqlite3'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+    if ($LASTEXITCODE -ne 0) { throw "Knowledge base checkpoint failed" }
+    Copy-Item -LiteralPath (Join-Path $localUserData "knowledge.sqlite3") `
+        -Destination $knowledgeTemplate -Force
+    foreach ($sub in @("personas", "memory_prompts")) {
+        $sourceDir = Join-Path $localUserData $sub
+        if (Test-Path -LiteralPath $sourceDir) {
+            Get-ChildItem -LiteralPath $sourceDir -File | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName `
+                    -Destination (Join-Path $releaseRoot "companion-core\config\$sub") -Force
+            }
+        }
+    }
+    Write-Host "Local knowledge base and role/memory templates bundled into config/."
+}
 
 if (-not $SkipGodotExport) {
     if (-not $GodotExecutable) {
@@ -131,18 +159,47 @@ if (-not $SkipGodotExport) {
     if (-not (Test-Path -LiteralPath $gameExecutable)) {
         throw "Godot reported success but did not create SpringHaven.exe"
     }
+} else {
+    Write-Host "WARNING: -SkipGodotExport skipped the game export; this output has no game executable and must not ship." -ForegroundColor Yellow
 }
 
 $forbiddenFiles = Get-ChildItem -LiteralPath $releaseRoot -Recurse -File | Where-Object {
+    if ($IncludeLocalKnowledge -and $_.FullName -eq $knowledgeTemplate) {
+        return $false  # 有意打包的公开知识库模板，放行
+    }
     $_.FullName -match "user_data|provider_key|heartloom\.sqlite|knowledge\.sqlite|local_assets"
 }
 if ($forbiddenFiles) {
     throw "Release contains local-only data: $($forbiddenFiles.FullName -join ', ')"
 }
 
+# 发行包完整性审计：玩家所需的每个部件都必须存在。
+$requiredReleaseParts = @(
+    "PLAYTEST_README.txt",
+    "companion-core\bin\spring-haven-core.exe",
+    "companion-core\config\core_config.example.json",
+    "companion-core\config\roles.example.json",
+    "companion-core\config\personas\ling.md",
+    "companion-core\config\personas\nai.md",
+    "companion-core\config\memory_prompts\ling.md",
+    "companion-core\config\memory_prompts\nai.md"
+)
+$missingParts = $requiredReleaseParts | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $releaseRoot $_))
+}
+if ($missingParts) {
+    throw "Release is incomplete, missing: $($missingParts -join ', ')"
+}
+$coreExeItem = Get-Item -LiteralPath (Join-Path $releaseRoot "companion-core\bin\spring-haven-core.exe")
+if ($coreExeItem.Length -lt 10MB) {
+    throw "spring-haven-core.exe looks truncated: $($coreExeItem.Length) bytes"
+}
+Write-Host "Release parts audit passed."
+
 $releasePck = Join-Path $releaseRoot "SpringHaven.pck"
 if (Test-Path -LiteralPath $releasePck) {
-    $forbiddenPckEntries = Get-GodotPckEntries -PckPath $releasePck | Where-Object {
+    $pckEntries = Get-GodotPckEntries -PckPath $releasePck
+    $forbiddenPckEntries = $pckEntries | Where-Object {
         $_.Path -match "(^|/)(local_assets|user_data)/" -or
         $_.Path -match "(^|/)(heartloom|knowledge)\.sqlite($|[./])" -or
         $_.Path -match "(^|/)provider_key($|[./])"
@@ -150,7 +207,22 @@ if (Test-Path -LiteralPath $releasePck) {
     if ($forbiddenPckEntries) {
         throw "Release PCK contains local-only entries: $($forbiddenPckEntries.Path -join ', ')"
     }
-    Write-Host "PCK privacy audit passed."
+    # 客户端运行必需项：通知脚本曾在 tools/* 排除规则下漏打包且无任何告警。
+    # PCK 存储路径不带 res:// 前缀，脚本会被编译为 .gdc/.remap，故按前缀匹配。
+    $requiredPckEntries = @(
+        "tools/windows_toast.ps1",
+        "scripts/autoload/CompanionCoreClient.gd",
+        "scripts/autoload/WindowsNotificationService.gd",
+        "scripts/autoload/Global.gd"
+    )
+    $pckPaths = @($pckEntries | ForEach-Object { $_.Path })
+    $missingPckEntries = $requiredPckEntries | Where-Object {
+        -not ($pckPaths | Where-Object { $_ -like "$_*" })
+    }
+    if ($missingPckEntries) {
+        throw "Release PCK is missing required entries: $($missingPckEntries -join ', ')"
+    }
+    Write-Host "PCK privacy and completeness audit passed."
 }
 
 if ($CreateArchive) {
