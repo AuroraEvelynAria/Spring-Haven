@@ -19,6 +19,13 @@ ALTER TABLE memory_entries ADD COLUMN embedding_model TEXT NOT NULL DEFAULT '';
 -- 二手传闻:传播链记忆(heard_from_*)标记为二手
 UPDATE memory_entries SET is_second_hand = 1
     WHERE source LIKE 'heard_from_%' AND is_second_hand = 0;
+-- 旅程时钟:锚点 = 该旅程最早记忆/生活事件时刻(HeartloomStore._migrate 等价实现)
+CREATE TABLE IF NOT EXISTS journey_clock (
+    save_id     TEXT PRIMARY KEY,
+    anchor_real INTEGER NOT NULL,
+    world_value REAL NOT NULL DEFAULT 0.0,
+    rate        REAL NOT NULL DEFAULT 1.0
+);
 -- 世界时间回填:按存档内最早 real created_at 的相对偏移(天)
 UPDATE memory_entries
     SET world_created_at = ROUND(
@@ -35,6 +42,12 @@ UPDATE memory_entries
         (last_recalled_at - (SELECT MIN(created_at) FROM memory_entries AS m0
                              WHERE m0.save_id = memory_entries.save_id)) / 86400.0, 4)
     WHERE last_recalled_at > 0 AND last_recalled_world = 0;
+ALTER TABLE life_outbox ADD COLUMN world_created_at REAL NOT NULL DEFAULT 0;
+UPDATE life_outbox
+    SET world_created_at = ROUND(
+        (created_at - (SELECT MIN(created_at) FROM memory_entries AS m0
+                       WHERE m0.save_id = life_outbox.save_id)) / 86400.0, 4)
+    WHERE world_created_at = 0;
 
 -- ===== 3) memory_links(ADR-001 D4:增量建边,四类型,单向 src=new→dst=old) =====
 CREATE TABLE IF NOT EXISTS memory_links (
