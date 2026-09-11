@@ -1217,6 +1217,7 @@ class HeartloomStore:
         *,
         save_id: str,
         role_id: str = "",
+        query: str = "",
         limit: int = 120,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -1224,9 +1225,15 @@ class HeartloomStore:
         node_limit = max(1, min(300, int(limit)))
         offset = max(0, int(offset))
         role_clause = "" if not role_id else "AND (scope_role_id = ? OR scope_role_id = '*')"
+        query_clause = ""
         params: list[Any] = [save_id]
         if role_id:
             params.extend([role_id])
+        normalized_query = str(query).replace("\x00", " ").strip()
+        if normalized_query:
+            escaped = normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query_clause = "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')"
+            params.extend([f"%{escaped}%", f"%{escaped}%"])
         params.extend([node_limit + 1, offset])
         with self._lock:
             rows = self._connection.execute(
@@ -1234,7 +1241,7 @@ class HeartloomStore:
                 SELECT memory_id, kind, title, content, scope_role_id, lifecycle,
                        is_second_hand, importance, world_created_at, world_updated_at
                 FROM memory_entries
-                WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause}
+                WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause} {query_clause}
                 ORDER BY world_updated_at DESC, memory_id
                 LIMIT ? OFFSET ?
                 """,
@@ -1275,6 +1282,7 @@ class HeartloomStore:
                 "kind": str(row["kind"]),
                 "title": str(row["title"])[:80],
                 "summary": str(row["content"])[:120],
+                "content": str(row["content"])[:500],
                 "scope_role_id": str(row["scope_role_id"]),
                 "lifecycle": str(row["lifecycle"]),
                 "is_second_hand": bool(row["is_second_hand"]),
