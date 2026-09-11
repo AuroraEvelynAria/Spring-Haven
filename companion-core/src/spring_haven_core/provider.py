@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -10,12 +11,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.parse import urlencode, urlparse
 
-from aiohttp import ClientSession, ClientTimeout, FormData
+from aiohttp import ClientSession, ClientTimeout, ClientWSTimeout, FormData
 
 from .config import CoreConfig
 from .provider_settings import CAPABILITIES, ProviderSettingsStore
 
 MAX_PROVIDER_RESPONSE_BYTES = 16_000_000
+TTS_WS_RECEIVE_TIMEOUT_SECONDS = 60.0
 MAX_AUDIO_INPUT_BYTES = 8_000_000
 
 
@@ -877,21 +879,35 @@ class OpenAICompatibleProvider:
             raise ProviderError("Open-LLM-VTuber TTS base URL is invalid")
         ws_scheme = "wss" if parsed.scheme in {"https", "wss"} else "ws"
         ws_url = f"{ws_scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/tts-ws"
-        async with session.ws_connect(ws_url, headers=headers, proxy=proxy_url) as socket:
-            await socket.send_json({"text": text})
-            audio_path = ""
-            async for message in socket:
-                if message.type.name == "TEXT":
-                    data = json.loads(message.data)
-                    status = str(data.get("status", "")) if isinstance(data, dict) else ""
-                    if status == "partial" and isinstance(data, dict):
-                        audio_path = str(data.get("audioPath", "")).strip()
-                        if audio_path:
-                            break
-                    elif status == "error":
-                        raise ProviderError(str(data.get("message", "Open-LLM-VTuber TTS failed")))
-                elif message.type.name in {"CLOSED", "CLOSE", "ERROR"}:
-                    break
+        try:
+            async with session.ws_connect(
+                ws_url,
+                headers=headers,
+                proxy=proxy_url,
+                # session 级 ClientTimeout(total=...) 不约束 WS 消息接收，
+                # 上游握手后静默会让请求永久挂起。
+                timeout=ClientWSTimeout(ws_receive=TTS_WS_RECEIVE_TIMEOUT_SECONDS),
+            ) as socket:
+                await socket.send_json({"text": text})
+                audio_path = ""
+                async for message in socket:
+                    if message.type.name == "TEXT":
+                        data = json.loads(message.data)
+                        status = str(data.get("status", "")) if isinstance(data, dict) else ""
+                        if status == "partial" and isinstance(data, dict):
+                            audio_path = str(data.get("audioPath", "")).strip()
+                            if audio_path:
+                                break
+                        elif status == "error":
+                            raise ProviderError(str(data.get("message", "Open-LLM-VTuber TTS failed")))
+                    elif message.type.name in {"CLOSED", "CLOSE", "ERROR"}:
+                        break
+        except asyncio.TimeoutError as exc:
+            raise ProviderError(
+                f"Open-LLM-VTuber TTS WS receive timed out after {TTS_WS_RECEIVE_TIMEOUT_SECONDS:.0f}s",
+                failover_allowed=True,
+                reason="timeout",
+            ) from exc
         if not audio_path:
             raise ProviderError("Open-LLM-VTuber TTS returned no audio", failover_allowed=True, reason="empty_response")
         audio_url = f"{parsed.scheme}://{parsed.netloc}/{audio_path.lstrip('/')}"

@@ -8,6 +8,11 @@ const INTERACTION_RULES := preload("res://scripts/domain/InteractionRules.gd")
 const TUNING_PROFILES := preload("res://scripts/domain/InteractionTuningProfiles.gd")
 const RUNTIME_TUNING := preload("res://scripts/domain/DeveloperRuntimeTuning.gd")
 
+# get_runtime_tuning_value 是每帧热路径（GameWorld/PortraitRig/LifeSim），
+# 缓存 normalize 结果，避免每帧重建 38 项参数字典；源字典变化时自动失效。
+var _runtime_tuning_raw_cache: Dictionary = {}
+var _runtime_tuning_normalized_cache: Dictionary = {}
+
 const RESOLUTIONS := {
 	"1280x720 (16:9)": Vector2i(1280, 720),
 	"1600x900 (16:9)": Vector2i(1600, 900),
@@ -413,15 +418,21 @@ func reset_all_interaction_overrides() -> Dictionary:
 func get_interaction_scope_save_id() -> String:
 	return _active_interaction_save_id()
 
-func get_runtime_tuning() -> Dictionary:
+func _runtime_tuning_normalized() -> Dictionary:
 	var developer = settings.get("developer", {})
 	var raw = (developer as Dictionary).get("runtime_tuning", {}) if developer is Dictionary else {}
-	return RUNTIME_TUNING.normalize(raw)
+	if _runtime_tuning_normalized_cache.is_empty() or raw != _runtime_tuning_raw_cache:
+		_runtime_tuning_raw_cache = raw.duplicate(true)
+		_runtime_tuning_normalized_cache = RUNTIME_TUNING.normalize(raw)
+	return _runtime_tuning_normalized_cache
+
+func get_runtime_tuning() -> Dictionary:
+	return _runtime_tuning_normalized().duplicate(true)
 
 func get_runtime_tuning_value(key: String, fallback: Variant = null) -> Variant:
 	if not RUNTIME_TUNING.SPECS.has(key):
 		return fallback
-	return get_runtime_tuning().get(key, fallback)
+	return _runtime_tuning_normalized().get(key, fallback)
 
 func set_runtime_tuning(values: Dictionary) -> Dictionary:
 	for key_variant in values:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from spring_haven_core.app import build_app
 from spring_haven_core.config import CoreConfig
-from spring_haven_core.memory import HeartloomStore
+from spring_haven_core.memory import HeartloomStore, MemoryStoreError
 from spring_haven_core.orchestration import ConversationOrchestrator
 from spring_haven_core.prompting import HEARTLOOM_OPEN
 from spring_haven_core.provider import ProviderReply
@@ -119,6 +120,17 @@ class HeartloomStoreTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
         self.temp.cleanup()
+
+    def test_rejects_database_created_by_newer_version(self):
+        self.store.close()
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "UPDATE heartloom_meta SET value = '999' WHERE key = 'schema_version'"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaises(MemoryStoreError):
+            HeartloomStore(self.path, ["ling", "nai"])
 
     def test_worldbook_entry_persists_and_recalls_influence(self):
         entry = self.store.put_memory(

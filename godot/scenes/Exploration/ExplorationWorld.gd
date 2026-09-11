@@ -381,12 +381,16 @@ func _capture_and_share_plant_photo() -> void:
 	var vision := get_node_or_null("/root/Vision")
 	if is_instance_valid(vision) and vision.has_method("discover_model"):
 		var discovery_variant = await vision.call("discover_model")
+		if not is_inside_tree():
+			return
 		if discovery_variant is Dictionary and bool((discovery_variant as Dictionary).get("ok", false)):
 			var vision_variant = await vision.call(
 				"describe_image",
 				str(photo_result.get("absolute_path", "")),
 				{"subject": "house_plant", "symbolic_state": "叶片良好，盆土略干"}
 			)
+			if not is_inside_tree():
+				return
 			if vision_variant is Dictionary and bool((vision_variant as Dictionary).get("ok", false)):
 				visual_summary = str((vision_variant as Dictionary).get("text", "")).strip_edges().left(800)
 	var life_sim := get_node_or_null("/root/LifeSim")

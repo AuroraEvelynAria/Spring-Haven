@@ -307,32 +307,6 @@ func get_provider_status() -> Dictionary:
 		_provider_status_cache = (result.get("data", {}) as Dictionary).duplicate(true)
 	return result
 
-func get_conversation_policy() -> Dictionary:
-	if not has_credentials():
-		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
-	return await _request_json(
-		HTTPClient.METHOD_GET,
-		_url("/conversation/policy"),
-		{},
-		HEALTH_TIMEOUT_SECONDS
-	)
-
-func configure_conversation_policy(
-	user_is_adult: bool,
-	allow_consensual_adult_content: bool
-) -> Dictionary:
-	if not has_credentials():
-		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
-	return await _request_json(
-		HTTPClient.METHOD_POST,
-		_url("/conversation/policy"),
-		{
-			"user_is_adult": user_is_adult,
-			"allow_consensual_adult_content": allow_consensual_adult_content,
-		},
-		HEALTH_TIMEOUT_SECONDS
-	)
-
 func get_cached_provider_status() -> Dictionary:
 	return _provider_status_cache.duplicate(true)
 
@@ -519,6 +493,8 @@ func configure_network_proxy(mode: String, proxy_url: String = "") -> Dictionary
 	return result
 
 func get_rag_status() -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/rag/status"),
@@ -527,6 +503,8 @@ func get_rag_status() -> Dictionary:
 	)
 
 func get_maintenance_status() -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/maintenance/status"),
@@ -535,6 +513,8 @@ func get_maintenance_status() -> Dictionary:
 	)
 
 func list_storage_backups() -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/maintenance/backups"),
@@ -543,6 +523,8 @@ func list_storage_backups() -> Dictionary:
 	)
 
 func verify_storage_backup(backup_name: String) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/maintenance/backups/") + backup_name.uri_encode() + "/verify",
@@ -551,6 +533,8 @@ func verify_storage_backup(backup_name: String) -> Dictionary:
 	)
 
 func run_storage_maintenance(force_backup: bool = true) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/maintenance/run"),
@@ -558,18 +542,44 @@ func run_storage_maintenance(force_backup: bool = true) -> Dictionary:
 		CHAT_TIMEOUT_SECONDS
 	)
 
-func sync_life_state(snapshot: Dictionary, last_user_activity_at: int) -> Dictionary:
+func sync_life_state(
+	snapshot: Dictionary,
+	last_user_activity_at: int,
+	recent_events: Array = []
+) -> Dictionary:
 	if not has_credentials():
 		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	var payload := {
+		"save_id": _save_id,
+		"selected_role_id": Global.current_character,
+		"last_user_activity_at": last_user_activity_at,
+		"snapshot": snapshot,
+	}
+	if not recent_events.is_empty():
+		payload["recent_events"] = recent_events.slice(0, 20)
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/life/sync"),
-		{
-			"save_id": _save_id,
-			"selected_role_id": Global.current_character,
-			"last_user_activity_at": last_user_activity_at,
-			"snapshot": snapshot,
-		},
+		payload,
+		HEALTH_TIMEOUT_SECONDS
+	)
+
+func fetch_life_events(
+	limit: int = 100,
+	role_id: String = "",
+	action: String = ""
+) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	var query := "?save_id=" + _save_id.uri_encode() + "&limit=" + str(clampi(limit, 1, 500))
+	if not role_id.is_empty():
+		query += "&role_id=" + role_id.uri_encode()
+	if not action.is_empty():
+		query += "&action=" + action.uri_encode()
+	return await _request_json(
+		HTTPClient.METHOD_GET,
+		_url("/life/events") + query,
+		{},
 		HEALTH_TIMEOUT_SECONDS
 	)
 
@@ -584,6 +594,8 @@ func poll_life_outbox(limit: int = 16) -> Dictionary:
 	)
 
 func acknowledge_life_outbox(delivery_ids: Array[String]) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	if delivery_ids.is_empty():
 		return {"ok": true, "data": {"acknowledged": 0}}
 	return await _request_json(
@@ -594,6 +606,8 @@ func acknowledge_life_outbox(delivery_ids: Array[String]) -> Dictionary:
 	)
 
 func get_life_status() -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/life/status") + "?save_id=" + _save_id.uri_encode(),
@@ -618,6 +632,8 @@ func get_memory_graph(scope: String = "", query: String = "", limit: int = 120) 
 	)
 
 func list_rag_documents(limit: int = 100) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/rag/documents") + "?limit=" + str(clampi(limit, 1, 500)),
@@ -626,6 +642,8 @@ func list_rag_documents(limit: int = 100) -> Dictionary:
 	)
 
 func get_rag_document(document_id: String) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		_url("/rag/documents/") + document_id.uri_encode(),
@@ -634,6 +652,8 @@ func get_rag_document(document_id: String) -> Dictionary:
 	)
 
 func put_rag_document(document: Dictionary) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/rag/documents"),
@@ -642,6 +662,8 @@ func put_rag_document(document: Dictionary) -> Dictionary:
 	)
 
 func batch_rag_documents(action: String, document_ids: Array, scope: String = "") -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	var payload := {"action": action.strip_edges(), "document_ids": document_ids}
 	if not scope.is_empty():
 		payload["scope"] = scope
@@ -659,6 +681,8 @@ func import_rag_file(
 	scope: String = "*",
 	source_uri: String = ""
 ) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	if bytes.is_empty():
 		return {"ok": false, "message": "知识文件为空", "retryable": false}
 	return await _request_json(
@@ -679,6 +703,8 @@ func import_rag_url(
 	title: String = "",
 	scope: String = "*"
 ) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/rag/import-url"),
@@ -687,6 +713,8 @@ func import_rag_url(
 	)
 
 func search_rag(query: String, role_id: String = "", limit: int = 6) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/rag/search"),
@@ -695,6 +723,8 @@ func search_rag(query: String, role_id: String = "", limit: int = 6) -> Dictiona
 	)
 
 func delete_rag_document(document_id: String) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_DELETE,
 		_url("/rag/documents/") + document_id.uri_encode(),
@@ -703,6 +733,8 @@ func delete_rag_document(document_id: String) -> Dictionary:
 	)
 
 func reindex_rag() -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	return await _request_json(
 		HTTPClient.METHOD_POST,
 		_url("/rag/reindex"),
@@ -716,6 +748,8 @@ func analyze_image_bytes(
 	symbolic_context: Dictionary = {},
 	question: String = ""
 ) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	if bytes.is_empty():
 		return {"ok": false, "message": "图像为空", "retryable": false}
 	return await _request_json(
@@ -988,6 +1022,17 @@ func _ensure_core_runtime(template_root: String, runtime_root: String) -> bool:
 			template_root.path_join(str(source_relative)),
 			runtime_root.path_join(destination_relative)
 		):
+			return false
+	# 可选模板：发行包自带知识库时复制到运行时目录，开发树缺失时跳过。
+	var optional_templates := {
+		"knowledge.sqlite3": "knowledge.sqlite3",
+	}
+	for source_relative in optional_templates:
+		var source_path := template_root.path_join(str(source_relative))
+		if not FileAccess.file_exists(source_path):
+			continue
+		var destination_relative := str(optional_templates[source_relative])
+		if not _copy_file_if_missing(source_path, runtime_root.path_join(destination_relative)):
 			return false
 	if not FileAccess.file_exists(config_path):
 		var source_config_path := template_root.path_join("core_config.example.json")
