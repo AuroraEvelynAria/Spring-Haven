@@ -92,17 +92,15 @@ const CAPABILITY_PROVIDER_UI := {
 		"model": "whisper-1",
 		"protocols": {
 			"openai_transcriptions": "OpenAI /audio/transcriptions",
-			"open_llm_vtuber_asr": "Open-LLM-VTuber /asr",
 		},
 	},
 	"tts": {
 		"label": "语音合成模型",
-		"description": "把角色回复转换成语音；可接 Voicebox、OpenAI-compatible TTS、GPT-SoVITS 或 Open-LLM-VTuber",
+		"description": "把角色回复转换成语音；可接 Voicebox、OpenAI-compatible TTS 或 GPT-SoVITS",
 		"base_url": "http://127.0.0.1:8880/v1",
 		"model": "kokoro",
 		"protocols": {
 			"openai_speech": "OpenAI-compatible /audio/speech",
-			"open_llm_vtuber_tts_ws": "Open-LLM-VTuber /tts-ws",
 			"gpt_sovits_get": "GPT-SoVITS /tts"
 		},
 	},
@@ -110,8 +108,7 @@ const CAPABILITY_PROVIDER_UI := {
 const STAT_LABELS := {
 	"health": "健康", "stamina": "体力", "hunger": "饥饿", "thirst": "口渴",
 	"awake": "清醒", "urine": "尿液", "intimacy": "好感度", "mood": "心情",
-	"stress": "压力", "fertility": "内膜容受性", "implantation": "服药后着床倾向", "arousal": "亲密温度",
-	"climax": "亲密浪潮"
+	"stress": "压力", "fertility": "内膜容受性", "implantation": "服药后着床倾向"
 }
 
 var _scrim: ColorRect
@@ -173,13 +170,6 @@ var _provider_dirty := false
 var _provider_busy := false
 var _provider_write_in_flight := false
 var _provider_suppress_dirty := false
-var _adult_user_toggle: CheckBox
-var _adult_content_toggle: CheckBox
-var _adult_policy_save_button: Button
-var _adult_policy_status: Label
-var _conversation_policy_loaded: Dictionary = {}
-var _conversation_policy_dirty := false
-var _conversation_policy_busy := false
 var _provider_request_generation := 0
 var _maintenance_status_label: Label
 var _maintenance_run_button: Button
@@ -269,8 +259,6 @@ func show_panel(initial_category: String = "") -> void:
 	_provider_rag_dirty = false
 	_provider_busy = false
 	_provider_write_in_flight = false
-	_conversation_policy_dirty = false
-	_conversation_policy_busy = false
 	_provider_http_confirmation_target = ""
 	_rag_document_dirty = false
 	_rag_operation_busy = false
@@ -279,7 +267,6 @@ func show_panel(initial_category: String = "") -> void:
 	_rebuild_content()
 	show()
 	_refresh_provider_status.call_deferred()
-	_refresh_conversation_policy.call_deferred()
 	modulate.a = 0.0
 	_panel.scale = Vector2(0.97, 0.97)
 	_panel.pivot_offset = _panel.size / 2.0
@@ -355,7 +342,6 @@ func _build_developer_discard_dialog() -> void:
 		_provider_profile_dirty.clear()
 		_provider_proxy_dirty = false
 		_provider_rag_dirty = false
-		_conversation_policy_dirty = false
 		_rag_document_dirty = false
 		_category_drafts.clear()
 		close_panel()
@@ -474,10 +460,6 @@ func _clear_rebuilt_control_references() -> void:
 	_provider_clear_button = null
 	_provider_diagnose_button = null
 	_provider_status = null
-	_adult_user_toggle = null
-	_adult_content_toggle = null
-	_adult_policy_save_button = null
-	_adult_policy_status = null
 	_provider_profile_controls.clear()
 	_provider_proxy_controls.clear()
 	_provider_rag_controls.clear()
@@ -1309,7 +1291,6 @@ func _build_ai_provider_section(data: Dictionary) -> void:
 	command_row.add_child(_provider_status)
 	_render_provider_status()
 	_sync_provider_buttons()
-	_build_conversation_policy_editor(column, data)
 	var capabilities_page := VBoxContainer.new()
 	capabilities_page.add_theme_constant_override("separation", 9)
 	page_stack.add_child(capabilities_page)
@@ -1374,179 +1355,6 @@ func _build_ai_provider_section(data: Dictionary) -> void:
 	pages["network"] = network_page
 	_build_network_proxy_editor(network_page, data)
 	_show_settings_page(pages)
-
-func _build_conversation_policy_editor(parent: VBoxContainer, data: Dictionary) -> void:
-	parent.add_child(HSeparator.new())
-	var heading := Label.new()
-	heading.text = "对话内容边界"
-	heading.add_theme_font_size_override("font_size", 13)
-	heading.add_theme_color_override("font_color", Color(data.primary))
-	parent.add_child(heading)
-	var note := Label.new()
-	note.text = "仅在用户与全部参与角色均已成年时，可允许双方自愿的成人内容。公开发行默认关闭；模型服务商仍可能执行自己的内容策略。"
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.add_theme_font_size_override("font_size", 10)
-	note.add_theme_color_override("font_color", Color(data.secondary, 0.96))
-	parent.add_child(note)
-
-	_adult_user_toggle = CheckBox.new()
-	_adult_user_toggle.text = "我确认自己已年满 18 岁"
-	_adult_user_toggle.toggled.connect(_on_adult_user_toggled)
-	parent.add_child(_adult_user_toggle)
-	_adult_content_toggle = CheckBox.new()
-	_adult_content_toggle.text = "允许与已成年角色进行双方自愿的成人内容"
-	_adult_content_toggle.toggled.connect(_on_adult_content_toggled)
-	parent.add_child(_adult_content_toggle)
-
-	var command_row := HBoxContainer.new()
-	command_row.add_theme_constant_override("separation", 8)
-	parent.add_child(command_row)
-	_adult_policy_save_button = Button.new()
-	_adult_policy_save_button.text = "保存并立即应用"
-	_adult_policy_save_button.pressed.connect(_save_conversation_policy)
-	command_row.add_child(_adult_policy_save_button)
-	_adult_policy_status = Label.new()
-	_adult_policy_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_adult_policy_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_adult_policy_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_adult_policy_status.add_theme_font_size_override("font_size", 10)
-	command_row.add_child(_adult_policy_status)
-	_apply_conversation_policy_to_controls(_conversation_policy_loaded)
-
-func _collect_conversation_policy_values() -> Dictionary:
-	if not is_instance_valid(_adult_user_toggle) or not is_instance_valid(_adult_content_toggle):
-		return {
-			"user_is_adult": bool(_conversation_policy_loaded.get("user_is_adult", false)),
-			"allow_consensual_adult_content": bool(
-				_conversation_policy_loaded.get("allow_consensual_adult_content", false)
-			),
-			"roles_all_adult": bool(_conversation_policy_loaded.get("roles_all_adult", false)),
-		}
-	return {
-		"user_is_adult": _adult_user_toggle.button_pressed,
-		"allow_consensual_adult_content": _adult_content_toggle.button_pressed,
-		"roles_all_adult": bool(_conversation_policy_loaded.get("roles_all_adult", false)),
-	}
-
-func _apply_conversation_policy_to_controls(values: Dictionary) -> void:
-	if not is_instance_valid(_adult_user_toggle) or not is_instance_valid(_adult_content_toggle):
-		return
-	_adult_user_toggle.set_pressed_no_signal(bool(values.get("user_is_adult", false)))
-	_adult_content_toggle.set_pressed_no_signal(bool(
-		values.get("allow_consensual_adult_content", false)
-	))
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status()
-
-func _on_adult_user_toggled(enabled: bool) -> void:
-	if not enabled and is_instance_valid(_adult_content_toggle):
-		_adult_content_toggle.set_pressed_no_signal(false)
-	_update_conversation_policy_dirty()
-
-func _on_adult_content_toggled(_enabled: bool) -> void:
-	_update_conversation_policy_dirty()
-
-func _update_conversation_policy_dirty() -> void:
-	var current := _collect_conversation_policy_values()
-	_conversation_policy_dirty = (
-		bool(current.get("user_is_adult", false))
-		!= bool(_conversation_policy_loaded.get("user_is_adult", false))
-		or bool(current.get("allow_consensual_adult_content", false))
-		!= bool(_conversation_policy_loaded.get("allow_consensual_adult_content", false))
-	)
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status()
-
-func _sync_conversation_policy_controls() -> void:
-	if not is_instance_valid(_adult_user_toggle):
-		return
-	var roles_all_adult := bool(_conversation_policy_loaded.get("roles_all_adult", false))
-	_adult_user_toggle.disabled = _conversation_policy_busy
-	_adult_content_toggle.disabled = (
-		_conversation_policy_busy
-		or not _adult_user_toggle.button_pressed
-		or not roles_all_adult
-	)
-	_adult_content_toggle.tooltip_text = (
-		"所有参与角色都已在角色配置中标记为成年人"
-		if roles_all_adult
-		else "角色年龄缺失或未满 18 岁，不能开启"
-	)
-	_adult_policy_save_button.disabled = (
-		_conversation_policy_busy or not _conversation_policy_dirty
-	)
-
-func _render_conversation_policy_status(override_text := "") -> void:
-	if not is_instance_valid(_adult_policy_status):
-		return
-	var text := override_text
-	var color := Color(ThemeMgr.get_current_theme_data().secondary, 0.96)
-	if text.is_empty():
-		if _conversation_policy_busy:
-			text = "正在同步…"
-		elif _conversation_policy_dirty:
-			text = "有未保存修改"
-			color = Color("#D9A441")
-		elif _conversation_policy_loaded.is_empty():
-			text = "正在读取 Core 设置…"
-		elif bool(_conversation_policy_loaded.get("allow_consensual_adult_content", false)):
-			text = "已开启 · 立即作用于新消息"
-			color = Color("#4CAF7D")
-		else:
-			text = "已关闭"
-	_adult_policy_status.text = text
-	_adult_policy_status.add_theme_color_override("font_color", color)
-
-func _refresh_conversation_policy() -> void:
-	_conversation_policy_busy = true
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status()
-	var result: Dictionary = await CompanionCore.get_conversation_policy()
-	_conversation_policy_busy = false
-	if not bool(result.get("ok", false)):
-		_render_conversation_policy_status(
-			"读取失败：%s" % str(result.get("message", "Core 不可用"))
-		)
-		_sync_conversation_policy_controls()
-		return
-	var values = result.get("data", {})
-	if not values is Dictionary:
-		_render_conversation_policy_status("Core 返回了无效设置")
-		return
-	_conversation_policy_loaded = (values as Dictionary).duplicate(true)
-	if not _conversation_policy_dirty:
-		_apply_conversation_policy_to_controls(_conversation_policy_loaded)
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status()
-
-func _save_conversation_policy() -> void:
-	if _conversation_policy_busy or not _conversation_policy_dirty:
-		return
-	var values := _collect_conversation_policy_values()
-	_conversation_policy_busy = true
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status()
-	var result: Dictionary = await CompanionCore.configure_conversation_policy(
-		bool(values.get("user_is_adult", false)),
-		bool(values.get("allow_consensual_adult_content", false))
-	)
-	_conversation_policy_busy = false
-	if not bool(result.get("ok", false)):
-		var message := str(result.get("message", "保存失败"))
-		if "adult user confirmation" in message:
-			message = "开启前必须确认用户已年满 18 岁"
-		elif "every role" in message:
-			message = "所有参与角色都必须配置为成年人"
-		_render_conversation_policy_status("保存失败：" + message)
-		_sync_conversation_policy_controls()
-		return
-	var response_data = result.get("data", {})
-	if response_data is Dictionary:
-		_conversation_policy_loaded = (response_data as Dictionary).duplicate(true)
-	_conversation_policy_dirty = false
-	_apply_conversation_policy_to_controls(_conversation_policy_loaded)
-	_sync_conversation_policy_controls()
-	_render_conversation_policy_status("已保存并立即应用")
 
 func _add_provider_focus_button(
 	parent: HFlowContainer,
@@ -3608,7 +3416,6 @@ func _collect_provider_draft() -> Dictionary:
 		"profiles": profiles,
 		"fallbacks": _provider_fallback_drafts.duplicate(true),
 		"network_proxy": _collect_provider_proxy_values(),
-		"conversation_policy": _collect_conversation_policy_values(),
 	}
 
 func _restore_provider_draft(draft: Dictionary) -> void:
@@ -3640,10 +3447,6 @@ func _restore_provider_draft(draft: Dictionary) -> void:
 	if network_proxy is Dictionary and not (network_proxy as Dictionary).is_empty():
 		_apply_provider_proxy_values_to_controls(network_proxy as Dictionary)
 		_update_provider_proxy_dirty()
-	var conversation_policy = draft.get("conversation_policy", {})
-	if conversation_policy is Dictionary and not (conversation_policy as Dictionary).is_empty():
-		_apply_conversation_policy_to_controls(conversation_policy as Dictionary)
-		_update_conversation_policy_dirty()
 
 func _collect_knowledge_draft() -> Dictionary:
 	if not is_instance_valid(_rag_document_title):
@@ -3722,7 +3525,7 @@ func _capture_visible_category_draft() -> void:
 			}
 
 func _has_unsaved_ai_draft() -> bool:
-	if _provider_dirty or _provider_proxy_dirty or _conversation_policy_dirty:
+	if _provider_dirty or _provider_proxy_dirty:
 		return true
 	for capability_variant in _provider_profile_dirty:
 		if bool(_provider_profile_dirty.get(capability_variant, false)):
@@ -3769,7 +3572,6 @@ func _has_provider_dirty() -> bool:
 		or _provider_proxy_dirty
 		or _provider_rag_dirty
 		or _rag_document_dirty
-		or _conversation_policy_dirty
 	):
 		return true
 	for capability_variant in _provider_profile_dirty:
@@ -4806,7 +4608,7 @@ func _rebuild_content_preserving_developer_draft() -> void:
 	_restore_visible_category_draft()
 
 func _request_close_panel() -> void:
-	if _provider_write_in_flight or _conversation_policy_busy:
+	if _provider_write_in_flight:
 		_set_provider_status("请等待模型连接操作完成", Color("#D9A441"))
 		return
 	if _developer_dirty or _ambient_dirty or _runtime_dirty or _stat_dirty or _has_provider_dirty():

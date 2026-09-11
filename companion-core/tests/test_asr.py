@@ -52,7 +52,6 @@ class AsrProviderTests(unittest.IsolatedAsyncioTestCase):
         self.requests: list[dict[str, object]] = []
         upstream = web.Application()
         upstream.router.add_post("/v1/audio/transcriptions", self.openai_asr)
-        upstream.router.add_post("/asr", self.open_llm_vtuber_asr)
         self.upstream = TestServer(upstream)
         await self.upstream.start_server()
         self.base_url = str(self.upstream.make_url("/")).rstrip("/")
@@ -98,11 +97,6 @@ class AsrProviderTests(unittest.IsolatedAsyncioTestCase):
         self.requests.append(fields)
         return web.json_response({"text": "我把温水递给小玲", "language": "zh"})
 
-    async def open_llm_vtuber_asr(self, request: web.Request) -> web.Response:
-        fields = await self._multipart_fields(request)
-        self.requests.append(fields)
-        return web.json_response({"text": "小奈过来我这里"})
-
     async def test_openai_compatible_transcription_uses_multipart_and_key(self):
         self.settings.update_profile(
             "asr",
@@ -122,21 +116,6 @@ class AsrProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["authorization"], "Bearer sk-asr-test-not-a-real-key")
         self.assertEqual(request["mime_type"], "audio/wav")
         self.assertTrue(bytes(request["audio"]).startswith(b"RIFF"))
-
-    async def test_open_llm_vtuber_protocol_omits_openai_only_fields(self):
-        self.settings.update_profile(
-            "asr",
-            base_url=self.base_url,
-            model="sense-voice",
-            enabled=True,
-            protocol="open_llm_vtuber_asr",
-            inherit_chat_key=False,
-        )
-        reply = await self.provider.transcribe_audio(pcm_wav())
-        self.assertEqual(reply.text, "小奈过来我这里")
-        request = self.requests[-1]
-        self.assertNotIn("model", request)
-        self.assertNotIn("language", request)
 
     async def test_core_audio_endpoint_is_authenticated_and_returns_envelope(self):
         self.settings.update_profile(

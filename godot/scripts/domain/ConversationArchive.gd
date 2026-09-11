@@ -7,6 +7,28 @@ const ARCHIVE_DIR := "user://SpringHaven/conversation_archive"
 const MAX_SEARCH_RESULTS := 2000
 
 static var _last_error := ""
+# journey_summaries 的缓存:主菜单每次存档目录变化都会全量解析所有日期文件,
+# 随游玩时长线性变慢。以目录指纹(文件名+mtime)失效,upsert 写入后自动刷新。
+static var _summaries_cache: Array[Dictionary] = []
+static var _summaries_fingerprint := ""
+
+static func _archive_fingerprint() -> String:
+	var parts: Array[String] = []
+	if not _ensure_archive_directory():
+		return ""
+	var directory := DirAccess.open(ARCHIVE_DIR)
+	if directory == null:
+		return ""
+	for file_name_variant in directory.get_files():
+		var file_name := str(file_name_variant)
+		if not file_name.ends_with(".json"):
+			continue
+		var date_key := file_name.trim_suffix(".json")
+		if not _is_date_key(date_key):
+			continue
+		parts.append("%s:%d" % [file_name, FileAccess.get_modified_time(ARCHIVE_DIR + "/" + file_name)])
+	parts.sort()
+	return ",".join(parts)
 
 static func upsert_entries(entries: Array, save_id: String) -> bool:
 	_last_error = ""
@@ -137,6 +159,12 @@ static func search_entries(
 	return result
 
 static func journey_summaries() -> Array[Dictionary]:
+	var fingerprint := _archive_fingerprint()
+	if not fingerprint.is_empty() and fingerprint == _summaries_fingerprint:
+		var cached: Array[Dictionary] = []
+		for summary_variant in _summaries_cache:
+			cached.append((summary_variant as Dictionary).duplicate(true))
+		return cached
 	var grouped := {}
 	for date_summary in list_dates():
 		for entry in load_date(str(date_summary.get("date", ""))):
@@ -166,6 +194,10 @@ static func journey_summaries() -> Array[Dictionary]:
 		if summary_variant is Dictionary:
 			result.append((summary_variant as Dictionary).duplicate(true))
 	result.sort_custom(func(a: Dictionary, b: Dictionary): return int(a.updated_at) > int(b.updated_at))
+	_summaries_fingerprint = fingerprint
+	_summaries_cache = []
+	for summary_variant in result:
+		_summaries_cache.append((summary_variant as Dictionary).duplicate(true))
 	return result
 
 static func entries_for_save(save_id: String, limit := 64) -> Array[Dictionary]:
