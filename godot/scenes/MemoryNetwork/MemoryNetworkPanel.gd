@@ -267,10 +267,10 @@ func _build_interface() -> void:
 func _load_graph() -> void:
 	_load_generation += 1
 	var generation := _load_generation
-	_status.text = "正在计算记忆之间的联系……"
+	_status.text = "正在整理记忆之间的联系……"
 	_empty_state.text = "正在读取心织记忆……"
 	_empty_state.show()
-	var result: Dictionary = await CompanionCore.get_memory_graph(
+	var result: Dictionary = await CompanionCore.get_heartloom_graph(
 		_selected_scope(),
 		_search_input.text,
 		100
@@ -290,18 +290,36 @@ func _load_graph() -> void:
 		_empty_state.text = "Companion Core 返回了无效的记忆网络"
 		_status.text = "加载失败"
 		return
-	_graph = (data as Dictionary).duplicate(true)
+	# /heartloom/graph 契约(v2)字段映射到画布结构:
+	# memory_id→id、summary→content、edges 的 src/dst→source/target
+	var mapped_nodes: Array = []
+	var raw_nodes = data.get("nodes", [])
+	if raw_nodes is Array:
+		for node_variant in raw_nodes:
+			if not node_variant is Dictionary:
+				continue
+			var node: Dictionary = (node_variant as Dictionary).duplicate(true)
+			node["id"] = str(node.get("memory_id", ""))
+			node["content"] = str(node.get("summary", ""))
+			mapped_nodes.append(node)
+	var mapped_edges: Array = []
+	var raw_edges = data.get("edges", [])
+	if raw_edges is Array:
+		for edge_variant in raw_edges:
+			if not edge_variant is Dictionary:
+				continue
+			var edge: Dictionary = (edge_variant as Dictionary).duplicate(true)
+			edge["source"] = str(edge.get("src", ""))
+			edge["target"] = str(edge.get("dst", ""))
+			edge["strength"] = float(edge.get("link_strength", 0.5))
+			mapped_edges.append(edge)
+	_graph = {"nodes": mapped_nodes, "edges": mapped_edges}
 	_canvas.set_graph(_graph)
 	_canvas.set_min_strength(float(_strength_slider.value))
-	var summary_variant = _graph.get("summary", {})
-	var summary: Dictionary = summary_variant if summary_variant is Dictionary else {}
-	var node_count := int(summary.get("node_count", 0))
-	var available_count := int(summary.get("available_node_count", node_count))
-	var edge_count := int(summary.get("edge_count", 0))
-	var isolated := int(summary.get("isolated_node_count", 0))
+	var node_count := int(data.get("node_count", 0))
 	_empty_state.visible = node_count == 0
 	_empty_state.text = "没有匹配的长期记忆" if node_count == 0 else ""
-	_update_summary_status(node_count, available_count, edge_count, isolated)
+	_update_summary_status(node_count, node_count, mapped_edges.size(), 0)
 	_status.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
 	_selected_node_id = ""
 	_clear_details()
@@ -312,12 +330,15 @@ func _show_node_details(node: Dictionary) -> void:
 	_detail_title.text = str(node.get("title", "未命名记忆"))
 	var scope := str(node.get("scope_role_id", "*"))
 	var kind := str(node.get("kind", "episodic"))
-	_detail_meta.text = "%s · %s · 重要度 %.0f%% · 被唤起 %d 次\n%s" % [
+	var bucket_names := {"high": "高", "normal": "中", "low": "低"}
+	var importance_label := str(
+		bucket_names.get(str(node.get("importance_bucket", "normal")), "中")
+	)
+	_detail_meta.text = "%s · %s · 重要度：%s\n世界第 %.1f 天" % [
 		str(SCOPE_NAMES.get(scope, scope)),
 		str(KIND_NAMES.get(kind, kind)),
-		float(node.get("importance", 0.5)) * 100.0,
-		int(node.get("recall_count", 0)),
-		_format_time(int(node.get("updated_at", 0))),
+		importance_label,
+		float(node.get("world_updated_at", 0.0)),
 	]
 	_detail_content.text = str(node.get("content", ""))
 	var keywords: Array[String] = []

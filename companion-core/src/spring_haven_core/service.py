@@ -1242,7 +1242,11 @@ class CompanionService:
         except (TypeError, ValueError) as exc:
             raise RequestValidationError("graph paging parameters are invalid") from exc
         return self.memory.graph_page(
-            save_id=save_id, role_id=role_id, limit=limit, offset=offset
+            save_id=save_id,
+            role_id=role_id,
+            query=str(raw.get("query", "")),
+            limit=limit,
+            offset=offset,
         )
 
     async def _polish_milestone_copy(

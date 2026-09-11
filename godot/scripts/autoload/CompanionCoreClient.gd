@@ -639,15 +639,20 @@ func get_life_status() -> Dictionary:
 		HEALTH_TIMEOUT_SECONDS
 	)
 
-func get_memory_graph(scope: String = "", query: String = "", limit: int = 120) -> Dictionary:
+func get_heartloom_graph(
+	role_id: String = "", query: String = "", limit: int = 120, cursor: String = ""
+) -> Dictionary:
 	if not has_credentials():
 		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
-	var url := _url("/memory/graph") + "?save_id=" + _save_id.uri_encode()
-	if not scope.strip_edges().is_empty():
-		url += "&scope=" + scope.strip_edges().uri_encode()
+	var url := _url("/heartloom/graph") + "?save_id=" + _save_id.uri_encode()
+	var normalized_role := role_id.strip_edges()
+	if not normalized_role.is_empty() and normalized_role != "*":
+		url += "&role_id=" + normalized_role.uri_encode()
 	if not query.strip_edges().is_empty():
 		url += "&query=" + query.strip_edges().uri_encode()
-	url += "&limit=" + str(clampi(limit, 1, 200))
+	url += "&limit=" + str(clampi(limit, 1, 300))
+	if not cursor.strip_edges().is_empty():
+		url += "&cursor=" + cursor.strip_edges().uri_encode()
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		url,
