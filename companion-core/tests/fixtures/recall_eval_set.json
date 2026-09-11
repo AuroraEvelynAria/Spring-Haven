@@ -1,0 +1,26 @@
+{
+  "_comment": "ADR-001 混合召回评测集脚手架。用例期望为内容特征级,需用真实存档记忆人工核对后补 expect_memory_ids(真实 memory_id 列表)。annotated=false 表示尚未人工标注。评分函数以本文件为回归基准:final 分数排序后,expect_memory_ids 必须全部出现在 top-5(allow_partial 见 notes)。",
+  "_usage": "Phase 0-4:召回重构实现完成后,由 tests/test_recall_eval.py 加载本文件驱动;score 通道权重见 ADR-001 D1。",
+  "cases": [
+    {"id": "q001", "query": "窗边的栀子花", "expect_keywords": ["栀子花", "浇"], "expect_actor": "ling", "expected_kind": "worldbook", "notes": "世界书条目应稳定命中"},
+    {"id": "q002", "query": "一起浇花", "expect_keywords": ["栀子花", "浇"], "expect_actor": "ling", "expected_kind": "episodic"},
+    {"id": "q003", "query": "排练", "expect_keywords": ["舞蹈", "排练"], "expect_actor": "nai", "expected_kind": "episodic"},
+    {"id": "q004", "query": "绿萝", "expect_keywords": ["绿萝", "植物"], "expect_actor": "ling"},
+    {"id": "q005", "query": "小奈想家", "expect_keywords": ["想家", "雪奈"], "expect_actor": "nai"},
+    {"id": "q006", "query": "陪我散步", "expect_keywords": ["散步", "运动"], "expect_actor": null},
+    {"id": "q007", "query": "热可可", "expect_keywords": ["可可", "喝"], "expect_actor": "nai"},
+    {"id": "q008", "query": "第一次见面", "expect_keywords": ["第一次", "见面"], "expect_actor": null, "notes": "应命中里程碑/早期记忆,验证 recency 不压制早期高价值记忆"},
+    {"id": "q009", "query": "听小玲说", "expect_keywords": ["听说", "传播"], "expect_actor": "nai", "notes": "二手记忆(is_second_hand=1)召回路径"},
+    {"id": "q010", "query": "主人感冒了", "expect_keywords": ["感冒", "健康"], "expect_actor": "ling"},
+    {"id": "q011", "query": "生日", "expect_keywords": ["生日"], "expected_kind": "milestone", "notes": "role_milestones 关联记忆"},
+    {"id": "q012", "query": "舞台", "expect_keywords": ["舞台", "演出"], "expect_actor": "nai", "notes": "nai 人生目标相关"},
+    {"id": "q013", "query": "喂食", "expect_keywords": ["喂", "吃"], "expected_kind": "interaction"},
+    {"id": "q014", "query": "晚安", "expect_keywords": ["休息", "睡"], "expected_kind": "interaction"},
+    {"id": "q015", "query": "/videos", "expect_keywords": [], "notes": "保留位:需真实记忆补充"},
+    {"id": "q016", "query": "", "expect_keywords": [], "notes": "保留位"},
+    {"id": "q017", "query": "", "expect_keywords": [], "notes": "保留位"},
+    {"id": "q018", "query": "", "expect_keywords": [], "notes": "保留位"},
+    {"id": "q019", "query": "", "expect_keywords": [], "notes": "保留位"},
+    {"id": "q020", "query": "", "expect_keywords": [], "notes": "保留位"}
+  ]
+}
