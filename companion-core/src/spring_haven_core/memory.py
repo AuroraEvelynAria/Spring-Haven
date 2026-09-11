@@ -836,6 +836,8 @@ class HeartloomStore:
         query: str,
         limit: int = 8,
         record_access: bool = True,
+        query_vector: list[float] | None = None,
+        embedding_model: str = "",
     ) -> list[dict[str, Any]]:
         if role_id not in self.role_ids:
             raise MemoryStoreError("role_id is invalid")
@@ -843,12 +845,14 @@ class HeartloomStore:
         query_terms = set(_extract_terms(query))
         params: list[Any] = [save_id, SHARED_SCOPE, role_id]
         term_clause = ""
+        dormant_clause = ""
         if query_terms:
             placeholders = ",".join("?" for _ in query_terms)
-            term_clause = (
-                " OR memory_id IN (SELECT memory_id FROM memory_terms "
-                f"WHERE term IN ({placeholders}))"
-            )
+            term_subquery = f"SELECT memory_id FROM memory_terms WHERE term IN ({placeholders})"
+            term_clause = f" OR memory_id IN ({term_subquery})"
+            # 精确关键词命中可唤醒 dormant 记忆(ADR-001 D5);archived 不可自动激活
+            dormant_clause = f" OR (lifecycle = 'dormant' AND memory_id IN ({term_subquery}))"
+            params.extend(sorted(query_terms))
             params.extend(sorted(query_terms))
         params.append(max(100, requested * 30))
         sql = f"""
@@ -856,7 +860,10 @@ class HeartloomStore:
             WHERE save_id = ?
               AND scope_role_id IN (?, ?)
               AND enabled = 1
-              AND (always_active = 1 {term_clause})
+              AND (
+                    (lifecycle = 'active' AND (always_active = 1{term_clause}))
+                    {dormant_clause}
+              )
             ORDER BY always_active DESC, priority DESC, importance DESC, updated_at DESC
             LIMIT ?
         """
@@ -875,6 +882,30 @@ class HeartloomStore:
                     )
 
         world_now_value = self.world_now(save_id)
+        # graph_boost(ADR-001 D1):候选记忆与 always_active 常驻记忆之间的
+        # 一级静态边最大强度;只读预存边,不实时计算,无邻接则为 0。
+        graph_boost: dict[str, float] = {}
+        candidate_ids = [str(row["memory_id"]) for row in rows]
+        if candidate_ids:
+            placeholders = ",".join("?" for _ in candidate_ids)
+            for item in self._connection.execute(
+                f"""
+                SELECT l.src_memory_id AS side_a, l.dst_memory_id AS side_b, l.link_strength
+                FROM memory_links AS l
+                JOIN memory_entries AS pinned
+                  ON (pinned.memory_id = l.src_memory_id OR pinned.memory_id = l.dst_memory_id)
+                 AND pinned.always_active = 1 AND pinned.lifecycle = 'active'
+                WHERE l.src_memory_id IN ({placeholders})
+                   OR l.dst_memory_id IN ({placeholders})
+                """,
+                (*candidate_ids, *candidate_ids),
+            ).fetchall():
+                strength = float(item["link_strength"])
+                for side in (item["side_a"], item["side_b"]):
+                    side = str(side)
+                    if side in candidate_ids:
+                        graph_boost[side] = max(graph_boost.get(side, 0.0), strength)
+
         scored: list[tuple[float, sqlite3.Row]] = []
         normalized_query = _normalize_text(query)
         for row in rows:
@@ -886,21 +917,43 @@ class HeartloomStore:
             trigger_hit = any(_normalize_text(item) in normalized_query for item in triggers if item)
             if trigger_hit:
                 lexical = max(lexical, 1.0)
+            lexical = min(1.0, lexical)  # 归一化到 0-1,保证各通道量纲一致(ADR-001 D1)
             # 衰减/recency 全部基于 world_time(世界天),不再读取现实时间(#23)
             age_days = max(0.0, world_now_value - float(row["world_updated_at"]))
             half_life = float(row["half_life_days"])
             decay = 1.0 if half_life <= 0.0 else math.pow(0.5, age_days / half_life)
             importance = float(row["importance"]) * decay
             recency = math.pow(0.5, age_days / 30.0)
-            reinforcement = min(0.08, math.log1p(int(row["recall_count"])) * 0.015)
             priority = (int(row["priority"]) + 10) / 20.0
-            score = lexical * 0.55 + importance * 0.24 + recency * 0.08 + priority * 0.05 + reinforcement
+            # 语义通道(ADR-001 D1):query_vector 缺失时该路权重并回其余通道
+            semantic = 0.0
+            if query_vector is not None and row["embedding_json"] and str(row["embedding_model"]) == embedding_model:
+                try:
+                    vector = [float(item) for item in json.loads(row["embedding_json"])]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    vector = []
+                cosine = self._memory_cosine(query_vector, vector)
+                if cosine is not None:
+                    semantic = max(0.0, min(1.0, (cosine + 1.0) / 2.0))
+            if query_vector is not None:
+                score = 0.40 * semantic + 0.25 * lexical + 0.20 * importance + 0.10 * recency + 0.05 * priority
+            else:
+                score = (0.25 * lexical + 0.20 * importance + 0.10 * recency + 0.05 * priority) / 0.60
+            score = min(1.0, score) + 0.05 * graph_boost.get(str(row["memory_id"]), 0.0)
             if bool(row["always_active"]):
                 score = max(score, 0.82 + priority * 0.12)
             if bool(row["always_active"]) or lexical > 0.0:
                 scored.append((score, row))
         scored.sort(key=lambda item: (item[0], int(item[1]["updated_at"])), reverse=True)
         selected = scored[:requested]
+        # dormant 命中自动唤醒(ADR-001 D5)
+        dormant_hits = [str(row["memory_id"]) for _, row in selected if str(row["lifecycle"]) == "dormant"]
+        if dormant_hits:
+            with self._lock, self._connection:
+                self._connection.executemany(
+                    "UPDATE memory_entries SET lifecycle = 'active', lifecycle_changed_world = ? WHERE memory_id = ?",
+                    [(world_now_value, mid) for mid in dormant_hits],
+                )
         result = [self._memory_row(row, score=score) for score, row in selected]
 
         if record_access:
@@ -920,6 +973,391 @@ class HeartloomStore:
                 self._set_meta("last_recall_role", role_id)
                 self._set_meta("last_recall_save", save_id)
         return result
+
+    # ===== ADR-001 Phase 3:记忆网络与混合召回 =====
+
+    def apply_lifecycle_transitions(self, save_id: str | None = None) -> dict[str, int]:
+        """三态生命周期规则(常量阈值,ADR-001 D5):dormant/archived 自动迁移。"""
+        stats = {"dormant": 0, "archived": 0}
+        with self._lock, self._connection:
+            saves = [save_id] if save_id else self._existing_journey_ids()
+            for sid in saves:
+                world_now_value = self.world_now(sid)
+                rows = self._connection.execute(
+                    """
+                    SELECT memory_id, confidence, half_life_days, world_created_at,
+                           world_updated_at, last_recalled_world
+                    FROM memory_entries
+                    WHERE save_id = ? AND lifecycle = 'active'
+                      AND enabled = 1 AND always_active = 0
+                    """,
+                    (sid,),
+                ).fetchall()
+                dormant_ids: list[str] = []
+                archived_ids: list[str] = []
+                for row in rows:
+                    # last_recalled_world=0 为"从未召回"哨兵,不得视为旅程原点的接触
+                    last_touch = float(row["world_updated_at"])
+                    recalled_world = float(row["last_recalled_world"])
+                    if recalled_world > 0.0:
+                        last_touch = max(last_touch, recalled_world)
+                    if world_now_value - last_touch >= DORMANT_AFTER_WORLD_DAYS:
+                        dormant_ids.append(str(row["memory_id"]))
+                        continue
+                    half_life = float(row["half_life_days"])
+                    if half_life <= 0.0:
+                        continue
+                    age = max(0.0, world_now_value - float(row["world_created_at"]))
+                    decayed = float(row["confidence"]) * math.pow(0.5, age / half_life)
+                    if decayed < ARCHIVE_CONFIDENCE_THRESHOLD:
+                        archived_ids.append(str(row["memory_id"]))
+                for target, ids in (("dormant", dormant_ids), ("archived", archived_ids)):
+                    if ids:
+                        self._connection.executemany(
+                            "UPDATE memory_entries SET lifecycle = ?, lifecycle_changed_world = ? "
+                            "WHERE memory_id = ?",
+                            [(target, world_now_value, mid) for mid in ids],
+                        )
+                        stats[target] += len(ids)
+        return stats
+
+    def set_memory_lifecycle(self, memory_id: str, lifecycle: str) -> None:
+        """手动归档/恢复(archived 只能由此恢复,召回命中无法激活)。"""
+        if lifecycle not in {"active", "dormant", "archived"}:
+            raise MemoryStoreError("lifecycle is invalid")
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT save_id FROM memory_entries WHERE memory_id = ?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                raise MemoryStoreError("memory_id is invalid")
+            self._connection.execute(
+                "UPDATE memory_entries SET lifecycle = ?, lifecycle_changed_world = ? WHERE memory_id = ?",
+                (lifecycle, self.world_now(str(row["save_id"])), memory_id),
+            )
+
+    def update_memory_embedding(self, memory_id: str, vector: list[float], model: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE memory_entries SET embedding_json = ?, embedding_model = ? WHERE memory_id = ?",
+                (_json([round(float(item), 6) for item in vector]), _clean_text(model, 80), memory_id),
+            )
+
+    def memories_without_embedding(self, save_id: str, limit: int = 16) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT memory_id, content FROM memory_entries
+                WHERE save_id = ? AND embedding_json IS NULL AND enabled = 1
+                  AND lifecycle = 'active'
+                ORDER BY importance DESC, world_updated_at DESC
+                LIMIT ?
+                """,
+                (save_id, max(1, min(64, int(limit)))),
+            ).fetchall()
+        return [{"memory_id": str(row["memory_id"]), "content": str(row["content"])} for row in rows]
+
+    @staticmethod
+    def _memory_cosine(a: list[float], b: list[float]) -> float | None:
+        if not a or not b or len(a) != len(b):
+            return None
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a <= 0.0 or norm_b <= 0.0:
+            return None
+        return dot / (norm_a * norm_b)
+
+    def build_links_for_memory(self, memory_id: str, max_links: int = 4) -> list[dict[str, Any]]:
+        """增量建边(ADR-001 D4):候选集有界,单条新记忆最多 max_links 条边。"""
+        built: list[dict[str, Any]] = []
+        with self._lock, self._connection:
+            new_row = self._connection.execute(
+                """
+                SELECT memory_id, save_id, kind, title, content, trigger_terms_json,
+                       source, source_event_id, world_created_at, embedding_json, embedding_model
+                FROM memory_entries WHERE memory_id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if new_row is None:
+                return []
+            save_id = str(new_row["save_id"])
+            world_now_value = self.world_now(save_id)
+            new_embedding_vector: list[float] | None = None
+            if new_row["embedding_json"]:
+                try:
+                    new_embedding_vector = json.loads(new_row["embedding_json"])
+                except (TypeError, ValueError):
+                    new_embedding_vector = None
+            candidate_ids: list[str] = []
+            for row in self._connection.execute(
+                """
+                SELECT memory_id FROM memory_entries
+                WHERE save_id = ? AND memory_id != ? AND lifecycle = 'active'
+                ORDER BY world_updated_at DESC LIMIT 50
+                """,
+                (save_id, memory_id),
+            ):
+                candidate_ids.append(str(row["memory_id"]))
+            new_terms = {
+                str(item["term"])
+                for item in self._connection.execute(
+                    "SELECT term FROM memory_terms WHERE memory_id = ?", (memory_id,)
+                ).fetchall()
+            }
+            if new_terms:
+                placeholders = ",".join("?" for _ in new_terms)
+                for row in self._connection.execute(
+                    f"SELECT memory_id FROM memory_terms WHERE term IN ({placeholders}) "
+                    "AND memory_id != ? LIMIT 20",
+                    (*sorted(new_terms), memory_id),
+                ):
+                    if str(row["memory_id"]) not in candidate_ids:
+                        candidate_ids.append(str(row["memory_id"]))
+            if str(new_row["source_event_id"] or ""):
+                for row in self._connection.execute(
+                    "SELECT memory_id FROM memory_entries WHERE save_id = ? AND source_event_id = ? "
+                    "AND memory_id != ? LIMIT 10",
+                    (save_id, str(new_row["source_event_id"]), memory_id),
+                ):
+                    if str(row["memory_id"]) not in candidate_ids:
+                        candidate_ids.append(str(row["memory_id"]))
+            if not candidate_ids:
+                return []
+            placeholders = ",".join("?" for _ in candidate_ids)
+            candidate_rows = self._connection.execute(
+                f"SELECT memory_id, content FROM memory_entries WHERE memory_id IN ({placeholders})",
+                tuple(candidate_ids),
+            ).fetchall()
+            candidate_embeddings: dict[str, list[float]] = {}
+            for row in candidate_rows:
+                if row["memory_id"] == memory_id:
+                    continue
+                own = self._connection.execute(
+                    "SELECT embedding_json, embedding_model FROM memory_entries WHERE memory_id = ?",
+                    (row["memory_id"],),
+                ).fetchone()
+                if own is not None and own["embedding_json"]:
+                    try:
+                        candidate_embeddings[str(row["memory_id"])] = json.loads(own["embedding_json"])
+                    except (TypeError, ValueError):
+                        continue
+            new_terms_by_memory: dict[str, set[str]] = {}
+            for item in self._connection.execute(
+                f"SELECT memory_id, term FROM memory_terms WHERE memory_id IN ({placeholders})",
+                tuple(candidate_ids),
+            ).fetchall():
+                new_terms_by_memory.setdefault(str(item["memory_id"]), set()).add(str(item["term"]))
+
+            scored: list[tuple[float, str, str, str]] = []
+            for candidate_id in candidate_ids:
+                if candidate_id == memory_id:
+                    continue
+                shared = new_terms & new_terms_by_memory.get(candidate_id, set())
+                score = min(0.6, 0.2 * len(shared))
+                reason = f"共享词条:{'、'.join(sorted(shared)[:3])}" if shared else ""
+                candidate_vector = candidate_embeddings.get(candidate_id)
+                if candidate_vector and new_embedding_vector is not None and len(candidate_vector) == len(new_embedding_vector):
+                    cosine = self._memory_cosine(new_embedding_vector, candidate_vector)
+                    if cosine is not None and cosine > 0.5:
+                        score = max(score, min(0.9, (cosine + 1.0) / 2.0))
+                        reason = (reason + f" 语义相似 {cosine:.2f}").strip()
+                if str(new_row["source_event_id"] or "") and self._connection.execute(
+                    "SELECT 1 FROM memory_entries WHERE memory_id = ? AND source_event_id = ?",
+                    (candidate_id, str(new_row["source_event_id"])),
+                ).fetchone():
+                    score = max(score, 0.85)
+                    reason = "来自同一次经历"
+                if score <= 0.0:
+                    continue
+                scored.append(
+                    (
+                        min(1.0, score),
+                        candidate_id,
+                        (
+                            "milestone"
+                            if str(new_row["source"]) == "milestone"
+                            else "spread"
+                            if str(new_row["source"]).startswith("heard_from_")
+                            else "association"
+                        ),
+                        reason,
+                    )
+                )
+            scored.sort(key=lambda item: item[0], reverse=True)
+            for score, candidate_id, link_type, reason in scored[: max(1, min(5, int(max_links)))]:
+                link_id = "lnk-" + hashlib.sha256(
+                    f"{save_id}|{memory_id}|{candidate_id}|{link_type}".encode("utf-8")
+                ).hexdigest()[:40]
+                cursor = self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO memory_links (
+                        link_id, save_id, src_memory_id, dst_memory_id,
+                        link_type, link_strength, reason, world_created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        link_id,
+                        save_id,
+                        memory_id,
+                        candidate_id,
+                        link_type,
+                        round(score, 4),
+                        _clean_text(reason, 120),
+                        world_now_value,
+                    ),
+                )
+                if cursor.rowcount:
+                    built.append({"candidate_id": candidate_id, "link_type": link_type, "strength": score, "reason": reason})
+        return built
+
+    def graph_page(
+        self,
+        *,
+        save_id: str,
+        role_id: str = "",
+        limit: int = 120,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """分页节点 + 集合内部边(默认仅 Active,上限 300)。"""
+        node_limit = max(1, min(300, int(limit)))
+        offset = max(0, int(offset))
+        role_clause = "" if not role_id else "AND (scope_role_id = ? OR scope_role_id = '*')"
+        params: list[Any] = [save_id]
+        if role_id:
+            params.extend([role_id])
+        params.extend([node_limit + 1, offset])
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT memory_id, kind, title, content, scope_role_id, lifecycle,
+                       is_second_hand, importance, world_created_at, world_updated_at
+                FROM memory_entries
+                WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause}
+                ORDER BY world_updated_at DESC, memory_id
+                LIMIT ? OFFSET ?
+                """,
+                params,
+            ).fetchall()
+            truncated = len(rows) > node_limit
+            nodes = rows[:node_limit]
+            node_ids = [str(row["memory_id"]) for row in nodes]
+            edges: list[dict[str, Any]] = []
+            if node_ids:
+                placeholders = ",".join("?" for _ in node_ids)
+                for row in self._connection.execute(
+                    f"""
+                    SELECT link_id, src_memory_id, dst_memory_id, link_type,
+                           link_strength, reason
+                    FROM memory_links
+                    WHERE save_id = ?
+                      AND src_memory_id IN ({placeholders})
+                      AND dst_memory_id IN ({placeholders})
+                    ORDER BY link_strength DESC
+                    """,
+                    (save_id, *node_ids, *node_ids),
+                ).fetchall():
+                    edges.append(
+                        {
+                            "link_id": str(row["link_id"]),
+                            "src": str(row["src_memory_id"]),
+                            "dst": str(row["dst_memory_id"]),
+                            "link_type": str(row["link_type"]),
+                            "link_strength": float(row["link_strength"]),
+                            "reason": str(row["reason"]),
+                        }
+                    )
+        importance_bucket = lambda value: "high" if value >= 0.8 else "normal" if value >= 0.5 else "low"
+        node_payload = [
+            {
+                "memory_id": str(row["memory_id"]),
+                "kind": str(row["kind"]),
+                "title": str(row["title"])[:80],
+                "summary": str(row["content"])[:120],
+                "scope_role_id": str(row["scope_role_id"]),
+                "lifecycle": str(row["lifecycle"]),
+                "is_second_hand": bool(row["is_second_hand"]),
+                "importance_bucket": importance_bucket(float(row["importance"])),
+                "world_created_at": float(row["world_created_at"]),
+                "world_updated_at": float(row["world_updated_at"]),
+            }
+            for row in nodes
+        ]
+        return {
+            "nodes": node_payload,
+            "edges": edges,
+            "cursor": str(offset + len(node_payload)) if truncated else "",
+            "truncated": truncated,
+            "node_count": len(node_payload),
+        }
+
+    def record_state_event(
+        self, *, save_id: str, role_id: str, kind: str, delta_json: dict[str, Any], note: str = ""
+    ) -> None:
+        """#22 事件日志(仅调试用,不参与运行时重放)。"""
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO state_events (
+                    event_id, save_id, role_id, kind, delta_json, world_time, real_unix, note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "ste-" + uuid.uuid4().hex,
+                    save_id,
+                    role_id,
+                    _clean_text(kind, 24) or "interaction",
+                    _json(delta_json),
+                    self.world_now(save_id),
+                    int(time.time()),
+                    _clean_text(note, 200),
+                ),
+            )
+
+    def unlock_role_milestone(
+        self,
+        *,
+        save_id: str,
+        role_id: str,
+        rule_id: str,
+        title: str,
+        description: str,
+        source_memory_id: str,
+        unlocked_world_at: float,
+    ) -> str:
+        """成就档案解锁(幂等);返回 role_milestones 行 ID。"""
+        milestone_id = "ach-" + hashlib.sha256(
+            f"{save_id}|{role_id}|{rule_id}".encode("utf-8")
+        ).hexdigest()[:40]
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO role_milestones (
+                    milestone_id, save_id, role_id, rule_id, title, description,
+                    icon, source_memory_id, unlocked_world_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+                """,
+                (
+                    milestone_id,
+                    save_id,
+                    role_id,
+                    rule_id,
+                    _clean_text(title, 60),
+                    _clean_text(description, 240),
+                    source_memory_id,
+                    float(unlocked_world_at),
+                    int(time.time()),
+                ),
+            )
+        return milestone_id
+
+    def update_role_milestone_copy(self, milestone_id: str, title: str, description: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE role_milestones SET title = ?, description = ? WHERE milestone_id = ?",
+                (_clean_text(title, 60), _clean_text(description, 240), milestone_id),
+            )
 
     def list_memories(
         self,

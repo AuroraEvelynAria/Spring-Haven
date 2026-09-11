@@ -233,7 +233,12 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
             runtime["body_state"]["sensations"],
             {"hunger": "有些饿", "thirst": "有些口渴"},
         )
-        self.assertNotIn("fake_instruction", runtime["body_state"]["stats"])
+        # #29 硬性约束:原始生理浮点数不进 prompt,只输出定性分桶摘要
+        self.assertNotIn("stats", runtime["body_state"])
+        self.assertIn("state_summary", runtime["body_state"])
+        self.assertIn("饥饿=偏高", runtime["body_state"]["state_summary"])
+        self.assertIn("心情=偏高", runtime["body_state"]["state_summary"])
+        self.assertNotIn("72.5", runtime["body_state"]["state_summary"])
 
     async def test_system_prompt_is_stable_across_runtime_changes(self):
         composer = PromptComposer(self.roles)
