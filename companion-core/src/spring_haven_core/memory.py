@@ -16,6 +16,8 @@ from typing import Any, Iterable
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
 SCHEMA_VERSION = 5
+# 未 ack 的离线投递保留 7 天：过期后不再阻塞事件生成，也不再投递/保留。
+LIFE_OUTBOX_TTL_SECONDS = 7 * 24 * 3600
 SHARED_SCOPE = "*"
 
 MEMORY_KINDS = {
@@ -697,8 +699,10 @@ class HeartloomStore:
             params.extend([SHARED_SCOPE, role_id])
         normalized_query = _clean_text(query, 200)
         if normalized_query:
-            clauses.append("(title LIKE ? OR content LIKE ?)")
-            like = f"%{normalized_query}%"
+            clauses.append("(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')")
+            like = "%{}%".format(
+                normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
             params.extend([like, like])
         params.append(requested)
         with self._lock:
@@ -1253,7 +1257,15 @@ class HeartloomStore:
     def due_life_states(self, now: int | None = None, limit: int = 8) -> list[dict[str, Any]]:
         timestamp = max(1, int(now or time.time()))
         requested = max(1, min(32, int(limit)))
-        with self._lock:
+        with self._lock, self._connection:
+            # 过期未 ack 的投递直接清理：客户端长期不启动时避免饿死离线生成与表膨胀。
+            self._connection.execute(
+                """
+                DELETE FROM life_outbox
+                WHERE acked_at = 0 AND created_at <= ?
+                """,
+                (timestamp - LIFE_OUTBOX_TTL_SECONDS,),
+            )
             rows = self._connection.execute(
                 """
                 SELECT state.*
@@ -1262,12 +1274,14 @@ class HeartloomStore:
                   AND state.next_event_at <= ?
                   AND NOT EXISTS (
                       SELECT 1 FROM life_outbox AS outbox
-                      WHERE outbox.save_id = state.save_id AND outbox.acked_at = 0
+                      WHERE outbox.save_id = state.save_id
+                        AND outbox.acked_at = 0
+                        AND outbox.created_at > ?
                   )
                 ORDER BY state.next_event_at ASC
                 LIMIT ?
                 """,
-                (timestamp, requested),
+                (timestamp, timestamp - LIFE_OUTBOX_TTL_SECONDS, requested),
             ).fetchall()
         return [self._life_state_row(row) for row in rows]
 
@@ -1379,10 +1393,11 @@ class HeartloomStore:
                 """
                 SELECT * FROM life_outbox
                 WHERE save_id = ? AND acked_at = 0 AND available_at <= ?
+                  AND created_at > ?
                 ORDER BY created_at ASC, delivery_id ASC
                 LIMIT ?
                 """,
-                (save_id, timestamp, requested),
+                (save_id, timestamp, timestamp - LIFE_OUTBOX_TTL_SECONDS, requested),
             ).fetchall()
         return [self._life_outbox_row(row) for row in rows]
 

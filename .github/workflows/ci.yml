@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Companion Core
+        run: pip install -e ./companion-core
+      - name: Run backend tests
+        working-directory: companion-core
+        run: python -m unittest discover -s tests -v
+
+  godot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Godot 4.7
+        run: |
+          curl -L --fail -o godot.zip \
+            https://github.com/godotengine/godot/releases/download/4.7-stable/Godot_v4.7-stable_linux.x86_64.zip
+          unzip godot.zip
+          chmod +x Godot_v4.7-stable_linux.x86_64
+      - name: Import project
+        run: ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --import
+      - name: Compile check all scripts
+        run: ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://tools/compile_check.gd
+      - name: Logic diagnostics
+        run: |
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/InteractionRulesCheck.gd
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/FullMilestoneCheck.gd

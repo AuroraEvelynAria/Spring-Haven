@@ -38,6 +38,9 @@ def build_app(
     roles: RoleRegistry,
     service: CompanionService | None = None,
 ) -> web.Application:
+    if not str(config.api_key).strip():
+        # CoreConfig.load 会强制非空密钥；这里兜底防止绕过 load 的调用方裸跑无鉴权服务。
+        raise ValueError("companion core api key is required")
     owns_runtime = service is None
     if service is None:
         provider_settings = ProviderSettingsStore(
@@ -65,7 +68,12 @@ def build_app(
     @web.middleware
     async def security(request: web.Request, handler):
         supplied = request.headers.get("X-API-Key", "")
-        if not hmac.compare_digest(supplied, config.api_key):
+        # header 可能含非 ASCII（latin-1 解码），直接字符串比较会抛 TypeError；
+        # 统一编码为 bytes 后比较，任何异常输入都落到 401。
+        if not hmac.compare_digest(
+            supplied.encode("utf-8", "replace"),
+            str(config.api_key).encode("utf-8"),
+        ):
             return _error(401, "authentication failed", retryable=False)
         response: web.StreamResponse = await handler(request)
         response.headers["Cache-Control"] = "no-store"

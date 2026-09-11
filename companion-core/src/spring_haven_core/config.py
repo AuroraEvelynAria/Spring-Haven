@@ -37,7 +37,10 @@ class CoreConfig:
         source = Path(path)
         raw: dict[str, Any] = {}
         if source.exists():
-            parsed = json.loads(source.read_text(encoding="utf-8-sig"))
+            try:
+                parsed = json.loads(source.read_text(encoding="utf-8-sig"))
+            except json.JSONDecodeError as exc:
+                raise ConfigurationError(f"core config is not valid JSON: {exc}") from exc
             if not isinstance(parsed, dict):
                 raise ConfigurationError("core config must be a JSON object")
             raw = parsed
