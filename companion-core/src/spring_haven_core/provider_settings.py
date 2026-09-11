@@ -48,9 +48,15 @@ CAPABILITY_PROTOCOLS = {
     "vision": {"openai_chat_vision"},
     "embedding": {"openai_embeddings"},
     "rerank": {"jina_v1", "cohere_v2"},
-    "asr": {"openai_transcriptions", "open_llm_vtuber_asr"},
-    "tts": {"openai_speech", "open_llm_vtuber_tts_ws", "gpt_sovits_get"},
+    "asr": {"openai_transcriptions"},
+    "tts": {"openai_speech", "gpt_sovits_get"},
 }
+# 已移除的旧协议（Open-LLM-VTuber）：旧存档加载时静默回退到默认协议，避免阻断启动。
+REMOVED_PROTOCOL_FALLBACKS = {
+    "open_llm_vtuber_asr": "openai_transcriptions",
+    "open_llm_vtuber_tts_ws": "openai_speech",
+}
+
 CAPABILITY_ENV_PREFIX = {
     "chat": "SPRING_HAVEN_LLM",
     "vision": "SPRING_HAVEN_VISION",
@@ -195,7 +201,10 @@ class ProviderSettingsStore:
                 or raw_profile.get("base_url", defaults["base_url"]),
                 model=environment_model or raw_profile.get("model", defaults["model"]),
                 enabled=True if capability == "chat" else enabled_value,
-                protocol=raw_profile.get("protocol", defaults["protocol"]),
+                protocol=REMOVED_PROTOCOL_FALLBACKS.get(
+                    str(raw_profile.get("protocol", defaults["protocol"])),
+                    str(raw_profile.get("protocol", defaults["protocol"])),
+                ),
                 inherit_chat_key=False
                 if capability == "chat"
                 else raw_profile.get(
@@ -850,7 +859,10 @@ class ProviderSettingsStore:
                 base_url=item.get("base_url", ""),
                 model=item.get("model", ""),
                 enabled=item.get("enabled", True),
-                protocol=item.get("protocol", default_protocol),
+                protocol=REMOVED_PROTOCOL_FALLBACKS.get(
+                    str(item.get("protocol", default_protocol)),
+                    str(item.get("protocol", default_protocol)),
+                ),
                 inherit_chat_key=item.get("inherit_chat_key", True),
                 allow_insecure_http=item.get("allow_insecure_http", False),
             )

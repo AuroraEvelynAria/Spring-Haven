@@ -36,8 +36,6 @@ class TtsProviderTests(unittest.IsolatedAsyncioTestCase):
         self.requests: list[dict[str, object]] = []
         upstream = web.Application()
         upstream.router.add_post("/v1/audio/speech", self.openai_tts)
-        upstream.router.add_get("/tts-ws", self.vtuber_tts)
-        upstream.router.add_get("/cache/test.wav", self.vtuber_audio)
         self.upstream = TestServer(upstream)
         await self.upstream.start_server()
         self.root_base_url = str(self.upstream.make_url("/")).rstrip("/")
@@ -75,21 +73,6 @@ class TtsProviderTests(unittest.IsolatedAsyncioTestCase):
     async def openai_tts(self, request: web.Request) -> web.Response:
         self.requests.append(await request.json())
         return web.Response(body=b"RIFFspring-haven-test-audio", content_type="audio/wav")
-
-    async def vtuber_tts(self, request: web.Request) -> web.WebSocketResponse:
-        socket = web.WebSocketResponse()
-        await socket.prepare(request)
-        request_payload = await socket.receive_json()
-        self.requests.append(request_payload)
-        await socket.send_json(
-            {"status": "partial", "audioPath": "cache/test.wav", "text": "你好。"}
-        )
-        await socket.send_json({"status": "complete"})
-        await socket.close()
-        return socket
-
-    async def vtuber_audio(self, _request: web.Request) -> web.Response:
-        return web.Response(body=b"RIFFvtuber-test-audio", content_type="audio/wav")
 
     async def test_openai_tts_payload_and_audio_are_preserved(self):
         reply = await self.provider.synthesize_speech(
@@ -129,20 +112,6 @@ class TtsProviderTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
             service.close()
-
-    async def test_open_llm_vtuber_websocket_tts_fetches_cached_audio(self):
-        self.settings.update_profile(
-            "tts",
-            base_url=self.root_base_url,
-            model="ignored-by-vtuber",
-            enabled=True,
-            protocol="open_llm_vtuber_tts_ws",
-            inherit_chat_key=False,
-        )
-        reply = await self.provider.synthesize_speech("小奈，过来一下。")
-        self.assertEqual(reply.audio, b"RIFFvtuber-test-audio")
-        self.assertEqual(reply.mime_type, "audio/wav")
-        self.assertEqual(self.requests[-1]["text"], "小奈，过来一下。")
 
 
 if __name__ == "__main__":
