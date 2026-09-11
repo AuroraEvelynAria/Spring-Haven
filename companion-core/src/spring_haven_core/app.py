@@ -4,8 +4,10 @@ import base64
 import binascii
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
+import socket
 from typing import Any
 from urllib.parse import urlparse
 
@@ -515,6 +517,10 @@ async def _rag_import_url(request: web.Request) -> web.Response:
         if not isinstance(payload, dict):
             raise RequestValidationError("request body must be a JSON object")
         url = _validated_import_url(payload.get("url", ""))
+        _reject_private_import_host(
+            url,
+            bool(getattr(request.app[CONFIG_KEY], "rag_import_allow_private", False)),
+        )
         timeout = ClientTimeout(total=20)
         proxy_settings = (
             request.app[PROVIDER_SETTINGS_KEY].proxy_config()
@@ -689,14 +695,15 @@ async def _memory_entries(request: web.Request) -> web.Response:
 async def _memory_graph(request: web.Request) -> web.Response:
     service = request.app[SERVICE_KEY]
     try:
-        return _ok(
-            service.memory_graph(
-                request.query.get("save_id"),
-                request.query.get("scope", ""),
-                request.query.get("query", ""),
-                request.query.get("limit", 120),
-            )
+        # 记忆图是 O(n²) 的重操作，放到 worker 线程避免阻塞事件循环。
+        graph = await asyncio.to_thread(
+            service.memory_graph,
+            request.query.get("save_id"),
+            request.query.get("scope", ""),
+            request.query.get("query", ""),
+            request.query.get("limit", 120),
         )
+        return _ok(graph)
     except (RequestValidationError, RoleConfigurationError, MemoryStoreError, ValueError) as exc:
         return _error(400, str(exc), retryable=False)
 
@@ -714,7 +721,7 @@ async def _memory_recall(request: web.Request) -> web.Response:
     service = request.app[SERVICE_KEY]
     try:
         payload: Any = await request.json()
-        entries = service.recall_memories(payload)
+        entries = await asyncio.to_thread(service.recall_memories, payload)
         return _ok({"entries": entries, "count": len(entries), "backend": "heartloom"})
     except (RequestValidationError, RoleConfigurationError, MemoryStoreError, ValueError) as exc:
         return _error(400, str(exc), retryable=False)
@@ -745,7 +752,9 @@ async def _session_reset(request: web.Request) -> web.Response:
 async def _life_sync(request: web.Request) -> web.Response:
     try:
         payload: Any = await request.json()
-        data = request.app[SERVICE_KEY].sync_life_state(payload)
+        data = await asyncio.to_thread(
+            request.app[SERVICE_KEY].sync_life_state, payload
+        )
         service = request.app[SERVICE_KEY]
         weather_service = getattr(service, "weather", None)
         if weather_service is not None:
@@ -812,6 +821,26 @@ def _validated_import_url(value: Any) -> str:
     }:
         raise RequestValidationError("remote web imports must use HTTPS")
     return normalized
+
+
+def _reject_private_import_host(url: str, allow_private: bool) -> None:
+    """解析主机名并拒绝私网/环回地址，防止 web 导入触碰内网服务或云元数据。"""
+    if allow_private:
+        return
+    hostname = urlparse(url).hostname or ""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise RequestValidationError(
+            f"web import host could not be resolved: {hostname}"
+        ) from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise RequestValidationError(
+                "web import host resolves to a private address; set "
+                "rag_import_allow_private in core_config.json to allow it"
+            )
 
 
 def _ok(data: dict[str, Any]) -> web.Response:

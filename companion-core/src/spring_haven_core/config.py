@@ -31,6 +31,7 @@ class CoreConfig:
     memory_organizer_enabled: bool = True
     memory_organizer_max_entries: int = 3
     weather_location: str = ""  # 城市名或 "lat,lon"；空则不用真实天气
+    rag_import_allow_private: bool = False  # 允许 web 导入指向私网/环回地址
 
     @classmethod
     def load(cls, path: str | Path) -> "CoreConfig":
@@ -111,6 +112,9 @@ class CoreConfig:
                 "memory organizer max entries",
             ),
             weather_location=str(raw.get("weather_location", "")).strip()[:120],
+            rag_import_allow_private=bool(
+                raw.get("rag_import_allow_private", False)
+            ),
         )
         if len(config.api_key) < 32:
             raise ConfigurationError(
