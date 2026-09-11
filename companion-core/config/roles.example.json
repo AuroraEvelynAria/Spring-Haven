@@ -1,8 +1,4 @@
 {
-  "conversation_policy": {
-    "user_is_adult": false,
-    "allow_consensual_adult_content": false
-  },
   "roles": [
     {
       "role_id": "ling",

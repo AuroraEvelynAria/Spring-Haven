@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 SHARED_SCOPE = "*"
 
 MEMORY_KINDS = {
@@ -256,9 +256,52 @@ class HeartloomStore:
         );
         CREATE INDEX IF NOT EXISTS idx_life_outbox_pending
             ON life_outbox(save_id, acked_at, available_at, created_at);
+
+        CREATE TABLE IF NOT EXISTS life_events (
+            event_id         TEXT NOT NULL,
+            save_id          TEXT NOT NULL,
+            role_id          TEXT NOT NULL,
+            target_role      TEXT NOT NULL DEFAULT '',
+            action           TEXT NOT NULL,
+            description      TEXT NOT NULL DEFAULT '',
+            occurred_at_unix INTEGER NOT NULL,
+            stat_changes_json TEXT NOT NULL DEFAULT '{}',
+            created_at       INTEGER NOT NULL,
+            PRIMARY KEY (event_id, save_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_life_events_save_time
+            ON life_events(save_id, occurred_at_unix);
+
+        CREATE TABLE IF NOT EXISTS digest_state (
+            save_id         TEXT NOT NULL,
+            role_id         TEXT NOT NULL,
+            day_key         TEXT NOT NULL,   -- "YYYY-MM-DD"
+            memory_id       TEXT NOT NULL DEFAULT '',
+            created_at      INTEGER NOT NULL,
+            PRIMARY KEY (save_id, role_id, day_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS milestones (
+            save_id          TEXT NOT NULL,
+            milestone_id     TEXT NOT NULL,
+            unlocked_at      INTEGER NOT NULL,
+            source_memory_id TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (save_id, milestone_id)
+        );
         """
         with self._lock, self._connection:
             self._connection.executescript(schema)
+            # 老库迁移：为已存在的 life_events 表补充 target_role 列（幂等）
+            columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(life_events)"
+                ).fetchall()
+            }
+            if "target_role" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE life_events ADD COLUMN target_role TEXT NOT NULL DEFAULT ''"
+                )
             self._set_meta("schema_version", str(SCHEMA_VERSION))
             self._set_meta("engine", "heartloom")
             self._set_meta("display_name", HEARTLOOM_DISPLAY_NAME)
@@ -837,17 +880,107 @@ class HeartloomStore:
                 if str(left.get("scope_role_id", "")) == str(right.get("scope_role_id", "")):
                     strength += 0.010
                 time_gap = abs(int(left.get("created_at", 0)) - int(right.get("created_at", 0)))
+                # 时间分段权重：让时间上相关的事件自然浮现
                 if time_gap <= 3_600:
-                    strength += 0.015
+                    strength += 0.18
+                    reasons.append("一小时内")
+                elif time_gap <= 86_400:
+                    strength += 0.12
+                    reasons.append("同一天")
+                elif time_gap <= 7 * 86_400:
+                    strength += 0.06
+                    reasons.append("一周内")
+                # 召回强化：经常一起被想起的记忆关联更强
+                left_recall = int(left.get("recall_count", 0))
+                right_recall = int(right.get("recall_count", 0))
+                if left_recall >= 3 and right_recall >= 3:
+                    boost = min(0.10, (math.log1p(left_recall) + math.log1p(right_recall)) * 0.015)
+                    strength += boost
+                    reasons.append("经常被一起想起")
                 candidates.append(
                     {
                         "source": left_id,
                         "target": right_id,
                         "strength": round(min(1.0, strength), 4),
                         "shared_terms": shared_terms[:6],
-                        "reasons": reasons[:3],
+                        "reasons": reasons[:5],
                         "same_source_event": same_event,
                         "time_gap_seconds": time_gap,
+                    }
+                )
+
+        # 同源星形去噪：同一源事件的记忆只保留与组内最高 importance 节点的连接，
+        # 避免"同一个对话的碎片"互相全连挤占度预算
+        same_event_groups: dict[str, list[dict[str, Any]]] = {}
+        for edge in candidates:
+            if edge["same_source_event"]:
+                # 用边两端记忆的 source_event_id 家族分组（不是 memory_id）
+                source_family = _graph_source_family(
+                    str(by_id.get(str(edge["source"]), {}).get("source_event_id", ""))
+                )
+                target_family = _graph_source_family(
+                    str(by_id.get(str(edge["target"]), {}).get("source_event_id", ""))
+                )
+                family = source_family or target_family
+                if family:
+                    same_event_groups.setdefault(family, []).append(edge)
+        suppressed_source_edge_ids: set[tuple[str, str]] = set()
+        for group in same_event_groups.values():
+            if len(group) <= 1:
+                continue
+            center_candidates: dict[str, float] = {}
+            for edge in group:
+                center_candidates[str(edge["source"])] = max(
+                    center_candidates.get(str(edge["source"]), 0.0),
+                    float(by_id.get(str(edge["source"]), {}).get("importance", 0.0)),
+                )
+                center_candidates[str(edge["target"])] = max(
+                    center_candidates.get(str(edge["target"]), 0.0),
+                    float(by_id.get(str(edge["target"]), {}).get("importance", 0.0)),
+                )
+            center = max(center_candidates, key=lambda item: center_candidates[item])
+            for edge in group:
+                if str(edge["source"]) != center and str(edge["target"]) != center:
+                    suppressed_source_edge_ids.add(
+                        tuple(sorted((str(edge["source"]), str(edge["target"]))))
+                    )
+        if suppressed_source_edge_ids:
+            candidates = [
+                edge
+                for edge in candidates
+                if tuple(sorted((str(edge["source"]), str(edge["target"]))))
+                not in suppressed_source_edge_ids
+            ]
+
+        # 同天生活链（骨架优先）：同一天产生的 daily_digest 记忆按时间顺序串联，
+        # 先于语义边加入，保证"一天的生活"在图上形成可读的时间线
+        daily_by_day: dict[str, list[str]] = {}
+        for node in nodes:
+            if str(node.get("source", "")) != "daily_digest":
+                continue
+            day_key = time.strftime(
+                "%Y-%m-%d", time.localtime(int(node.get("created_at", 0)))
+            )
+            daily_by_day.setdefault(day_key, []).append(str(node["id"]))
+        chain_edges: list[dict[str, Any]] = []
+        for day_key, ids in daily_by_day.items():
+            ids.sort(
+                key=lambda mid: int(by_id.get(mid, {}).get("created_at", 0))
+            )
+            for index in range(len(ids) - 1):
+                left_id, right_id = ids[index], ids[index + 1]
+                chain_edges.append(
+                    {
+                        "source": left_id,
+                        "target": right_id,
+                        "strength": 0.50,
+                        "shared_terms": [],
+                        "reasons": ["同一天的生活"],
+                        "same_source_event": False,
+                        "time_gap_seconds": abs(
+                            int(by_id[left_id].get("created_at", 0))
+                            - int(by_id[right_id].get("created_at", 0))
+                        ),
                     }
                 )
 
@@ -857,16 +990,80 @@ class HeartloomStore:
         )
         degrees = {memory_id: 0 for memory_id in memory_ids}
         edges: list[dict[str, Any]] = []
+        # 链边先行（骨架）
+        for edge in chain_edges:
+            source = str(edge["source"])
+            target = str(edge["target"])
+            if degrees[source] >= 7 or degrees[target] >= 7:
+                continue
+            edge_key = tuple(sorted((source, target)))
+            if any(
+                tuple(sorted((str(e["source"]), str(e["target"])))) == edge_key
+                for e in edges
+            ):
+                continue
+            edges.append(edge)
+            degrees[source] += 1
+            degrees[target] += 1
+        # 语义边填充
         for edge in candidates:
             source = str(edge["source"])
             target = str(edge["target"])
             if degrees[source] >= 7 or degrees[target] >= 7:
+                continue
+            edge_key = tuple(sorted((source, target)))
+            if any(
+                tuple(sorted((str(e["source"]), str(e["target"])))) == edge_key
+                for e in edges
+            ):
                 continue
             edges.append(edge)
             degrees[source] += 1
             degrees[target] += 1
             if len(edges) >= 600:
                 break
+        for memory_id, degree in degrees.items():
+            by_id[memory_id]["connection_count"] = degree
+
+        # 孤立节点搭桥：度=0 的节点连到词法重叠最多的邻居。
+        # 仅当存在真实共享词时才搭桥——避免把完全无关的记忆强行连上。
+        isolated = [
+            str(node["id"])
+            for node in nodes
+            if degrees.get(str(node["id"]), 0) == 0
+        ]
+        for mid in isolated:
+            if degrees[mid] >= 1:
+                continue
+            best_neighbor = ""
+            best_overlap = 0
+            mid_terms = set(term_maps.get(mid, {}))
+            mid_time = int(by_id.get(mid, {}).get("created_at", 0))
+            for other in memory_ids:
+                if other == mid or degrees.get(other, 0) >= 7:
+                    continue
+                other_terms = set(term_maps.get(other, {}))
+                overlap = len(mid_terms.intersection(other_terms))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_neighbor = other
+            if best_neighbor and best_overlap > 0:
+                edges.append(
+                    {
+                        "source": mid,
+                        "target": best_neighbor,
+                        "strength": 0.38,
+                        "shared_terms": [],
+                        "reasons": ["共享主题"],
+                        "same_source_event": False,
+                        "time_gap_seconds": abs(
+                            int(by_id.get(best_neighbor, {}).get("created_at", 0)) - mid_time
+                        ),
+                    }
+                )
+                degrees[mid] += 1
+                degrees[best_neighbor] += 1
+
         for memory_id, degree in degrees.items():
             by_id[memory_id]["connection_count"] = degree
         connected = sum(1 for degree in degrees.values() if degree > 0)
@@ -893,6 +1090,26 @@ class HeartloomStore:
             row = self._connection.execute(
                 "SELECT * FROM memory_entries WHERE save_id = ? AND memory_id = ?",
                 (save_id, memory_id),
+            ).fetchone()
+        return self._memory_row(row) if row else None
+
+    def get_memory_by_source_event(
+        self,
+        *,
+        save_id: str,
+        source: str,
+        source_event_id: str,
+        scope_role_id: str = SHARED_SCOPE,
+    ) -> dict[str, Any] | None:
+        """Find an enabled deterministic memory before doing expensive work."""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM memory_entries
+                WHERE save_id = ? AND source = ? AND source_event_id = ?
+                  AND scope_role_id = ? AND enabled = 1
+                """,
+                (save_id, source, source_event_id, scope_role_id),
             ).fetchone()
         return self._memory_row(row) if row else None
 
@@ -1176,6 +1393,257 @@ class HeartloomStore:
                 [timestamp, save_id, *normalized_ids],
             )
         return max(0, int(cursor.rowcount))
+
+    def record_life_events(
+        self,
+        *,
+        save_id: str,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Record Godot-reported life events (daily plan / self-care / personality).
+
+        Idempotent: PRIMARY KEY (event_id, save_id) ignores duplicates, so a
+        Godot client replaying the same event after a crash cannot double-record.
+        """
+        if not isinstance(events, list) or len(events) > 20:
+            raise MemoryStoreError("recent_events must be a list with at most 20 items")
+        timestamp = max(1, int(time.time()))
+        recorded = 0
+        with self._lock, self._connection:
+            for raw in events:
+                if not isinstance(raw, dict):
+                    continue
+                event_id = _safe_source_id(str(raw.get("event_id", "")), _json(raw))
+                role_id = str(raw.get("role_id", "")).strip()
+                if role_id not in self.role_ids:
+                    continue
+                target_role = str(raw.get("target_role", "")).strip()
+                if target_role not in self.role_ids:
+                    target_role = ""
+                action = _clean_text(raw.get("action", ""), 64) or "life_activity"
+                description = _clean_text(raw.get("description", ""), 500)
+                occurred = max(1, int(raw.get("occurred_at_unix") or timestamp))
+                stat_changes = raw.get("stat_changes", {})
+                if not isinstance(stat_changes, (dict, list)):
+                    stat_changes = {}
+                encoded_stats = _json(stat_changes)
+                if len(encoded_stats) > 8_000:
+                    encoded_stats = "{}"
+                cursor = self._connection.execute(
+                    """
+                    INSERT INTO life_events (
+                        event_id, save_id, role_id, target_role, action, description,
+                        occurred_at_unix, stat_changes_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(event_id, save_id) DO NOTHING
+                    """,
+                    (
+                        event_id,
+                        save_id,
+                        role_id,
+                        target_role,
+                        action,
+                        description,
+                        occurred,
+                        encoded_stats,
+                        timestamp,
+                    ),
+                )
+                recorded += int(cursor.rowcount or 0)
+        return {"recorded": recorded, "total": len(events)}
+
+    def list_life_events(
+        self,
+        *,
+        save_id: str,
+        role_id: str = "",
+        action: str = "",
+        limit: int = 200,
+        before_unix: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Read-only life-event timeline for the Godot review page."""
+        requested = max(1, min(500, int(limit)))
+        clauses = ["save_id = ?"]
+        params: list[Any] = [save_id]
+        if role_id:
+            if role_id not in self.role_ids:
+                raise MemoryStoreError("role_id is invalid")
+            clauses.append("role_id = ?")
+            params.append(role_id)
+        if action:
+            clauses.append("action = ?")
+            params.append(_clean_text(action, 64))
+        if before_unix > 0:
+            clauses.append("occurred_at_unix < ?")
+            params.append(max(1, int(before_unix)))
+        params.append(requested)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT * FROM life_events
+                WHERE {' AND '.join(clauses)}
+                ORDER BY occurred_at_unix DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._life_event_row(row) for row in rows]
+
+    def digest_completed(self, *, save_id: str, role_id: str, day_key: str) -> bool:
+        """True if a digest for this save+role+day was already produced."""
+        if role_id not in self.role_ids:
+            raise MemoryStoreError("role_id is invalid")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM digest_state WHERE save_id = ? AND role_id = ? AND day_key = ?",
+                (save_id, role_id, day_key),
+            ).fetchone()
+        return row is not None
+
+    def mark_digest_completed(
+        self, *, save_id: str, role_id: str, day_key: str, memory_id: str = ""
+    ) -> None:
+        if role_id not in self.role_ids:
+            raise MemoryStoreError("role_id is invalid")
+        timestamp = max(1, int(time.time()))
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO digest_state(save_id, role_id, day_key, memory_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(save_id, role_id, day_key) DO NOTHING
+                """,
+                (save_id, role_id, _clean_text(day_key, 10), _clean_text(memory_id, 80), timestamp),
+            )
+
+    def digest_day_events(
+        self,
+        *,
+        save_id: str,
+        role_id: str,
+        day_start_unix: int,
+        day_end_unix: int,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Life events for one role within a local-calendar-day window (oldest first)."""
+        requested = max(1, min(100, int(limit)))
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM life_events
+                WHERE save_id = ? AND role_id = ?
+                  AND occurred_at_unix >= ? AND occurred_at_unix < ?
+                ORDER BY occurred_at_unix ASC
+                LIMIT ?
+                """,
+                (save_id, role_id, int(day_start_unix), int(day_end_unix), requested),
+            ).fetchall()
+        return [self._life_event_row(row) for row in rows]
+
+    def digest_pending_saves(self, now: int | None = None) -> list[dict[str, str]]:
+        """Saves that have life events older than 12h not yet digested (per role/day)."""
+        timestamp = max(1, int(now or time.time()))
+        cutoff = timestamp - 12 * 3600
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT le.save_id, le.role_id,
+                       date(le.occurred_at_unix, 'unixepoch', 'localtime') AS day_key
+                FROM life_events AS le
+                GROUP BY le.save_id, le.role_id, day_key
+                HAVING MAX(le.occurred_at_unix) < ?
+                   AND NOT EXISTS (
+                      SELECT 1 FROM digest_state AS ds
+                      WHERE ds.save_id = le.save_id
+                        AND ds.role_id = le.role_id
+                        AND ds.day_key = date(le.occurred_at_unix, 'unixepoch', 'localtime')
+                  )
+                ORDER BY le.save_id, le.role_id, day_key
+                LIMIT 16
+                """,
+                (cutoff,),
+            ).fetchall()
+        return [
+            {
+                "save_id": str(row["save_id"]),
+                "role_id": str(row["role_id"]),
+                "day_key": str(row["day_key"]),
+            }
+            for row in rows
+        ]
+
+    def life_save_ids(self) -> list[str]:
+        """Distinct save ids that ever synced life state (milestone/weekly scope)."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT DISTINCT save_id FROM life_state ORDER BY save_id"
+            ).fetchall()
+        return [str(row["save_id"]) for row in rows]
+
+    def memory_count(self, save_id: str) -> int:
+        """Total enabled memory entries for a save (milestone counting)."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) FROM memory_entries WHERE save_id = ? AND enabled = 1",
+                (save_id,),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def unlocked_milestones(self, save_id: str) -> dict[str, int]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT milestone_id, unlocked_at FROM milestones WHERE save_id = ?",
+                (save_id,),
+            ).fetchall()
+        return {str(row["milestone_id"]): int(row["unlocked_at"]) for row in rows}
+
+    def mark_milestone(
+        self, *, save_id: str, milestone_id: str, source_memory_id: str = ""
+    ) -> bool:
+        """Record an unlocked milestone; returns False when already present."""
+        timestamp = max(1, int(time.time()))
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO milestones(save_id, milestone_id, unlocked_at, source_memory_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(save_id, milestone_id) DO NOTHING
+                """,
+                (save_id, _clean_text(milestone_id, 64), timestamp, _clean_text(source_memory_id, 80)),
+            )
+            return int(cursor.rowcount or 0) > 0
+
+    def recent_digest_memories(
+        self, *, save_id: str, since_unix: int, limit: int = 40
+    ) -> list[dict[str, Any]]:
+        """Daily-digest memories newer than since_unix (weekly insight input)."""
+        requested = max(1, min(100, int(limit)))
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM memory_entries
+                WHERE save_id = ? AND source = 'daily_digest' AND created_at >= ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (save_id, int(since_unix), requested),
+            ).fetchall()
+        return [self._memory_row(row) for row in rows]
+
+    @staticmethod
+    def _life_event_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "event_id": str(row["event_id"]),
+            "save_id": str(row["save_id"]),
+            "role_id": str(row["role_id"]),
+            "target_role": str(row["target_role"]) if "target_role" in row.keys() else "",
+            "action": str(row["action"]),
+            "description": str(row["description"]),
+            "occurred_at_unix": int(row["occurred_at_unix"]),
+            "stat_changes": _json_object(row["stat_changes_json"]),
+            "created_at": int(row["created_at"]),
+        }
+
 
     def life_status(self, save_id: str = "") -> dict[str, Any]:
         params: list[Any] = []
