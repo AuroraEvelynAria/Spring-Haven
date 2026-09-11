@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -73,8 +74,15 @@ class KnowledgeRagStore:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target = sqlite3.connect(target_path, timeout=10.0)
         try:
-            with self._lock:
+            if self.path == ":memory:":
                 self._connection.backup(target)
+            else:
+                # 独立源连接执行备份：不持有主连接锁，事件循环上的查询不会被阻塞。
+                source = sqlite3.connect(self.path, timeout=10.0)
+                try:
+                    source.backup(target)
+                finally:
+                    source.close()
             result = str(target.execute("PRAGMA quick_check").fetchone()[0])
             if result != "ok":
                 raise RagStoreError(f"RAG backup integrity check failed: {result}")
@@ -444,57 +452,24 @@ class KnowledgeRagStore:
             return []
         top_k = max(1, min(20, int(limit or settings["top_k"])))
         candidate_limit = max(top_k, int(settings["candidate_limit"]))
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT c.chunk_id, c.document_id, c.ordinal, c.section_path, c.content,
-                       c.embedding_json, d.title, d.scope, d.source_uri,
-                       d.metadata_json, d.updated_at
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE d.scope = '*' OR d.scope = ?
-                ORDER BY d.updated_at DESC, c.ordinal ASC
-                LIMIT 5000
-                """,
-                (role_id,),
-            ).fetchall()
+        rows = await asyncio.to_thread(self._search_fetch_rows, role_id)
         if not rows:
             return []
 
         query_terms = self._terms(normalized_query)
-        scored: dict[int, dict[str, Any]] = {}
-        for index, row in enumerate(rows):
-            lexical = self._lexical_score(normalized_query, query_terms, row["content"])
-            if lexical > 0:
-                scored[index] = {"lexical": lexical, "vector": None}
+        scored = await asyncio.to_thread(
+            self._search_lexical, normalized_query, query_terms, rows
+        )
 
         embedding_profile = self.provider.settings.profile_snapshot("embedding")
         if bool(settings["use_embeddings"]) and embedding_profile.enabled:
             try:
                 query_vector = (await self.provider.embed([normalized_query]))[0]
-                for index, row in enumerate(rows):
-                    if not row["embedding_json"]:
-                        continue
-                    try:
-                        vector = [float(item) for item in json.loads(row["embedding_json"])]
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    cosine = self._cosine(query_vector, vector)
-                    if cosine is None:
-                        continue
-                    item = scored.setdefault(index, {"lexical": 0.0, "vector": None})
-                    item["vector"] = (cosine + 1.0) / 2.0
+                scored = await asyncio.to_thread(self._search_vector, query_vector, rows, scored)
             except ProviderError:
                 pass
 
-        candidates: list[tuple[float, int]] = []
-        for index, components in scored.items():
-            lexical = min(1.0, float(components["lexical"]))
-            vector = components["vector"]
-            combined = lexical if vector is None else lexical * 0.35 + float(vector) * 0.65
-            candidates.append((combined, index))
-        candidates.sort(reverse=True)
-        candidates = candidates[:candidate_limit]
+        candidates = await asyncio.to_thread(self._search_rank, scored, candidate_limit)
         if not candidates:
             return []
 
@@ -534,6 +509,62 @@ class KnowledgeRagStore:
                 }
             )
         return results
+
+    def _search_fetch_rows(self, role_id: str) -> list[Any]:
+        # 数据库扫描在 worker 线程执行，避免阻塞事件循环（见 issue #4）。
+        with self._lock:
+            return self._connection.execute(
+                """
+                SELECT c.chunk_id, c.document_id, c.ordinal, c.section_path, c.content,
+                       c.embedding_json, d.title, d.scope, d.source_uri,
+                       d.metadata_json, d.updated_at
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE d.scope = '*' OR d.scope = ?
+                ORDER BY d.updated_at DESC, c.ordinal ASC
+                LIMIT 5000
+                """,
+                (role_id,),
+            ).fetchall()
+
+    def _search_lexical(
+        self, normalized_query: str, query_terms: Any, rows: list[Any]
+    ) -> dict[int, dict[str, Any]]:
+        scored: dict[int, dict[str, Any]] = {}
+        for index, row in enumerate(rows):
+            lexical = self._lexical_score(normalized_query, query_terms, row["content"])
+            if lexical > 0:
+                scored[index] = {"lexical": lexical, "vector": None}
+        return scored
+
+    def _search_vector(
+        self, query_vector: Any, rows: list[Any], scored: dict[int, dict[str, Any]]
+    ) -> dict[int, dict[str, Any]]:
+        for index, row in enumerate(rows):
+            if not row["embedding_json"]:
+                continue
+            try:
+                vector = [float(item) for item in json.loads(row["embedding_json"])]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            cosine = self._cosine(query_vector, vector)
+            if cosine is None:
+                continue
+            item = scored.setdefault(index, {"lexical": 0.0, "vector": None})
+            item["vector"] = (cosine + 1.0) / 2.0
+        return scored
+
+    def _search_rank(
+        self, scored: dict[int, dict[str, Any]], candidate_limit: int
+    ) -> list[tuple[float, int]]:
+        candidates: list[tuple[float, int]] = []
+        for index, components in scored.items():
+            lexical = min(1.0, float(components["lexical"]))
+            vector = components["vector"]
+            combined = lexical if vector is None else lexical * 0.35 + float(vector) * 0.65
+            candidates.append((combined, index))
+        candidates.sort(reverse=True)
+        return candidates[:candidate_limit]
 
     async def reindex_embeddings(self) -> dict[str, Any]:
         profile = self.provider.settings.profile_snapshot("embedding")

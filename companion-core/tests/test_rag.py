@@ -9,13 +9,13 @@ from types import SimpleNamespace
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from spring_haven_core.app import build_app
+from spring_haven_core.app import _reject_private_import_host, build_app
 from spring_haven_core.config import CoreConfig
 from spring_haven_core.memory import HeartloomStore
 from spring_haven_core.provider import OpenAICompatibleProvider, ProviderReply
 from spring_haven_core.provider_settings import ProviderSettingsStore
 from spring_haven_core.rag import KnowledgeRagStore
-from spring_haven_core.service import CompanionService
+from spring_haven_core.service import CompanionService, RequestValidationError
 
 from test_contract import make_registry, valid_payload
 
@@ -314,6 +314,8 @@ class RagHttpTests(unittest.IsolatedAsyncioTestCase):
             provider_settings_path=str(self.root / "providers.json"),
             provider_credential_path=str(self.root / "providers.dpapi"),
             rag_db_path=str(self.root / "rag.sqlite3"),
+            # web 导入测试打在本地 TestServer 上，需要放行环回地址。
+            rag_import_allow_private=True,
         )
         self.settings = ProviderSettingsStore(
             self.config,
@@ -470,6 +472,14 @@ class RagHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"url": "http://example.com/knowledge"},
         )
         self.assertEqual(remote_http.status, 400)
+
+    def test_private_import_host_guard(self):
+        # 默认拒绝环回/私网地址；配置放行后可用。
+        with self.assertRaises(RequestValidationError):
+            _reject_private_import_host("http://127.0.0.1:12393/knowledge", False)
+        with self.assertRaises(RequestValidationError):
+            _reject_private_import_host("http://10.0.0.7/knowledge", False)
+        _reject_private_import_host("http://127.0.0.1:12393/knowledge", True)
 
     async def test_batch_document_http_contract(self):
         document_ids = []
