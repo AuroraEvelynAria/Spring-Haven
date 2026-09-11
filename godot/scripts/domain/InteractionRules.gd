@@ -14,7 +14,6 @@ const ACTION_LABELS := {
 	"eat": "喂食",
 	"drink": "喂水",
 	"sleep": "休息",
-	"sex": "成人亲密互动",
 	"comfort": "安慰",
 	"praise": "夸奖",
 	"exercise": "运动",
@@ -29,7 +28,6 @@ const ACTION_MESSAGES := {
 	"eat": "🍗 主人喂你吃了东西",
 	"drink": "💧 主人喂你喝了水",
 	"sleep": "🛏️ 主人陪你安心休息",
-	"sex": "💞 主人与你进行了双方自愿的成人亲密互动",
 	"comfort": "🌷 主人温柔地安慰了你",
 	"praise": "✨ 主人认真地夸奖了你",
 	"exercise": "👟 主人陪你活动了身体",
@@ -42,11 +40,10 @@ const ACTION_MESSAGES := {
 # every delta in the action and the final value is rounded to one decimal.
 const BASE_UPDATES := {
 	"hug": [["intimacy", 2.0], ["mood", 2.0], ["stress", -3.0]],
-	"kiss": [["intimacy", 3.0], ["mood", 2.0], ["arousal", 5.0], ["stamina", -2.0]],
+	"kiss": [["intimacy", 3.0], ["mood", 2.0], ["stamina", -2.0]],
 	"eat": [["hunger", -16.0], ["mood", 1.0]],
 	"drink": [["thirst", -14.0], ["urine", 5.0]],
 	"sleep": [["stamina", 16.0], ["awake", 14.0], ["stress", -5.0], ["hunger", 3.0], ["thirst", 3.0]],
-	"sex": [["intimacy", 4.0], ["arousal", 12.0], ["climax", 16.0], ["stamina", -12.0], ["hunger", 6.0], ["thirst", 8.0], ["stress", -3.0]],
 	"comfort": [["mood", 3.0], ["stress", -4.0], ["intimacy", 1.0]],
 	"praise": [["mood", 2.0], ["intimacy", 2.0], ["stress", -1.0]],
 	"exercise": [["health", 2.5], ["stamina", -8.0], ["hunger", 5.0], ["thirst", 6.0], ["awake", 1.0], ["mood", 2.0], ["stress", -3.0]],
@@ -55,34 +52,27 @@ const BASE_UPDATES := {
 	"play": [["mood", 4.0], ["stress", -4.0], ["intimacy", 1.5], ["stamina", -2.0]]
 }
 
-const ROLE_STAT_MULTIPLIERS := {
-	"ling": {"arousal": 1.00, "climax": 1.00},
-	"nai": {"arousal": 1.35, "climax": 1.25},
-}
-
 const ROLE_MULTIPLIERS := {
 	"ling": {
 		"hug": 1.20, "kiss": 1.10, "eat": 1.15, "drink": 0.90,
-		"sleep": 1.20, "sex": 0.90, "comfort": 1.10, "praise": 1.00,
+		"sleep": 1.20, "comfort": 1.10, "praise": 1.00,
 		"exercise": 0.90, "toilet": 1.00, "care": 1.10, "play": 1.00
 	},
 	"nai": {
 		"hug": 0.90, "kiss": 1.00, "eat": 0.90, "drink": 1.10,
-		"sleep": 0.85, "sex": 1.05, "comfort": 1.20, "praise": 1.10,
+		"sleep": 0.85, "comfort": 1.20, "praise": 1.10,
 		"exercise": 1.15, "toilet": 1.00, "care": 1.00, "play": 1.15
 	}
 }
 
 # Deliberately narrow phrases: bare words such as “抱”, “睡”, “吃” are not
-# enough to claim that an interaction actually happened. Adult intimacy only
-# matches wording that explicitly records mutual consent.
+# enough to claim that an interaction actually happened.
 const NATURAL_RULES := {
 	"hug": ["把你抱在怀里", "给你一个拥抱", "把你抱住", "抱你一下", "抱抱你", "抱住你", "拥抱你", "搂住你", "搂着你", "抱抱"],
 	"kiss": ["给你一个吻", "亲你一下", "亲你一口", "吻你一下", "亲亲你", "亲吻你", "轻吻你", "吻了你", "亲亲"],
 	"eat": ["给你准备了吃的", "给你带了吃的", "给你吃点东西", "吃点东西吧", "一起吃饭", "给你做饭", "喂你吃", "给你吃点"],
 	"drink": ["喝点水吧", "快喝吧", "喝吧", "喂你喝", "给你喝水", "给你递了水", "给你倒了水"],
 	"sleep": ["让你好好休息", "带你去休息", "好好休息", "去休息吧", "去睡吧", "睡一会吧", "陪你睡", "哄你睡", "陪你休息"],
-	"sex": ["在双方自愿下和你做爱", "我们自愿做爱", "与你自愿发生关系", "双方同意后和你亲热"],
 	"comfort": ["安慰一下你", "陪着你难过", "陪你缓一缓", "别怕我在", "安慰你", "哄哄你", "摸摸头"],
 	"praise": ["你做得真好", "做得很好", "你真厉害", "你好可爱", "你真可爱", "我喜欢你", "我爱你", "夸夸你", "表扬你", "你真棒", "你很棒"],
 	"exercise": ["陪你去散步", "带你去散步", "一起散步吧", "陪你做运动", "一起做运动", "陪你锻炼", "一起锻炼吧"],
@@ -91,7 +81,7 @@ const NATURAL_RULES := {
 	"play": ["陪你玩游戏", "一起玩游戏吧", "陪你看电影", "一起看电影吧", "陪你听音乐", "一起听音乐吧", "陪你玩一会"]
 }
 
-const MATCH_PRIORITY := ["care", "comfort", "praise", "hug", "kiss", "sex", "eat", "drink", "sleep", "exercise", "toilet", "play"]
+const MATCH_PRIORITY := ["care", "comfort", "praise", "hug", "kiss", "eat", "drink", "sleep", "exercise", "toilet", "play"]
 
 # Phrase groups act as a small local semantic grammar. Every group in a pattern
 # must contribute at least one token, so bare action words cannot change state.
@@ -212,8 +202,7 @@ static func resolve_updates(
 	var multiplier := float(role_multipliers.get(action, 1.0))
 	for base_update in BASE_UPDATES[action]:
 		var stat := str(base_update[0])
-		var stat_multiplier := float((ROLE_STAT_MULTIPLIERS.get(role, {}) as Dictionary).get(stat, 1.0))
-		var delta := _round_one(float(base_update[1]) * multiplier * stat_multiplier)
+		var delta := _round_one(float(base_update[1]) * multiplier)
 		if delta_overrides.has(stat):
 			var override_value = delta_overrides[stat]
 			if (

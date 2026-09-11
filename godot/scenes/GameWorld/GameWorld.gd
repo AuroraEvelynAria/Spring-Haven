@@ -3,6 +3,8 @@ extends Control
 const SETTINGS_SCENE := preload("res://scenes/Settings/SettingsPanel.tscn")
 const ARCHIVE_SCENE := preload("res://scenes/ConversationArchive/ConversationArchivePanel.tscn")
 const MEMORY_NETWORK_SCENE := preload("res://scenes/MemoryNetwork/MemoryNetworkPanel.tscn")
+const LIFE_REVIEW_SCRIPT := preload("res://scenes/LifeReview/LifeReviewPanel.gd")
+const HOUSE_EDITOR_SCRIPT := preload("res://scenes/HouseEditor/HouseLayoutEditor.gd")
 const PORTRAIT_RIG_SCENE := preload("res://scenes/Portrait/PortraitRig2D.tscn")
 const EXPLORATION_SCENE_PATH := "res://scenes/Exploration/ExplorationWorld.tscn"
 const GLOW_SHADER := preload("res://shaders/glow.gdshader")
@@ -17,13 +19,13 @@ const UI_MESSAGE_LIMIT := 72
 const STAT_TWEEN_DURATION := 0.58
 const TYPEWRITER_MIN_CPS := 42.0
 const TYPEWRITER_MAX_SECONDS := 4.8
-const AFFECTION_ACTIONS := ["hug", "kiss", "sex", "comfort", "praise"]
-const AFFECTION_STAT_KEYS := ["intimacy", "mood", "arousal", "climax"]
+const AFFECTION_ACTIONS := ["hug", "kiss", "comfort", "praise"]
+const AFFECTION_STAT_KEYS := ["intimacy", "mood"]
 const THINKING_STEP_SECONDS := 0.42
 const CONVERSATION_VISIBILITY_PROTOCOL := "spring_heaven.conversation_visibility.v1"
 const ACTION_BUTTON_LABELS := {
 	"hug": "🤗 拥抱", "kiss": "💋 亲吻", "eat": "🍗 喂食",
-	"drink": "💧 喂水", "sleep": "🛏️ 休息", "sex": "💞 做爱"
+	"drink": "💧 喂水", "sleep": "🛏️ 休息"
 }
 
 const ROLE_DATA := {
@@ -50,9 +52,7 @@ const STAT_DEFS := {
 	"mood": {"icon": "🧠", "label": "心情", "warning": "low", "threshold": 30.0},
 	"stress": {"icon": "😰", "label": "压力", "warning": "high", "threshold": 75.0},
 	"fertility": {"icon": "❤️‍🔥", "label": "内膜容受性", "warning": "high", "threshold": 70.0},
-	"implantation": {"icon": "🛡️", "label": "服药后着床倾向", "warning": "high", "threshold": 100.0},
-	"arousal": {"icon": "💕", "label": "亲密温度", "warning": "high", "threshold": 90.0},
-	"climax": {"icon": "🌊", "label": "亲密浪潮", "warning": "high", "threshold": 80.0}
+	"implantation": {"icon": "🛡️", "label": "服药后着床倾向", "warning": "high", "threshold": 100.0}
 }
 
 var _current_role := "ling"
@@ -120,8 +120,13 @@ var _life_status_elapsed := 0.0
 var _log_bar: PanelContainer
 var _log_label: Label
 var _settings: Control
+var _life_mini_status: Label
+var _life_mini_elapsed := 0.0
 var _archive_panel: Control
 var _memory_network_panel: Control
+var _life_review_panel: Control
+var _house_editor: Control
+var _season_tint: ColorRect
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -131,6 +136,7 @@ func _ready() -> void:
 	_current_role = Global.current_character if ROLE_DATA.has(Global.current_character) else "ling"
 	_initialize_background_particles()
 	_build_background_glow()
+	_build_season_overlay()
 	_build_interface()
 	_settings = SETTINGS_SCENE.instantiate()
 	add_child(_settings)
@@ -138,6 +144,10 @@ func _ready() -> void:
 	add_child(_archive_panel)
 	_memory_network_panel = MEMORY_NETWORK_SCENE.instantiate()
 	add_child(_memory_network_panel)
+	_life_review_panel = LIFE_REVIEW_SCRIPT.new()
+	add_child(_life_review_panel)
+	_house_editor = HOUSE_EDITOR_SCRIPT.new()
+	add_child(_house_editor)
 	Global.theme_changed.connect(_on_theme_changed)
 	Global.font_size_changed.connect(_on_font_size_changed)
 	CompanionCore.reply_received.connect(_on_core_reply)
@@ -188,6 +198,11 @@ func _process(delta: float) -> void:
 			particle.position.x = viewport_size.x + 8.0
 		elif particle.position.x > viewport_size.x + 8.0:
 			particle.position.x = -8.0
+	_life_mini_elapsed += delta
+	if _life_mini_elapsed >= 10.0:
+		_life_mini_elapsed = 0.0
+		_refresh_life_mini_status()
+		_refresh_season_overlay()
 	if _network_waiting:
 		_thinking_elapsed += delta
 		if _thinking_elapsed >= THINKING_STEP_SECONDS:
@@ -266,6 +281,38 @@ func _draw() -> void:
 		var alpha: float = float(particle.alpha) * (0.8 + sin(Time.get_ticks_msec() * 0.001 + float(particle.phase)) * 0.2)
 		draw_circle(particle.position, float(particle.radius), Color(data.primary, alpha))
 
+const SEASON_TINTS := {
+	"spring": Color(0.42, 0.78, 0.52, 0.05),
+	"summer": Color(1.0, 0.88, 0.55, 0.04),
+	"autumn": Color(0.95, 0.62, 0.32, 0.06),
+	"winter": Color(0.55, 0.70, 0.95, 0.06),
+}
+const SEASON_NAMES := {"spring": "春", "summer": "夏", "autumn": "秋", "winter": "冬"}
+
+func _build_season_overlay() -> void:
+	_season_tint = ColorRect.new()
+	_season_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_season_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_season_tint.color = Color(0, 0, 0, 0)
+	add_child(_season_tint)
+	_refresh_season_overlay()
+
+func _refresh_season_overlay() -> void:
+	if not is_instance_valid(_season_tint):
+		return
+	var month := int(Time.get_datetime_dict_from_system().get("month", 6))
+	var season := _season_for_month(month)
+	_season_tint.color = SEASON_TINTS.get(season, Color(0, 0, 0, 0))
+
+func _season_for_month(month: int) -> String:
+	if month >= 3 and month <= 5:
+		return "spring"
+	if month >= 6 and month <= 8:
+		return "summer"
+	if month >= 9 and month <= 11:
+		return "autumn"
+	return "winter"
+
 func _build_background_glow() -> void:
 	_glow = ColorRect.new()
 	_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -318,6 +365,34 @@ func _build_interface() -> void:
 	_build_sidebar(_main_layout)
 	_build_log_bar(root_vbox)
 
+func _refresh_life_mini_status() -> void:
+	#Update the one-line weather + money status in the nav bar.
+	if not is_instance_valid(_life_mini_status):
+		return
+	var weather: Dictionary = LifeSim.get_weather_summary()
+	var money := int(Global.life_runtime.get("household_money", 0))
+	var season_text := ""
+	if LifeSim.has_method("get_season_name"):
+		var season := str(LifeSim.call("get_season_name"))
+		if not season.is_empty():
+			season_text = season
+	var weather_text := ""
+	if not weather.is_empty():
+		weather_text = "%s %s %d°C" % [
+			str(weather.get("icon", "🌤️")),
+			str(weather.get("label", "")),
+			int(weather.get("temperature", 0)),
+		]
+	var money_text := "¥%d" % money
+	var parts: Array[String] = []
+	if not season_text.is_empty():
+		parts.append(season_text)
+	if not weather_text.is_empty():
+		parts.append(weather_text)
+	if not money_text.is_empty():
+		parts.append(money_text)
+	_life_mini_status.text = "  ".join(parts)
+
 func _build_nav(parent: VBoxContainer) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_nav = PanelContainer.new()
@@ -341,6 +416,13 @@ func _build_nav(parent: VBoxContainer) -> void:
 	_brand.add_theme_color_override("font_color", Color(data.primary))
 	_brand.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_brand)
+	_life_mini_status = Label.new()
+	_life_mini_status.name = "LifeMiniStatus"
+	_life_mini_status.add_theme_font_size_override("font_size", 11)
+	_life_mini_status.add_theme_color_override("font_color", Color(data.secondary, 0.78))
+	_life_mini_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_life_mini_status)
+	_refresh_life_mini_status()
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
@@ -392,6 +474,22 @@ func _build_nav(parent: VBoxContainer) -> void:
 	_archive_button.custom_minimum_size = Vector2(38, 34)
 	_archive_button.pressed.connect(func(): _archive_panel.show_panel())
 	row.add_child(_archive_button)
+
+	var life_review_button := Button.new()
+	life_review_button.text = "🌿"
+	life_review_button.tooltip_text = "生活回顾"
+	life_review_button.flat = true
+	life_review_button.custom_minimum_size = Vector2(38, 34)
+	life_review_button.pressed.connect(func(): _life_review_panel.show_panel())
+	row.add_child(life_review_button)
+
+	var house_editor_button := Button.new()
+	house_editor_button.text = "🏠"
+	house_editor_button.tooltip_text = "家の地图编辑器"
+	house_editor_button.flat = true
+	house_editor_button.custom_minimum_size = Vector2(38, 34)
+	house_editor_button.pressed.connect(func(): _house_editor.show_panel())
+	row.add_child(house_editor_button)
 
 	_settings_button = Button.new()
 	_settings_button.text = "🎨"
@@ -628,12 +726,9 @@ func _refresh_sidebar() -> void:
 		["intimacy", "mood", "stress"],
 		Color("#78A3C2")
 	))
-	var intimate_keys: Array = ["arousal", "fertility", "implantation"]
-	if float(_current_stats().get("arousal", 0.0)) >= 100.0:
-		intimate_keys.append("climax")
 	_sidebar_content.add_child(_stat_group(
-		"💕  亲密状态",
-		intimate_keys,
+		"💊  健康状态",
+		["fertility", "implantation"],
 		Color("#D47C9B")
 	))
 	_sidebar_content.add_child(_diary_card(role))
@@ -955,8 +1050,6 @@ func _animate_stat_value(role: String, key: String, old_value: float, new_value:
 	tween.tween_callback(func():
 		_stat_tweens.erase(key)
 		_sync_stat_warning(key, new_value)
-		if key == "arousal" and (old_value < 100.0) != (new_value < 100.0):
-			_refresh_sidebar.call_deferred()
 	)
 	if show_hearts and not is_equal_approx(old_value, new_value):
 		_spawn_stat_particles(key, true, 8)
@@ -1487,63 +1580,9 @@ func _play_committed_effect(
 			continue
 		var old_value := float(change.get("old_value", 0.0))
 		var new_value := float(change.get("new_value", old_value))
-		if key == "climax":
-			var cycle_event := _find_climax_cycle_event(role, cycle_events)
-			if not cycle_event.is_empty():
-				_animate_climax_cycle(
-					role,
-					old_value,
-					float(cycle_event.get("reset_value", new_value))
-				)
-				Global.stat_changed.emit(role, key, new_value)
-				continue
 		var show_hearts := action in AFFECTION_ACTIONS and key in AFFECTION_STAT_KEYS
 		_animate_stat_value(role, key, old_value, new_value, show_hearts)
 		Global.stat_changed.emit(role, key, new_value)
-
-func _find_climax_cycle_event(role: String, cycle_events: Array) -> Dictionary:
-	for event_variant in cycle_events:
-		if not event_variant is Dictionary:
-			continue
-		var event: Dictionary = event_variant
-		if (
-			str(event.get("kind", "")) == "climax_cycle_completed"
-			and str(event.get("role_id", "")) == role
-		):
-			return event
-	return {}
-
-func _animate_climax_cycle(role: String, old_value: float, reset_value: float) -> void:
-	if role != _current_role or not _stat_widgets.has("climax"):
-		return
-	var widget: Dictionary = _stat_widgets.climax
-	var bar := widget.get("bar") as ProgressBar
-	var value_label := widget.get("value_label") as Label
-	var fill_style := widget.get("fill_style") as StyleBoxFlat
-	if not is_instance_valid(bar) or not is_instance_valid(value_label) or not fill_style:
-		return
-	var previous_tween := _stat_tweens.get("climax") as Tween
-	if previous_tween and previous_tween.is_valid():
-		previous_tween.kill()
-	var update_visuals := func(current_value: float) -> void:
-		if not is_instance_valid(bar) or not is_instance_valid(value_label):
-			return
-		bar.value = current_value
-		value_label.text = _stat_display_text("climax", current_value)
-		fill_style.bg_color = _stat_color("climax", current_value)
-	var tween := create_tween()
-	_stat_tweens["climax"] = tween
-	tween.tween_method(update_visuals, old_value, 100.0, 0.42).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tween.tween_callback(func():
-		_spawn_stat_particles("climax", true, 18)
-		_pulse_full_bar("climax")
-	)
-	tween.tween_interval(0.16)
-	tween.tween_method(update_visuals, 100.0, reset_value, 0.56).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-	tween.tween_callback(func():
-		_stat_tweens.erase("climax")
-		_sync_stat_warning("climax", reset_value)
-	)
 
 func _entry_request_state(entry: Dictionary, role_override := "") -> Dictionary:
 	var state_variant = entry.get("state", {})
@@ -2693,20 +2732,10 @@ func _is_warning(key: String, value: float) -> bool:
 	return value < float(definition.threshold) if definition.warning == "low" else value > float(definition.threshold)
 
 func _is_discreet_stat(key: String) -> bool:
-	return key in ["arousal", "fertility", "implantation"]
+	return key in ["fertility", "implantation"]
 
 func _stat_display_text(key: String, value: float) -> String:
 	match key:
-		"arousal":
-			if value >= 100.0:
-				return "满溢"
-			if value >= 85.0:
-				return "炽热"
-			if value >= 55.0:
-				return "升温"
-			if value >= 25.0:
-				return "微热"
-			return "平静"
 		"fertility":
 			if value >= 80.0:
 				return "容受窗"
@@ -2828,9 +2857,7 @@ func _stat_color(key: String, value: float) -> Color:
 			return Color("#E91E63") if value > 60 else Color("#F06292") if value > 30 else Color("#F8BBD0")
 		"implantation":
 			return Color("#7E9BB9") if value >= 4.0 else Color("#91AFC7") if value >= 2.0 else Color("#AFC6D8")
-		"climax":
-			return Color("#FF80AB") if value > 85 else Color("#F8BBD0")
-		"intimacy", "arousal":
+		"intimacy":
 			return Color.from_hsv(0.94 - value * 0.0012, 0.62, 0.92)
 		_:
 			return Color.from_hsv(0.07, 0.72, 0.62 + value * 0.003)

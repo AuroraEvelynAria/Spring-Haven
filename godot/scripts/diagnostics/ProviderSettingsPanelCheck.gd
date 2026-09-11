@@ -45,27 +45,12 @@ func _run() -> void:
 	_expect(save_button != null and clear_button != null, "Provider 操作按钮不存在")
 	_expect(key_input.secret, "API Key 输入框默认没有隐藏内容")
 	_expect(key_input.text.is_empty(), "设置页不应回填已保存的 API Key")
-	var adult_user_toggle := panel.get("_adult_user_toggle") as CheckBox
-	var adult_content_toggle := panel.get("_adult_content_toggle") as CheckBox
-	var adult_save_button := panel.get("_adult_policy_save_button") as Button
-	_expect(adult_user_toggle != null, "对话设置缺少用户成年确认")
-	_expect(adult_content_toggle != null, "对话设置缺少成人内容开关")
-	_expect(adult_save_button != null, "对话设置缺少成人内容保存按钮")
-	panel.set("_conversation_policy_loaded", {
-		"user_is_adult": false,
-		"allow_consensual_adult_content": false,
-		"roles_all_adult": true,
-	})
-	panel.set("_conversation_policy_busy", false)
-	panel.call("_apply_conversation_policy_to_controls", panel.get("_conversation_policy_loaded"))
-	_expect(adult_content_toggle.disabled, "未确认用户成年时仍可开启成人内容")
-	adult_user_toggle.set_pressed_no_signal(true)
-	panel.call("_update_conversation_policy_dirty")
-	_expect(not adult_content_toggle.disabled, "成年角色与用户确认后成人内容开关仍不可用")
-	adult_content_toggle.set_pressed_no_signal(true)
-	panel.call("_update_conversation_policy_dirty")
-	_expect(bool(panel.get("_conversation_policy_dirty")), "成人内容修改没有进入未保存状态")
-	_expect(not adult_save_button.disabled, "成人内容修改后保存按钮仍被禁用")
+	_expect(
+		panel.get("_adult_user_toggle") == null
+		and panel.get("_adult_content_toggle") == null
+		and panel.get("_adult_policy_save_button") == null,
+		"成人内容开关应已从设置页移除"
+	)
 
 	panel.call("_on_provider_preset_selected", 1)
 	_expect(base_input.text == "https://api.openai.com/v1", "OpenAI 预设地址错误")
