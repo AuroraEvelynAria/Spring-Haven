@@ -186,7 +186,6 @@ static func daily_stat_effect(role: String, snapshot: Dictionary) -> Dictionary:
 	elif phase == "ovulation":
 		updates = {
 			"mood": 0.35,
-			"arousal": 1.0 if role == "nai" else 0.65,
 		}
 	return updates
 

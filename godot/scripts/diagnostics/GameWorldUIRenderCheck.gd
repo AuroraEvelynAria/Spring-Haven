@@ -122,7 +122,7 @@ func _run() -> void:
 			failures.append("角色表现层没有响应思考状态")
 		portrait_rig.call("set_thinking", false)
 		portrait_rig.call("speak", "今天见到你很开心。", 0.5)
-	if not widgets.has("arousal") or not widgets.has("fertility") or not widgets.has("implantation") or widgets.has("climax"):
+	if widgets.has("arousal") or widgets.has("climax") or not widgets.has("fertility") or not widgets.has("implantation"):
 		failures.append("亲密字段默认显示规则错误")
 	if widgets.has("urine_sexual"):
 		failures.append("旧亲密尿液字段仍在界面显示")
@@ -131,10 +131,6 @@ func _run() -> void:
 		failures.append("生理周期卡片未显示")
 	if not is_instance_valid(sidebar_content) or sidebar_content.get_node_or_null("LifeStatusCard") == null:
 		failures.append("实时生活状态卡片未显示")
-	if widgets.has("arousal"):
-		var arousal_label := (widgets.arousal as Dictionary).get("value_label") as Label
-		if not is_instance_valid(arousal_label) or "%" in arousal_label.text:
-			failures.append("亲密温度仍显示精确百分比")
 	if widgets.has("fertility"):
 		var fertility_label := (widgets.fertility as Dictionary).get("value_label") as Label
 		if not is_instance_valid(fertility_label) or "%" in fertility_label.text:
@@ -184,7 +180,7 @@ func _run() -> void:
 			if not runtime_controls.has(key) or not is_instance_valid(runtime_controls[key]):
 				failures.append("运行参数设置缺少控件：%s" % key)
 		var stat_controls: Dictionary = settings_panel.get("_stat_controls")
-		for stat_key in ["health", "intimacy", "mood", "arousal", "climax"]:
+		for stat_key in ["health", "intimacy", "mood"]:
 			if not stat_controls.has(stat_key) or not is_instance_valid(stat_controls[stat_key]):
 				failures.append("当前属性编辑器缺少控件：%s" % stat_key)
 		var settings_scroll := _find_scroll_container(settings_panel)

@@ -23,7 +23,6 @@ func _run() -> void:
 	_expect_action("去上厕所吧", "toilet")
 	_expect_action("帮你处理伤口", "care")
 	_expect_action("一起玩游戏吧", "play")
-	_expect_action("我们自愿做爱", "sex")
 	_expect_action("别难过，抱抱你", "hug")
 	_expect_action("抱抱你，亲你一下", "kiss")
 	# Real archive misses and natural paraphrases must use the semantic grammar.
@@ -116,7 +115,7 @@ func _run() -> void:
 	if id_a != id_b or id_a == id_c or id_a.length() > 128:
 		_failures.append("deterministic_event_id 不稳定、未隔离角色或超长")
 	if not RULES.match_natural_action("主人与你亲密相伴").is_empty():
-		_failures.append("含糊的亲密表述不应触发 sex")
+		_failures.append("含糊的亲密表述不应触发任何动作")
 
 	var gentle_hug_match := RULES.match_natural_action("轻轻抱抱你")
 	_expect_float(gentle_hug_match, "intensity_multiplier", 0.75, "轻度动作倍率")
