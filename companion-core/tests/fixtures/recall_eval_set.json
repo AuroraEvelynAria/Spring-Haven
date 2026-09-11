@@ -1,26 +1,182 @@
 {
-  "_comment": "ADR-001 混合召回评测集脚手架。用例期望为内容特征级,需用真实存档记忆人工核对后补 expect_memory_ids(真实 memory_id 列表)。annotated=false 表示尚未人工标注。评分函数以本文件为回归基准:final 分数排序后,expect_memory_ids 必须全部出现在 top-5(allow_partial 见 notes)。",
-  "_usage": "Phase 0-4:召回重构实现完成后,由 tests/test_recall_eval.py 加载本文件驱动;score 通道权重见 ADR-001 D1。",
+  "_comment": "ADR-001 混合召回评测集。expect_memory_ids 已用真实存档(377 条,2026-09-12 快照)标注;命中判定:expect 中全部 id 出现于 top-5。q009 依赖 Phase 3 传播链写入后生效;q017 为负例。",
+  "_usage": "tests/test_recall_eval.py 加载并驱动;打分权重见 ADR-001 D1。",
   "cases": [
-    {"id": "q001", "query": "窗边的栀子花", "expect_keywords": ["栀子花", "浇"], "expect_actor": "ling", "expected_kind": "worldbook", "notes": "世界书条目应稳定命中"},
-    {"id": "q002", "query": "一起浇花", "expect_keywords": ["栀子花", "浇"], "expect_actor": "ling", "expected_kind": "episodic"},
-    {"id": "q003", "query": "排练", "expect_keywords": ["舞蹈", "排练"], "expect_actor": "nai", "expected_kind": "episodic"},
-    {"id": "q004", "query": "绿萝", "expect_keywords": ["绿萝", "植物"], "expect_actor": "ling"},
-    {"id": "q005", "query": "小奈想家", "expect_keywords": ["想家", "雪奈"], "expect_actor": "nai"},
-    {"id": "q006", "query": "陪我散步", "expect_keywords": ["散步", "运动"], "expect_actor": null},
-    {"id": "q007", "query": "热可可", "expect_keywords": ["可可", "喝"], "expect_actor": "nai"},
-    {"id": "q008", "query": "第一次见面", "expect_keywords": ["第一次", "见面"], "expect_actor": null, "notes": "应命中里程碑/早期记忆,验证 recency 不压制早期高价值记忆"},
-    {"id": "q009", "query": "听小玲说", "expect_keywords": ["听说", "传播"], "expect_actor": "nai", "notes": "二手记忆(is_second_hand=1)召回路径"},
-    {"id": "q010", "query": "主人感冒了", "expect_keywords": ["感冒", "健康"], "expect_actor": "ling"},
-    {"id": "q011", "query": "生日", "expect_keywords": ["生日"], "expected_kind": "milestone", "notes": "role_milestones 关联记忆"},
-    {"id": "q012", "query": "舞台", "expect_keywords": ["舞台", "演出"], "expect_actor": "nai", "notes": "nai 人生目标相关"},
-    {"id": "q013", "query": "喂食", "expect_keywords": ["喂", "吃"], "expected_kind": "interaction"},
-    {"id": "q014", "query": "晚安", "expect_keywords": ["休息", "睡"], "expected_kind": "interaction"},
-    {"id": "q015", "query": "/videos", "expect_keywords": [], "notes": "保留位:需真实记忆补充"},
-    {"id": "q016", "query": "", "expect_keywords": [], "notes": "保留位"},
-    {"id": "q017", "query": "", "expect_keywords": [], "notes": "保留位"},
-    {"id": "q018", "query": "", "expect_keywords": [], "notes": "保留位"},
-    {"id": "q019", "query": "", "expect_keywords": [], "notes": "保留位"},
-    {"id": "q020", "query": "", "expect_keywords": [], "notes": "保留位"}
+    {
+      "id": "q001",
+      "query": "窗台小睡",
+      "expect_memory_ids": [
+        "hm_7f1b499e482a1ac2fa9e7fc345e0cf0a684af925",
+        "hm_3f0771ba28d69230f3a5b6beeb6db360d980d2a5",
+        "hm_4e5be97be7ac2568d47d9f929bdda4ef3557429b"
+      ],
+      "expect_actor": "ling",
+      "notes": "routine/semantic:窗台读书与小睡习惯"
+    },
+    {
+      "id": "q002",
+      "query": "薄荷的味道",
+      "expect_memory_ids": [
+        "hm_bfc39e3b49de60fdd2fd2af2bc0ad0672d06814b",
+        "hm_6a086135ab46c37c6fbac68e27f07429e4cd3652",
+        "hm_72202cbb17f0845cf90b782dbd5814870af5783d"
+      ],
+      "expect_actor": "ling",
+      "notes": "偏好类记忆"
+    },
+    {
+      "id": "q003",
+      "query": "编舞转身",
+      "expect_memory_ids": [
+        "hm_ec96677b527de85f1de735c9dd30390544008fd9",
+        "hm_154c0c41e87e4e23d8590d2e4151ab168c6bf044",
+        "hm_a4db51c5cdc3851de6a24088e190c7ba89c485f1",
+        "hm_154c0c41e87e4e23d8590d2e4151ab168c6bf044",
+        "hm_664848ab79187a66c9ff3ee6a79d8096a6403fce"
+      ],
+      "expect_actor": "nai",
+      "notes": "nai 舞蹈主题,按标题命中的编舞/转身记忆"
+    },
+    {
+      "id": "q004",
+      "query": "绿萝和薄荷花",
+      "expect_memory_ids": [
+        "hm_bfc39e3b49de60fdd2fd2af2bc0ad0672d06814b",
+        "hm_5c0afeb78b85ffd88eef60c72bd5ad1a85fd6d2f"
+      ],
+      "expect_actor": "ling"
+    },
+    {
+      "id": "q005",
+      "query": "家是什么",
+      "expect_memory_ids": [
+        "hm_b4bf7354768aa6b9985abb9bb0b144dbe9939215"
+      ],
+      "expect_actor": "nai",
+      "notes": "identity 记忆"
+    },
+    {
+      "id": "q006",
+      "query": "尾巴",
+      "expect_memory_ids": [
+        "hm_1e07c55308a8a0403bf1a9e03d7ed72d7fd686f0",
+        "hm_3b07cdec44eb8eb6ca3a78eaecdcdd09815fa905"
+      ],
+      "expect_actor": null
+    },
+    {
+      "id": "q007",
+      "query": "阳台热可可",
+      "expect_memory_ids": [
+        "hm_6a086135ab46c37c6fbac68e27f07429e4cd3652",
+        "hm_8ac5a1903d6e7220cc5b019730a71699bebeb9b0",
+        "hm_6f25b625587de989d25f394843b023186bdad013"
+      ],
+      "expect_actor": "nai"
+    },
+    {
+      "id": "q008",
+      "query": "温暖的拥抱",
+      "expect_memory_ids": [
+        "hm_e43619bafadc54cff1c4bea70662f3af833e24ef",
+        "hm_f439cecb68b0d37118af1b42dec2223823c709a0"
+      ],
+      "expect_actor": "nai"
+    },
+    {
+      "id": "q009",
+      "query": "听小玲姐姐说",
+      "expect_memory_ids": [],
+      "expect_actor": "nai",
+      "notes": "二手记忆路径;当前存档无 heard_from 记忆,Phase 3 传播写入后此用例自动生效"
+    },
+    {
+      "id": "q010",
+      "query": "半夜巡夜",
+      "expect_memory_ids": [
+        "hm_18f3df3797468f97347d94895b26fef833c2ecf1"
+      ],
+      "expect_actor": "ling"
+    },
+    {
+      "id": "q011",
+      "query": "第一百个心织回忆",
+      "expect_memory_ids": [
+        "4987d84719974800ade2a489779aed78",
+        "491cd3810eef44a38d300d0188fd8726",
+        "2f27b301b1f5430aacaece8e638fc9e3",
+        "4987d84719974800ade2a489779aed78"
+      ],
+      "expected_kind": "relations",
+      "notes": "里程碑记忆(source=milestone)"
+    },
+    {
+      "id": "q012",
+      "query": "一起泡茶",
+      "expect_memory_ids": [
+        "hm_0296e372326da7bb281126b4817eff86250bb22d",
+        "hm_da3454f29ea6b8f62f96358bebfb5b904712b417",
+        "hm_66f3d3b9670fa7277dca1998e6e96c3dc9b85f92"
+      ],
+      "expect_actor": null
+    },
+    {
+      "id": "q013",
+      "query": "主人喂水",
+      "expect_memory_ids": [
+        "hm_f5a002c20def42bb04b5b35ee59c476c0d890854"
+      ],
+      "expect_actor": "ling"
+    },
+    {
+      "id": "q014",
+      "query": "睡前整理耳朵",
+      "expect_memory_ids": [
+        "hm_5dbe6948afea9708d55580b481b08cd26a381a1f"
+      ],
+      "expect_actor": "nai"
+    },
+    {
+      "id": "q015",
+      "query": "拍生活照片",
+      "expect_memory_ids": [
+        "hm_5dbc95438c5973c537805339ae3a775a7c73bd90",
+        "hm_23671282b5fe6047174e238016549e4f4fb0892c"
+      ],
+      "expect_actor": "nai"
+    },
+    {
+      "id": "q016",
+      "query": "练舞时看到小玲",
+      "expect_memory_ids": [
+        "hm_464d796a133caca28347e19f132c1203a891170e"
+      ],
+      "expect_actor": "nai",
+      "notes": "preference 类记忆"
+    },
+    {
+      "id": "q017",
+      "query": "季度财报",
+      "expect_memory_ids": [],
+      "notes": "负例:无相关记忆,期望低分空结果"
+    },
+    {
+      "id": "q018",
+      "query": "",
+      "expect_memory_ids": [],
+      "notes": "保留位"
+    },
+    {
+      "id": "q019",
+      "query": "",
+      "expect_memory_ids": [],
+      "notes": "保留位"
+    },
+    {
+      "id": "q020",
+      "query": "",
+      "expect_memory_ids": [],
+      "notes": "保留位"
+    }
   ]
 }

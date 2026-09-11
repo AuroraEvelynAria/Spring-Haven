@@ -14,6 +14,22 @@ HEARTLOOM_CLOSE = "</heartloom_memory_context>"
 RAG_OPEN = '<spring_haven_knowledge_context version="1">'
 RAG_CLOSE = "</spring_haven_knowledge_context>"
 
+# #29 硬性约束:生理数值只以定性分桶进入 prompt(很高/偏高/普通/偏低/很低)。
+# 滞回(hysteresis)将随 #27 会话层落地;当前为无状态确定性分桶。
+_STATE_BUCKETS = (
+    (85.0, "很高"),
+    (65.0, "偏高"),
+    (35.0, "普通"),
+    (15.0, "偏低"),
+)
+
+
+def _qualitative_bucket(value: float) -> str:
+    for threshold, label in _STATE_BUCKETS:
+        if value >= threshold:
+            return label
+    return "很低"
+
 
 class PromptComposer:
     """Builds a stable role prefix and a small validated per-turn runtime block."""
@@ -267,21 +283,25 @@ class PromptComposer:
             return result
         raw_body = state.get("body_state")
         if isinstance(raw_body, dict) and raw_body.get("role_id") == role.role_id:
-            stats: dict[str, float] = {}
-            raw_stats = raw_body.get("stats", {})
-            allowed_stats = {
-                "health", "stamina", "hunger", "thirst", "awake", "urine",
-                "intimacy", "mood", "stress", "fertility", "implantation",
+            # #29 硬性约束:原始生理浮点数不进 prompt;只输出分桶定性摘要
+            state_labels = {
+                "health": "健康", "stamina": "体力", "hunger": "饥饿", "thirst": "口渴",
+                "awake": "清醒", "urine": "膀胱充盈", "intimacy": "好感度", "mood": "心情",
+                "stress": "压力", "fertility": "内膜容受性", "implantation": "着床倾向",
             }
+            raw_stats = raw_body.get("stats", {})
+            state_summary = ""
             if isinstance(raw_stats, dict):
-                for key, value in raw_stats.items():
-                    if key not in allowed_stats:
-                        continue
+                parts: list[str] = []
+                for stat_key, stat_label in state_labels.items():
+                    value = raw_stats.get(stat_key)
                     if isinstance(value, bool) or not isinstance(value, (int, float)):
                         continue
                     parsed = float(value)
-                    if math.isfinite(parsed):
-                        stats[key] = round(max(0.0, min(100.0, parsed)), 2)
+                    if not math.isfinite(parsed):
+                        continue
+                    parts.append(f"{stat_label}={_qualitative_bucket(max(0.0, min(100.0, parsed)))}")
+                state_summary = "；".join(parts)
             sensations: list[str] | dict[str, str] = []
             raw_sensations = raw_body.get("sensations", [])
             if isinstance(raw_sensations, list):
@@ -304,9 +324,10 @@ class PromptComposer:
                     if safe_value:
                         sensations[key] = safe_value
             body_state: dict[str, Any] = {
-                "stats": stats,
                 "sensations": sensations,
             }
+            if state_summary:
+                body_state["state_summary"] = state_summary
             menstrual_cycle = self._menstrual_cycle_context(
                 role, raw_body.get("menstrual_cycle")
             )

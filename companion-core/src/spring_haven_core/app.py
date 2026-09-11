@@ -117,6 +117,7 @@ def build_app(
     app.router.add_get("/memory/status", _memory_status)
     app.router.add_get("/memory/entries", _memory_entries)
     app.router.add_get("/memory/graph", _memory_graph)
+    app.router.add_get("/heartloom/graph", _heartloom_graph)
     app.router.add_post("/memory/entries", _memory_put)
     app.router.add_delete("/memory/entries/{memory_id}", _memory_delete)
     app.router.add_post("/memory/recall", _memory_recall)
@@ -717,6 +718,15 @@ async def _memory_put(request: web.Request) -> web.Response:
         return _error(400, str(exc), retryable=False)
 
 
+async def _heartloom_graph(request: web.Request) -> web.Response:
+    service = request.app[SERVICE_KEY]
+    try:
+        data = service.graph_data(dict(request.query))
+        return _ok({"graph_version": 2, **data})
+    except (RequestValidationError, RoleConfigurationError, MemoryStoreError, ValueError) as exc:
+        return _error(400, str(exc), retryable=False)
+
+
 async def _memory_recall(request: web.Request) -> web.Response:
     service = request.app[SERVICE_KEY]
     try:
@@ -927,4 +937,20 @@ async def _life_scheduler_loop(app: web.Application) -> None:
                 raise
             except Exception:
                 LOGGER.exception("unexpected milestone scheduler failure")
+            try:
+                # ADR-001 Phase 3:三态生命周期 + embedding 限速回填
+                lifecycle_result = await asyncio.to_thread(
+                    app[SERVICE_KEY].apply_memory_lifecycle
+                )
+                if int(lifecycle_result.get("dormant", 0)) + int(
+                    lifecycle_result.get("archived", 0)
+                ) > 0:
+                    LOGGER.info("memory lifecycle transitions: %s", lifecycle_result)
+                backfilled = await app[SERVICE_KEY].backfill_memory_embeddings()
+                if backfilled:
+                    LOGGER.info("memory embeddings backfilled: %s", backfilled)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected memory network scheduler failure")
         await asyncio.sleep(60.0)

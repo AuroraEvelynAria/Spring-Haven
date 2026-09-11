@@ -142,11 +142,15 @@ class CompanionService:
             exclude_message_id=source_message_id,
         )
         shared_history = self._merge_history(durable_history, payload["history"])
+        # ADR-001 混合召回:embedding 启用时注入查询向量(失败静默降级为纯词法)
+        query_vector, embedding_model = await self._query_embedding(payload["text"])
         memories = self.memory.recall(
             save_id=save_id,
             role_id=role.role_id,
             query=payload["text"],
             limit=self._recall_limit,
+            query_vector=query_vector,
+            embedding_model=embedding_model,
         )
         rag_results: list[dict[str, Any]] = []
         rag_state = "disabled"
@@ -160,6 +164,25 @@ class CompanionService:
                 except Exception as exc:
                     LOGGER.warning("RAG retrieval degraded: %s", type(exc).__name__)
                     rag_state = "error"
+        # #22 事件日志:确定性交互的数值变更记录到 state_events(仅调试用,ADR-1)
+        local_state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+        local_effect = local_state.get("local_effect") if isinstance(local_state.get("local_effect"), dict) else {}
+        stat_changes = local_effect.get("stat_changes")
+        if isinstance(stat_changes, list) and stat_changes:
+            try:
+                self.memory.record_state_event(
+                    save_id=save_id,
+                    role_id=role.role_id,
+                    kind="interaction",
+                    delta_json={
+                        str(item.get("stat", "")): float(item.get("delta", 0.0))
+                        for item in stat_changes
+                        if isinstance(item, dict) and str(item.get("stat", ""))
+                    },
+                    note=f"action={local_effect.get('action', '')}",
+                )
+            except (MemoryStoreError, TypeError, ValueError) as exc:
+                LOGGER.warning("state event logging failed: %s", exc)
         messages = self.prompts.messages(
             role,
             payload["text"],
@@ -574,6 +597,19 @@ class CompanionService:
                 milestone_id=milestone_id,
                 source_memory_id=str(entry.get("memory_id", "")),
             )
+            # ADR-001 D6:成就档案 + milestone 边 + LLM 文案(失败落模板占位,不阻塞解锁)
+            entry_memory_id = str(entry.get("memory_id", ""))
+            milestone_row_id = self.memory.unlock_role_milestone(
+                save_id=save_id,
+                role_id="*",
+                rule_id=milestone_id,
+                title=title,
+                description=f"{title}。这段共同生活的时光，值得永远记得。",
+                source_memory_id=entry_memory_id,
+                unlocked_world_at=self.memory.world_now(save_id),
+            )
+            self.memory.build_links_for_memory(entry_memory_id)
+            await self._polish_milestone_copy(save_id, milestone_row_id, title)
             unlocked_now += 1
         return unlocked_now
 
@@ -1138,6 +1174,107 @@ class CompanionService:
             )
         except (MemoryStoreError, TypeError, ValueError) as exc:
             raise RequestValidationError(str(exc)) from exc
+
+    # ===== ADR-001 Phase 3:混合召回 / 生命周期 / 记忆网络 =====
+
+    async def _query_embedding(self, text: str) -> tuple[list[float] | None, str]:
+        """embedding 启用时为查询生成向量;失败静默降级为纯词法(ADR-001 D1)。"""
+        provider = getattr(self, "provider", None)
+        settings = getattr(provider, "settings", None) if provider is not None else None
+        if settings is None:
+            return None, ""
+        try:
+            profile = settings.profile_snapshot("embedding")
+            if not profile.enabled:
+                return None, ""
+            vectors = await provider.embed([text[:2_000]])
+            return vectors[0], str(profile.model)
+        except Exception as exc:
+            LOGGER.warning("query embedding degraded: %s", type(exc).__name__)
+            return None, ""
+
+    async def backfill_memory_embeddings(
+        self, *, save_id: str | None = None, batch: int = 16
+    ) -> int:
+        """离线批量记忆的 embedding 限速回填(ADR-001:写入允许 NULL)。"""
+        settings = getattr(self.provider, "settings", None) if self.provider is not None else None
+        if settings is None:
+            return 0
+        profile = settings.profile_snapshot("embedding")
+        if not profile.enabled:
+            return 0
+        target_saves = [save_id] if save_id else self.memory.life_save_ids()
+        total = 0
+        for sid in target_saves:
+            rows = self.memory.memories_without_embedding(sid, limit=batch)
+            if not rows:
+                continue
+            try:
+                vectors = await self.provider.embed(
+                    [row["content"][:2_000] for row in rows]
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "embedding backfill degraded for %s: %s", sid, type(exc).__name__
+                )
+                return total
+            for row, vector in zip(rows, vectors, strict=True):
+                self.memory.update_memory_embedding(
+                    row["memory_id"], vector, str(profile.model)
+                )
+                total += 1
+        return total
+
+    def apply_memory_lifecycle(self) -> dict[str, int]:
+        """三态生命周期规则(常量阈值,ADR-001 D5):dormant/archived 自动迁移。"""
+        return self.memory.apply_lifecycle_transitions()
+
+    def graph_data(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise RequestValidationError("request must be a query object")
+        save_id = self.validate_save_id(raw.get("save_id"))
+        role_id = str(raw.get("role_id", "")).strip()
+        if role_id:
+            self.roles.get(role_id)
+        try:
+            limit = int(raw.get("limit", 120))
+            offset = int(str(raw.get("cursor", "")).strip() or "0")
+        except (TypeError, ValueError) as exc:
+            raise RequestValidationError("graph paging parameters are invalid") from exc
+        return self.memory.graph_page(
+            save_id=save_id, role_id=role_id, limit=limit, offset=offset
+        )
+
+    async def _polish_milestone_copy(
+        self, save_id: str, milestone_row_id: str, fallback_title: str
+    ) -> None:
+        """ADR-001 D6:LLM 仅生成成就文案;失败保留规则模板占位,不阻塞解锁。"""
+        provider = getattr(self, "provider", None)
+        settings = getattr(provider, "settings", None) if provider is not None else None
+        if settings is None:
+            return
+        try:
+            profile = settings.profile_snapshot("chat")
+            if not profile.enabled:
+                return
+            reply = await provider.complete(
+                "你是成就命名助手。根据成就主题输出 JSON："
+                '{"title": "不超过10字的成就名", "description": "不超过48字的成就描述"}。只输出 JSON。',
+                [{"role": "user", "content": f"成就主题：{fallback_title}"}],
+            )
+            try:
+                parsed = json.loads(reply.text.strip())
+            except (ValueError, json.JSONDecodeError):
+                LOGGER.warning("milestone copy was not valid JSON; keeping placeholder")
+                return
+            if isinstance(parsed, dict):
+                self.memory.update_role_milestone_copy(
+                    milestone_row_id,
+                    str(parsed.get("title", fallback_title))[:60],
+                    str(parsed.get("description", ""))[:240],
+                )
+        except Exception as exc:
+            LOGGER.warning("milestone copy polish failed: %s", type(exc).__name__)
 
     def recall_memories(self, raw: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
