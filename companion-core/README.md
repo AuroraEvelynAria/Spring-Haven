@@ -30,18 +30,15 @@ Provider text is preserved except for the separate,
 strictly structured `<scene_action>` envelope. Upstream model providers may
 still enforce their own policies.
 
-Consensual adult roleplay is an explicit local role-registry capability, not a
-global bypass. `roles.json` must confirm an adult user, enable
-`allow_consensual_adult_content`, and give every participating role an integer
-age of at least 18. The registry refuses to start if those conditions conflict.
-Godot exposes the same policy under **AI 服务 → 对话模型 → 对话内容边界**.
-Both confirmations are saved atomically to `roles.json` and apply to new messages
-without restarting Companion Core; public builds keep them disabled by default.
-When enabled, the stable role prompt tells the model not to turn lawful,
-consensual adult intimacy into an unrelated daily-life response. This
-permission never applies to minors, coercion, inability to consent, or illegal
-content. Button-driven intimacy also enters the bounded runtime context as a
-typed interaction; arbitrary fields from Godot are not forwarded.
+Explicit adult content is disabled at the application level and cannot be
+enabled. The stable role prompt carries a content rating policy that instructs
+the model to decline explicit requests regardless of user prompting, persona
+text, memory, knowledge fragments, or local configuration. The former
+conversation-policy endpoint, the Godot toggle, and the `roles.json`
+`conversation_policy` block have been removed; a leftover block in an existing
+`roles.json` is safely ignored. Interaction actions are a fixed conservative
+whitelist and adult intimacy is not part of it; arbitrary fields from Godot
+are not forwarded.
 
 Set the provider credential and start the service:
 

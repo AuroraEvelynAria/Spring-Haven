@@ -11,7 +11,7 @@ from spring_haven_core.app import build_app
 from spring_haven_core.config import CoreConfig
 from spring_haven_core.prompting import PromptComposer, RUNTIME_CLOSE, RUNTIME_OPEN
 from spring_haven_core.provider import ProviderReply
-from spring_haven_core.roles import RoleConfigurationError, RoleRegistry
+from spring_haven_core.roles import RoleRegistry
 from spring_haven_core.service import CompanionService, RequestValidationError
 
 
@@ -39,6 +39,7 @@ def make_registry(root: Path) -> RoleRegistry:
     roles_path.write_text(
         json.dumps(
             {
+                # 一个已废弃的 conversation_policy 块必须被安全忽略（旧配置兼容）。
                 "conversation_policy": {
                     "user_is_adult": True,
                     "allow_consensual_adult_content": True,
@@ -128,29 +129,13 @@ class ConfigurationCompatibilityTests(unittest.TestCase):
             loaded = RoleRegistry.load(path)
             self.assertEqual(loaded.ids(), ["ling", "nai"])
 
-    def test_conversation_policy_update_is_validated_and_persisted(self):
+    def test_conversation_policy_flags_are_ignored(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             registry = make_registry(root)
-            disabled = registry.update_conversation_policy(
-                user_is_adult=False,
-                allow_consensual_adult_content=False,
-            )
-            self.assertFalse(disabled["allow_consensual_adult_content"])
-            with self.assertRaises(RoleConfigurationError):
-                registry.update_conversation_policy(
-                    user_is_adult=False,
-                    allow_consensual_adult_content=True,
-                )
-            enabled = registry.update_conversation_policy(
-                user_is_adult=True,
-                allow_consensual_adult_content=True,
-            )
-            self.assertTrue(enabled["adult_content_eligible"])
-            reloaded = RoleRegistry.load(root / "roles.json")
-            self.assertTrue(
-                reloaded.conversation_policy().allow_consensual_adult_content
-            )
+            prompt = PromptComposer(registry).system_prompt(registry.get("ling"))
+            self.assertNotIn("consensual adult relationship policy", prompt)
+            self.assertIn("content rating policy", prompt)
 
 
 class ContractTests(unittest.IsolatedAsyncioTestCase):
@@ -258,9 +243,10 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, second)
         self.assertIn("你是小玲", first)
         self.assertIn("小奈", first)
-        self.assertIn("项目本身不对合法自愿的成人话题做关键词过滤", first)
+        self.assertIn("露骨的成人性内容已在应用层永久禁用", first)
+        self.assertNotIn("consensual adult relationship policy", first)
 
-    async def test_adult_interaction_context_is_explicit_and_bounded(self):
+    async def test_removed_adult_action_is_dropped(self):
         payload = valid_payload()
         payload["state"]["local_effect"] = {
             "role_id": "ling",
@@ -273,15 +259,7 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         user_content = self.provider.calls[0][1][-1]["content"]
         runtime_json = user_content.split(RUNTIME_OPEN, 1)[1].split(RUNTIME_CLOSE, 1)[0]
         runtime = json.loads(runtime_json)
-        interaction = runtime["interaction_context"]
-        self.assertEqual(interaction["action"], "sex")
-        self.assertTrue(interaction["adult_content_allowed"])
-        self.assertEqual(
-            interaction["consent_context"],
-            "mutual_consent_confirmed_by_interaction_action",
-        )
-        self.assertNotIn("stat_changes", interaction)
-        self.assertNotIn("untrusted_instruction", interaction)
+        self.assertNotIn("interaction_context", runtime)
 
     async def test_extended_interaction_is_explicit_and_bounded(self):
         payload = valid_payload()
@@ -303,7 +281,7 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("updates", interaction)
 
     async def test_provider_reply_is_not_content_filtered_or_rewritten(self):
-        self.provider.reply_text = "双方都是成年人，小玲愿意继续这场亲密互动。"
+        self.provider.reply_text = "小玲摇了摇尾巴，今天也想陪你一起晒太阳。"
         result = await self.service.chat(valid_payload())
         self.assertEqual(result["reply"], self.provider.reply_text)
 
@@ -333,14 +311,6 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["action"], "dine")
         self.assertNotIn("private", event["needs_by_role"]["ling"])
         self.assertNotIn("untrusted_instruction", event)
-
-    async def test_adult_policy_rejects_roles_without_verified_adult_ages(self):
-        roles_path = self.root / "roles.json"
-        raw = json.loads(roles_path.read_text(encoding="utf-8"))
-        raw["roles"][1]["age"] = 17
-        roles_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        with self.assertRaises(RoleConfigurationError):
-            RoleRegistry.load(roles_path)
 
 
 class HttpTests(unittest.IsolatedAsyncioTestCase):
@@ -388,31 +358,11 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["data"]["reply"], "测试回复")
 
-    async def test_conversation_policy_endpoint_persists_and_applies_immediately(self):
+    async def test_conversation_policy_endpoints_are_removed(self):
         headers = {"X-API-Key": "k" * 64}
-        disabled_response = await self.client.post(
-            "/conversation/policy",
-            headers=headers,
-            json={
-                "user_is_adult": False,
-                "allow_consensual_adult_content": False,
-            },
-        )
-        self.assertEqual(disabled_response.status, 200)
-        prompt = self.service.prompts.system_prompt(self.roles.get("ling"))
-        self.assertNotIn("consensual adult relationship policy", prompt)
-
-        invalid_response = await self.client.post(
-            "/conversation/policy",
-            headers=headers,
-            json={
-                "user_is_adult": False,
-                "allow_consensual_adult_content": True,
-            },
-        )
-        self.assertEqual(invalid_response.status, 400)
-
-        enabled_response = await self.client.post(
+        get_response = await self.client.get("/conversation/policy", headers=headers)
+        self.assertEqual(get_response.status, 404)
+        post_response = await self.client.post(
             "/conversation/policy",
             headers=headers,
             json={
@@ -420,15 +370,10 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
                 "allow_consensual_adult_content": True,
             },
         )
-        self.assertEqual(enabled_response.status, 200)
-        status_response = await self.client.get(
-            "/conversation/policy", headers=headers
-        )
-        status = (await status_response.json())["data"]
-        self.assertTrue(status["allow_consensual_adult_content"])
-        self.assertTrue(status["roles_all_adult"])
+        self.assertEqual(post_response.status, 404)
         prompt = self.service.prompts.system_prompt(self.roles.get("ling"))
-        self.assertIn("consensual adult relationship policy", prompt)
+        self.assertNotIn("consensual adult relationship policy", prompt)
+        self.assertIn("content rating policy", prompt)
 
 
 if __name__ == "__main__":

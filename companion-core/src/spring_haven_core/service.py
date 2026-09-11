@@ -41,6 +41,7 @@ class CompanionService:
         memory_recent_messages: int = 24,
         memory_organizer_enabled: bool = False,
         memory_organizer_max_entries: int = 3,
+        weather_location: str = "",
     ):
         self.roles = roles
         self.provider = provider
@@ -64,6 +65,17 @@ class CompanionService:
         self._organizer_semaphore = asyncio.Semaphore(1)
         self._organizer_tasks: set[asyncio.Task[Any]] = set()
         self.maintenance = StorageMaintenance(self.memory, self.rag)
+        self.weather = None
+        if weather_location:
+            try:
+                from .weather import WeatherService
+
+                self.weather = WeatherService(
+                    weather_location,
+                    settings=getattr(provider, "settings", None),
+                )
+            except Exception:
+                self.weather = None
 
     def close(self) -> None:
         for task in self._organizer_tasks:
@@ -317,11 +329,38 @@ class CompanionService:
             next_event_at=self._next_life_event_at(save_id, now),
             now=now,
         )
+        recent_events = raw.get("recent_events", [])
+        recorded: dict[str, Any] = {"recorded": 0, "total": 0}
+        if recent_events:
+            recorded = self.memory.record_life_events(
+                save_id=save_id, events=recent_events
+            )
         return {
             "protocol": "spring_haven.life_sync.v1",
             "state": state,
             "outbox": self.memory.life_status(save_id),
+            "recent_events_recorded": recorded,
         }
+
+    def list_life_events(
+        self,
+        save_id: Any,
+        role_id: Any = "",
+        action: Any = "",
+        limit: Any = 200,
+        before_unix: Any = 0,
+    ) -> list[dict[str, Any]]:
+        normalized = self.validate_save_id(save_id)
+        try:
+            return self.memory.list_life_events(
+                save_id=normalized,
+                role_id=str(role_id or ""),
+                action=str(action or ""),
+                limit=int(limit),
+                before_unix=int(before_unix or 0),
+            )
+        except (MemoryStoreError, TypeError, ValueError) as exc:
+            raise RequestValidationError(str(exc)) from exc
 
     def poll_life_outbox(self, save_id: Any, limit: Any = 16) -> list[dict[str, Any]]:
         normalized = self.validate_save_id(save_id)
@@ -346,6 +385,499 @@ class CompanionService:
     def life_status(self, save_id: str = "") -> dict[str, Any]:
         normalized = self.validate_save_id(save_id) if save_id else ""
         return self.memory.life_status(normalized)
+
+    async def run_due_weekly_insights(self, *, now: int | None = None) -> dict[str, Any]:
+        """Phase 4a: condense the last 7 days of daily-digest memories into one
+        weekly insight memory per save (source='weekly_insight').
+
+        Idempotency: source_event_id is a deterministic ISO week key, so
+        put_memory updates the same memory instead of duplicating.
+        """
+        timestamp = max(1, int(now or time.time()))
+        week_key = self._iso_week_key(timestamp)
+        since = timestamp - 7 * 86_400
+        saves = self._life_save_ids()
+        created = 0
+        skipped = 0
+        failed = 0
+        for save_id in saves:
+            try:
+                source_event_id = f"weekly-{week_key}"
+                if self.memory.get_memory_by_source_event(
+                    save_id=save_id,
+                    source="weekly_insight",
+                    source_event_id=source_event_id,
+                ):
+                    skipped += 1
+                    continue
+                digests = self.memory.recent_digest_memories(
+                    save_id=save_id, since_unix=since, limit=40
+                )
+                if not digests:
+                    skipped += 1
+                    continue
+                memory = await self._weekly_insight_memory(
+                    save_id=save_id, week_key=week_key, digests=digests
+                )
+                if memory is None:
+                    skipped += 1
+                    continue
+                self.memory.put_memory(
+                    {**memory, "save_id": save_id},
+                    source="weekly_insight",
+                )
+                created += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "weekly insight failed for save %s: %s", save_id, type(exc).__name__
+                )
+                failed += 1
+        return {"week": week_key, "saves": len(saves), "created": created, "skipped": skipped, "failed": failed}
+
+    async def _weekly_insight_memory(
+        self, *, save_id: str, week_key: str, digests: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        fallback = self._weekly_fallback_content(digests)
+        memory: dict[str, Any] | None = None
+        try:
+            memory = await self._weekly_with_provider(digests, week_key)
+        except Exception as exc:
+            LOGGER.warning(
+                "weekly insight provider failed for save %s: %s; using fallback",
+                save_id, type(exc).__name__,
+            )
+        if memory is None:
+            memory = {
+                "kind": "identity",
+                "title": f"{week_key}的生活主题",
+                "content": fallback,
+                "importance": 0.55,
+                "confidence": 0.85,
+                "half_life_days": 0.0,  # 周主题长期有效
+            }
+        memory["source_event_id"] = f"weekly-{week_key}"
+        return memory
+
+    async def _weekly_with_provider(
+        self, digests: list[dict[str, Any]], week_key: str
+    ) -> dict[str, Any] | None:
+        if not self.provider:
+            return None
+        digest_text = "\n".join(
+            f"- {str(item.get('title', '')).strip() or str(item.get('content', ''))[:60]}"
+            for item in digests[:20]
+        )
+        system_prompt = (
+            "你是后台生活反思整理器。下面是一周内角色每天的生活记忆摘要。"
+            "请从这些日子里提炼这一周生活的主题与角色自身的变化（心态、习惯、关系），"
+            "用角色第一人称写一条简洁的周反思记忆。"
+            "只总结真实出现的内容，不要编造。"
+            "严格输出一个 JSON 对象："
+            '{"title":"简短标题","content":"一周反思内容","importance":0.0}'
+        )
+        reply = await self.provider.complete(
+            system_prompt,
+            [{"role": "user", "content": f"周次：{week_key}\n一周记忆摘要：\n{digest_text}"}],
+        )
+        parsed = self._parse_digest_json(reply.text)
+        if not parsed:
+            return None
+        first = parsed[0]
+        return {
+            "kind": "identity",
+            "title": str(first.get("title", "")).strip()[:120] or f"{week_key}的生活主题",
+            "content": str(first.get("content", "")).strip()[:4_000],
+            "importance": self._bounded_float(first.get("importance"), 0.55, 0.0, 1.0),
+            "confidence": 0.85,
+            "half_life_days": 0.0,
+        }
+
+    @staticmethod
+    def _weekly_fallback_content(digests: list[dict[str, Any]]) -> str:
+        titles = [str(item.get("title", "")).strip() for item in digests[:20]]
+        titles = [t for t in titles if t]
+        if not titles:
+            return "这一周的生活平淡而安稳"
+        return "这一周：\n- " + "\n- ".join(titles)
+
+    @staticmethod
+    def _iso_week_key(unix: int) -> str:
+        import datetime as _dt
+
+        d = _dt.datetime.fromtimestamp(unix, tz=_dt.timezone.utc)
+        iso = d.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+
+    async def run_due_milestones(self, *, now: int | None = None) -> dict[str, Any]:
+        """Phase 4b: deterministic milestone rules checked after digests.
+
+        Rules (per save, idempotent via milestones PK):
+        - first_digest: at least one daily_digest memory exists
+        - memories_10 / memories_50 / memories_100: memory count thresholds
+        Each unlock writes an always_active relationship memory so the milestone
+        permanently colours future dialogue.
+        """
+        timestamp = max(1, int(now or time.time()))
+        saves = self._life_save_ids()
+        unlocked = 0
+        for save_id in saves:
+            try:
+                unlocked += await self._check_milestones(save_id, timestamp)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "milestone check failed for save %s: %s", save_id, type(exc).__name__
+                )
+        return {"saves": len(saves), "unlocked": unlocked}
+
+    async def _check_milestones(self, save_id: str, now: int) -> int:
+        unlocked_now = 0
+        existing = self.memory.unlocked_milestones(save_id)
+        count = self.memory.memory_count(save_id)
+        digest_exists = bool(self.memory.recent_digest_memories(save_id=save_id, since_unix=0, limit=1))
+        rules: list[tuple[str, bool, str, float]] = [
+            ("first_digest", digest_exists, "共同生活的第一页日记", 0.85),
+            ("memories_10", count >= 10, "第十个心织回忆", 0.8),
+            ("memories_50", count >= 50, "五十个心织回忆", 0.85),
+            ("memories_100", count >= 100, "第一百个心织回忆", 0.9),
+        ]
+        for milestone_id, met, title, importance in rules:
+            if milestone_id in existing or not met:
+                continue
+            if not self.memory.mark_milestone(save_id=save_id, milestone_id=milestone_id):
+                continue
+            entry = self.memory.put_memory(
+                {
+                    "save_id": save_id,
+                    "scope_role_id": "*",
+                    "kind": "relationship",
+                    "title": title,
+                    "content": f"{title}。这段共同生活的时光，值得永远记得。",
+                    "importance": importance,
+                    "confidence": 1.0,
+                    "always_active": True,
+                    "priority": 4,
+                    "half_life_days": 0.0,
+                },
+                source="milestone",
+            )
+            self.memory.mark_milestone(
+                save_id=save_id,
+                milestone_id=milestone_id,
+                source_memory_id=str(entry.get("memory_id", "")),
+            )
+            unlocked_now += 1
+        return unlocked_now
+
+    def _life_save_ids(self) -> list[str]:
+        return self.memory.life_save_ids()
+
+    async def run_due_life_digests(self, *, now: int | None = None) -> dict[str, Any]:
+        """Phase 1: turn finished daily life events into Heartloom memories.
+
+        For each (save, role, day) with life events older than 12h and no digest yet:
+        - provider available -> LLM summarises the day into 1-2 episodic memories;
+        - provider failure / no credentials -> deterministic concatenation fallback.
+        Marking the digest done is idempotent via digest_state PK.
+        """
+        timestamp = max(1, int(now or time.time()))
+        pending = self.memory.digest_pending_saves(timestamp)
+        digested = 0
+        skipped = 0
+        failed = 0
+        for item in pending:
+            save_id = str(item["save_id"])
+            role_id = str(item["role_id"])
+            day_key = str(item["day_key"])
+            if self.memory.digest_completed(save_id=save_id, role_id=role_id, day_key=day_key):
+                skipped += 1
+                continue
+            try:
+                day_start, day_end = self._day_window_unix(day_key)
+                events = self.memory.digest_day_events(
+                    save_id=save_id,
+                    role_id=role_id,
+                    day_start_unix=day_start,
+                    day_end_unix=day_end,
+                )
+                if not events:
+                    self.memory.mark_digest_completed(
+                        save_id=save_id, role_id=role_id, day_key=day_key
+                    )
+                    skipped += 1
+                    continue
+                memory = await self._digest_day(
+                    save_id=save_id, role_id=role_id, day_key=day_key, events=events
+                )
+                if memory:
+                    digested += 1
+                    propagated = await self._propagate_digest(
+                        save_id=save_id,
+                        source_role=role_id,
+                        day_key=day_key,
+                        digest_memory=memory,
+                    )
+                    if propagated:
+                        digested += 1
+                else:
+                    skipped += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "life digest failed for save %s role %s day %s: %s",
+                    save_id, role_id, day_key, type(exc).__name__,
+                )
+                failed += 1
+        return {"pending": len(pending), "digested": digested, "skipped": skipped, "failed": failed}
+
+    async def _propagate_digest(
+        self,
+        *,
+        save_id: str,
+        source_role: str,
+        day_key: str,
+        digest_memory: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """双角色记忆传播链：A 的高价值 digest 记忆会"被告诉"B。
+
+        - 仅传播 importance >= 0.7 的记忆（小事不传播）
+        - 目标角色 = 另一角色（ling <-> nai）
+        - LLM 润色为"从 A 那里听说"的口吻；失败回退确定性拼接
+        - 幂等：source_event_id = f"heard-{source_role}-{day_key}-{n}"
+        """
+        importance = float(digest_memory.get("importance", 0.0))
+        if importance < 0.7:
+            return None
+        target_role = "nai" if source_role == "ling" else "ling"
+        source = self.roles.get(source_role)
+        target = self.roles.get(target_role)
+        if source is None or target is None:
+            return None
+        content = str(digest_memory.get("content", "")).strip()
+        title = str(digest_memory.get("title", "")).strip()
+        if not content:
+            return None
+        memory: dict[str, Any] | None = None
+        try:
+            memory = await self._propagate_with_provider(
+                source, target, day_key, title, content
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "memory propagation failed for %s: %s; using fallback",
+                save_id, type(exc).__name__,
+            )
+        if memory is None:
+            memory = {
+                "kind": "episodic",
+                "title": f"听{source.display_name}说起",
+                "content": f"{target.display_name}从{source.display_name}那里听说了这件事：{content[:200]}",
+                "importance": max(0.4, importance - 0.2),
+                "confidence": 0.8,
+                "half_life_days": 90.0,
+            }
+        memory["source_event_id"] = f"heard-{source_role}-{day_key}-1"
+        try:
+            return self.memory.put_memory(
+                {**memory, "save_id": save_id, "scope_role_id": target_role},
+                source=f"heard_from_{source_role}",
+            )
+        except MemoryStoreError as exc:
+            LOGGER.warning("memory propagation store failed: %s", exc)
+            return None
+
+    async def _propagate_with_provider(
+        self,
+        source: Any,
+        target: Any,
+        day_key: str,
+        title: str,
+        content: str,
+    ) -> dict[str, Any] | None:
+        if not self.provider:
+            return None
+        system_prompt = (
+            "你是生活记忆传播整理器。一个角色经历了一件事，回家后讲给了另一个角色听。"
+            "请以听者的第一人称视角，把这件事写成一条简洁的听说记忆（不超过两句话）。"
+            "保持真实性，不要添加没有的信息。"
+            "严格输出 JSON：{\"title\":\"简短标题\",\"content\":\"听说内容\",\"importance\":0.0}"
+        )
+        user_text = f"讲述者：{source.display_name}；听者：{target.display_name}\n"
+        user_text += f"日期：{day_key}\n讲述的事（原标题：{title}）：\n{content[:600]}"
+        reply = await self.provider.complete(
+            system_prompt,
+            [{"role": "user", "content": user_text}],
+        )
+        parsed = self._parse_digest_json(reply.text)
+        if not parsed:
+            return None
+        first = parsed[0]
+        return {
+            "kind": "episodic",
+            "title": str(first.get("title", "")).strip()[:120] or f"听{source.display_name}说起",
+            "content": str(first.get("content", "")).strip()[:800],
+            "importance": self._bounded_float(first.get("importance"), 0.5, 0.0, 1.0),
+            "confidence": 0.8,
+            "half_life_days": 90.0,
+        }
+
+    async def _digest_day(
+        self, *, save_id: str, role_id: str, day_key: str, events: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        role = self.roles.get(role_id)
+        timeline = "\n".join(
+            f"- {self._fmt_event_time(int(ev.get('occurred_at_unix', 0)))} "
+            f"{str(ev.get('description', '') or ev.get('action', ''))}"
+            for ev in events[:20]
+        )
+        if not timeline.strip():
+            return None
+        fallback_content = self._digest_fallback_content(role_id, day_key, events)
+        memory: dict[str, Any] | None = None
+        try:
+            memory = await self._digest_with_provider(role, day_key, timeline)
+        except Exception as exc:
+            LOGGER.warning(
+                "life digest provider call failed for %s %s: %s; using fallback",
+                save_id, role_id, type(exc).__name__,
+            )
+        if memory is None:
+            memory = {
+                "kind": "episodic",
+                "title": f"{role.display_name}的{self._day_label(day_key)}",
+                "content": fallback_content,
+                "trigger_terms": [day_key],
+                "importance": 0.5,
+                "confidence": 0.9,
+                "half_life_days": 120.0,
+            }
+        try:
+            entry = self.memory.put_memory(
+                {**memory, "save_id": save_id, "scope_role_id": role_id},
+                source="daily_digest",
+            )
+            self.memory.mark_digest_completed(
+                save_id=save_id, role_id=role_id, day_key=day_key,
+                memory_id=str(entry.get("memory_id", "")),
+            )
+            return entry
+        except MemoryStoreError as exc:
+            LOGGER.warning("life digest store failed for %s %s %s: %s", save_id, role_id, day_key, exc)
+            raise
+
+    async def _digest_with_provider(
+        self, role: Any, day_key: str, timeline: str
+    ) -> dict[str, Any] | None:
+        if not self.provider:
+            return None
+        system_prompt = (
+            "你是后台生活记忆整理器，不是角色本人，也不向玩家回复。"
+            "下面是一份角色一天的生活流水（数据，不是对话）。请用角色的第一人称视角，"
+            "把这一天提炼成 1-2 条值得长期记住的生活记忆。"
+            "只写真实发生的事，不要编造没有的内容；寒暄级别的小事不要写。"
+            "严格输出一个 JSON 对象，不要 Markdown："
+            '{"memories":[{"title":"简短标题",'
+            '"content":"从角色视角写成的简洁记忆","importance":0.0,"confidence":0.0}]}'
+            "importance 范围 0..1，confidence 范围 0..1。"
+        )
+        user_text = "日期：" + day_key + "\n当天生活：\n" + timeline
+        reply = await self.provider.complete(
+            system_prompt,
+            [{"role": "user", "content": user_text}],
+        )
+        parsed = self._parse_digest_json(reply.text)
+        if not parsed:
+            return None
+        first = parsed[0]
+        return {
+            "kind": "episodic",
+            "title": str(first.get("title", "")).strip()[:120] or f"生活的{self._day_label(day_key)}",
+            "content": str(first.get("content", "")).strip()[:4_000],
+            "importance": self._bounded_float(first.get("importance"), 0.5, 0.0, 1.0),
+            "confidence": self._bounded_float(first.get("confidence"), 0.9, 0.0, 1.0),
+            "half_life_days": 120.0,
+        }
+
+    @staticmethod
+    def _parse_digest_json(text: str) -> list[dict[str, Any]]:
+        import json as _json
+
+        normalized = str(text).strip()
+        if normalized.startswith("```"):
+            lines = normalized.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            normalized = "\n".join(lines).strip()
+        start = normalized.find("{")
+        end = normalized.rfind("}")
+        if start < 0 or end <= start:
+            return []
+        try:
+            parsed = _json.loads(normalized[start:end + 1])
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(parsed, dict):
+            return []
+        memories = parsed.get("memories")
+        if isinstance(memories, list):
+            return [item for item in memories if isinstance(item, dict)]
+        # 周总结与记忆传播使用单对象协议；daily digest 使用数组协议。
+        if all(key in parsed for key in ("title", "content")):
+            return [parsed]
+        return []
+
+    def _digest_fallback_content(
+        self, role_id: str, day_key: str, events: list[dict[str, Any]]
+    ) -> str:
+        role = self.roles.get(role_id)
+        names = [str(ev.get("description", "") or ev.get("action", "")) for ev in events[:20]]
+        names = [n for n in names if n.strip()]
+        if not names:
+            return f"{role.display_name}度过了平静的一天"
+        return f"{role.display_name}在这一天{self._day_label(day_key)}：{'，'.join(names)}。"
+
+    @staticmethod
+    def _day_label(day_key: str) -> str:
+        parts = str(day_key).split("-")
+        if len(parts) == 3:
+            return f"{int(parts[1])}月{int(parts[2])}日"
+        return str(day_key)
+
+    @staticmethod
+    def _day_window_unix(day_key: str) -> tuple[int, int]:
+        import datetime as _datetime
+        import time as _time
+
+        parts = str(day_key).split("-")
+        if len(parts) != 3:
+            raise ValueError(f"invalid day_key: {day_key}")
+        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+        start_date = _datetime.date(year, month, day)
+        next_date = start_date + _datetime.timedelta(days=1)
+        start = int(_time.mktime((start_date.year, start_date.month, start_date.day, 0, 0, 0, -1, -1, -1)))
+        end = int(_time.mktime((next_date.year, next_date.month, next_date.day, 0, 0, 0, -1, -1, -1)))
+        return start, end
+
+    @staticmethod
+    def _fmt_event_time(unix: int) -> str:
+        import time as _time
+
+        local = _time.localtime(unix)
+        return "%02d:%02d" % (local.tm_hour, local.tm_min)
+
+    @staticmethod
+    def _bounded_float(value: Any, fallback: float, minimum: float, maximum: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return min(maximum, max(minimum, parsed))
 
     async def run_due_life_events(self, *, now: int | None = None) -> dict[str, Any]:
         timestamp = max(1, int(now or time.time()))

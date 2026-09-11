@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,25 +25,16 @@ class RoleDefinition:
     age: int | None = None
 
 
-@dataclass(frozen=True)
-class ConversationPolicy:
-    user_is_adult: bool = False
-    allow_consensual_adult_content: bool = False
-
-
 class RoleRegistry:
     def __init__(
         self,
         roles: dict[str, RoleDefinition],
-        conversation_policy: ConversationPolicy | None = None,
         source_path: Path | None = None,
     ):
         if not roles:
             raise RoleConfigurationError("at least one role is required")
         self._roles = dict(roles)
-        self._conversation_policy = conversation_policy or ConversationPolicy()
         self._source_path = source_path
-        self._validate_conversation_policy(self._conversation_policy)
 
     @classmethod
     def load(cls, path: str | Path) -> "RoleRegistry":
@@ -61,10 +50,7 @@ class RoleRegistry:
             if role.role_id in roles:
                 raise RoleConfigurationError(f"duplicate role_id: {role.role_id}")
             roles[role.role_id] = role
-        policy = _parse_conversation_policy(
-            parsed.get("conversation_policy", {}) if isinstance(parsed, dict) else {}
-        )
-        return cls(roles, policy, source)
+        return cls(roles, source)
 
     def get(self, role_id: str) -> RoleDefinition:
         try:
@@ -77,105 +63,6 @@ class RoleRegistry:
 
     def others(self, role_id: str) -> list[RoleDefinition]:
         return [role for key, role in self._roles.items() if key != role_id]
-
-    def conversation_policy(self) -> ConversationPolicy:
-        return self._conversation_policy
-
-    def conversation_policy_status(self) -> dict[str, bool]:
-        roles_all_adult = all(
-            role.age is not None and role.age >= 18
-            for role in self._roles.values()
-        )
-        return {
-            "user_is_adult": self._conversation_policy.user_is_adult,
-            "allow_consensual_adult_content": (
-                self._conversation_policy.allow_consensual_adult_content
-            ),
-            "roles_all_adult": roles_all_adult,
-            "adult_content_eligible": (
-                self._conversation_policy.user_is_adult and roles_all_adult
-            ),
-        }
-
-    def update_conversation_policy(
-        self,
-        *,
-        user_is_adult: bool,
-        allow_consensual_adult_content: bool,
-        persist: bool = True,
-    ) -> dict[str, bool]:
-        if not isinstance(user_is_adult, bool) or not isinstance(
-            allow_consensual_adult_content, bool
-        ):
-            raise RoleConfigurationError("conversation policy flags must be boolean")
-        policy = ConversationPolicy(
-            user_is_adult=user_is_adult,
-            allow_consensual_adult_content=allow_consensual_adult_content,
-        )
-        self._validate_conversation_policy(policy)
-        if persist:
-            self._persist_conversation_policy(policy)
-        self._conversation_policy = policy
-        return self.conversation_policy_status()
-
-    def _validate_conversation_policy(self, policy: ConversationPolicy) -> None:
-        if not policy.allow_consensual_adult_content:
-            return
-        if not policy.user_is_adult:
-            raise RoleConfigurationError(
-                "adult content requires an adult user confirmation"
-            )
-        non_adult_roles = [
-            role.role_id
-            for role in self._roles.values()
-            if role.age is None or role.age < 18
-        ]
-        if non_adult_roles:
-            raise RoleConfigurationError(
-                "adult content requires every role to have an age of at least 18: "
-                + ", ".join(non_adult_roles)
-            )
-
-    def _persist_conversation_policy(self, policy: ConversationPolicy) -> None:
-        if self._source_path is None:
-            raise RoleConfigurationError("role registry has no writable source path")
-        source = self._source_path
-        try:
-            parsed = json.loads(source.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RoleConfigurationError("roles.json could not be read safely") from exc
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("roles"), list):
-            raise RoleConfigurationError("roles.json must contain a roles array")
-        parsed["conversation_policy"] = {
-            "user_is_adult": policy.user_is_adult,
-            "allow_consensual_adult_content": (
-                policy.allow_consensual_adult_content
-            ),
-        }
-        temporary_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=source.parent,
-                prefix=source.name + ".",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary_path = handle.name
-                json.dump(parsed, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_path, source)
-        except OSError as exc:
-            raise RoleConfigurationError("roles.json could not be updated safely") from exc
-        finally:
-            if temporary_path and os.path.exists(temporary_path):
-                try:
-                    os.unlink(temporary_path)
-                except OSError:
-                    pass
 
 
 def _parse_role(raw: Any, root: Path) -> RoleDefinition:
@@ -248,19 +135,4 @@ def _parse_role(raw: Any, root: Path) -> RoleDefinition:
         persona_prompt=inline_prompt,
         memory_prompt=memory_prompt,
         age=age,
-    )
-
-
-def _parse_conversation_policy(raw: Any) -> ConversationPolicy:
-    if raw is None:
-        return ConversationPolicy()
-    if not isinstance(raw, dict):
-        raise RoleConfigurationError("conversation_policy must be a JSON object")
-    user_is_adult = raw.get("user_is_adult", False)
-    allow_adult = raw.get("allow_consensual_adult_content", False)
-    if not isinstance(user_is_adult, bool) or not isinstance(allow_adult, bool):
-        raise RoleConfigurationError("conversation policy flags must be boolean")
-    return ConversationPolicy(
-        user_is_adult=user_is_adult,
-        allow_consensual_adult_content=allow_adult,
     )

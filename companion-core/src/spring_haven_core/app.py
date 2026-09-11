@@ -55,6 +55,7 @@ def build_app(
             memory_recent_messages=config.memory_recent_messages,
             memory_organizer_enabled=config.memory_organizer_enabled,
             memory_organizer_max_entries=config.memory_organizer_max_entries,
+            weather_location=config.weather_location,
         )
     else:
         runtime = service
@@ -81,8 +82,6 @@ def build_app(
     app.router.add_get("/health", _health)
     app.router.add_post("/chat", _chat)
     app.router.add_post("/orchestrate", _orchestrate)
-    app.router.add_get("/conversation/policy", _conversation_policy_status)
-    app.router.add_post("/conversation/policy", _conversation_policy_config)
     app.router.add_get("/provider/status", _provider_status)
     app.router.add_post("/provider/config", _provider_config)
     app.router.add_get("/providers/status", _provider_status)
@@ -116,6 +115,7 @@ def build_app(
     app.router.add_get("/life/status", _life_status)
     app.router.add_get("/life/outbox", _life_outbox)
     app.router.add_post("/life/outbox/ack", _life_outbox_ack)
+    app.router.add_get("/life/events", _life_events)
     app.router.add_get("/maintenance/status", _maintenance_status)
     app.router.add_post("/maintenance/run", _maintenance_run)
     app.router.add_get("/maintenance/backups", _maintenance_backups)
@@ -171,30 +171,6 @@ async def _provider_status(request: web.Request) -> web.Response:
     status = request.app[PROVIDER_SETTINGS_KEY].status()
     status["runtime"] = request.app[SERVICE_KEY].provider_runtime_status()
     return _ok(status)
-
-
-async def _conversation_policy_status(request: web.Request) -> web.Response:
-    return _ok(request.app[ROLES_KEY].conversation_policy_status())
-
-
-async def _conversation_policy_config(request: web.Request) -> web.Response:
-    try:
-        payload: Any = await request.json()
-        if not isinstance(payload, dict):
-            raise RoleConfigurationError("request body must be a JSON object")
-        user_is_adult = payload.get("user_is_adult")
-        allow_adult = payload.get("allow_consensual_adult_content")
-        if not isinstance(user_is_adult, bool) or not isinstance(allow_adult, bool):
-            raise RoleConfigurationError("conversation policy flags must be boolean")
-        return _ok(
-            request.app[ROLES_KEY].update_conversation_policy(
-                user_is_adult=user_is_adult,
-                allow_consensual_adult_content=allow_adult,
-                persist=True,
-            )
-        )
-    except (RoleConfigurationError, OSError, ValueError) as exc:
-        return _error(400, str(exc), retryable=False)
 
 
 async def _provider_config(request: web.Request) -> web.Response:
@@ -761,7 +737,12 @@ async def _session_reset(request: web.Request) -> web.Response:
 async def _life_sync(request: web.Request) -> web.Response:
     try:
         payload: Any = await request.json()
-        return _ok(request.app[SERVICE_KEY].sync_life_state(payload))
+        data = request.app[SERVICE_KEY].sync_life_state(payload)
+        service = request.app[SERVICE_KEY]
+        weather_service = getattr(service, "weather", None)
+        if weather_service is not None:
+            data["weather"] = await weather_service.current()
+        return _ok(data)
     except (RequestValidationError, MemoryStoreError, ValueError) as exc:
         return _error(400, str(exc), retryable=False)
 
@@ -789,6 +770,20 @@ async def _life_outbox_ack(request: web.Request) -> web.Response:
     try:
         payload: Any = await request.json()
         return _ok(request.app[SERVICE_KEY].ack_life_outbox(payload))
+    except (RequestValidationError, MemoryStoreError, ValueError) as exc:
+        return _error(400, str(exc), retryable=False)
+
+
+async def _life_events(request: web.Request) -> web.Response:
+    try:
+        events = request.app[SERVICE_KEY].list_life_events(
+            request.query.get("save_id"),
+            request.query.get("role_id", ""),
+            request.query.get("action", ""),
+            request.query.get("limit", 200),
+            request.query.get("before_unix", 0),
+        )
+        return _ok({"events": events, "count": len(events)})
     except (RequestValidationError, MemoryStoreError, ValueError) as exc:
         return _error(400, str(exc), retryable=False)
 
@@ -858,6 +853,7 @@ async def _maintenance_loop(app: web.Application) -> None:
 
 async def _life_scheduler_loop(app: web.Application) -> None:
     await asyncio.sleep(5.0)
+    digest_ticks = 0
     while True:
         try:
             result = await app[SERVICE_KEY].run_due_life_events()
@@ -867,4 +863,31 @@ async def _life_scheduler_loop(app: web.Application) -> None:
             raise
         except Exception:
             LOGGER.exception("unexpected offline life scheduler failure")
+        digest_ticks += 1
+        if digest_ticks >= 15:  # every ~15 minutes
+            digest_ticks = 0
+            try:
+                digest_result = await app[SERVICE_KEY].run_due_life_digests()
+                if int(digest_result.get("failed", 0)) > 0:
+                    LOGGER.warning("life digest scheduler failures: %s", digest_result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected life digest scheduler failure")
+            try:
+                weekly_result = await app[SERVICE_KEY].run_due_weekly_insights()
+                if int(weekly_result.get("failed", 0)) > 0:
+                    LOGGER.warning("weekly insight scheduler failures: %s", weekly_result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected weekly insight scheduler failure")
+            try:
+                milestone_result = await app[SERVICE_KEY].run_due_milestones()
+                if int(milestone_result.get("unlocked", 0)) > 0:
+                    LOGGER.info("milestones unlocked: %s", milestone_result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected milestone scheduler failure")
         await asyncio.sleep(60.0)
