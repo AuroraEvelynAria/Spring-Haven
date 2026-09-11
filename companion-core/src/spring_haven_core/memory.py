@@ -135,8 +135,16 @@ class HeartloomStore:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target = sqlite3.connect(target_path, timeout=10.0)
         try:
-            with self._lock:
-                self._connection.backup(target)
+            if self.path == ":memory:":
+                with self._lock:
+                    self._connection.backup(target)
+            else:
+                # 独立源连接执行备份：不持有主连接锁，事件循环上的查询不会被备份阻塞。
+                source = sqlite3.connect(self.path, timeout=10.0)
+                try:
+                    source.backup(target)
+                finally:
+                    source.close()
             result = str(target.execute("PRAGMA quick_check").fetchone()[0])
             if result != "ok":
                 raise MemoryStoreError(f"Heartloom backup integrity check failed: {result}")

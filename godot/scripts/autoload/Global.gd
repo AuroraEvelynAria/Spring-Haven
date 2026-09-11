@@ -47,9 +47,7 @@ const ROLE_DEFAULT_STATS := {
 		"mood": 62.0,
 		"stress": 18.0,
 		"fertility": 10.0,
-		"implantation": 0.5,
-		"arousal": 8.0,
-		"climax": 0.0
+		"implantation": 0.5
 	},
 	"nai": {
 		"health": 72.0,
@@ -62,9 +60,7 @@ const ROLE_DEFAULT_STATS := {
 		"mood": 70.0,
 		"stress": 30.0,
 		"fertility": 14.0,
-		"implantation": 0.7,
-		"arousal": 14.0,
-		"climax": 0.0
+		"implantation": 0.7
 	}
 }
 
@@ -89,6 +85,17 @@ var _save_root_override := ""
 func _ready() -> void:
 	_ensure_data_directories()
 	load_default_state()
+	# Settings(autoload #3)在 Global 之后才就绪；延迟到本帧末尾重新归一化，
+	# 使“角色默认属性覆盖”在主场景读取状态前生效。
+	_reapply_default_stat_overrides.call_deferred()
+
+func _reapply_default_stat_overrides() -> void:
+	if not state_loaded or get_node_or_null("/root/Settings") == null:
+		return
+	for role_variant in stats_by_role.keys():
+		stats_by_role[role_variant] = _normalize_role_stats(
+			str(role_variant), stats_by_role[role_variant]
+		)
 
 func _ensure_data_directories() -> bool:
 	var succeeded := true
@@ -287,6 +294,55 @@ func get_role_stats(role: String) -> Dictionary:
 	if not stats_by_role.has(role):
 		stats_by_role[role] = _default_stats_for_role(role)
 	return stats_by_role[role] as Dictionary
+
+const MONTHLY_ALLOWANCE := 3000
+
+func apply_money(delta: int, reason: String, persist := true) -> bool:
+	#Add or subtract household money (clamped, idempotent by reason).
+	if not is_state_loaded():
+		return false
+	var runtime := _normalize_life_runtime(life_runtime)
+	var applied: Array = runtime.get("money_event_ids", [])
+	if not reason.is_empty() and reason in applied:
+		return true
+	var current := int(runtime.get("household_money", 0))
+	runtime["household_money"] = clampi(current + delta, -9999999, 99999999)
+	if not reason.is_empty():
+		applied.append(reason.left(128))
+		while applied.size() > 256:
+			applied.pop_front()
+		runtime["money_event_ids"] = applied
+	life_runtime = runtime
+	if persist and not save_default_state():
+		return false
+	return true
+
+func grant_monthly_allowance(now: int) -> bool:
+	#Pay the monthly household allowance once per calendar month.
+	if not is_state_loaded():
+		return false
+	var local := Time.get_datetime_dict_from_system(now)
+	var month_key := "%04d-%02d" % [int(local.get("year", 2000)), int(local.get("month", 1))]
+	var runtime := _normalize_life_runtime(life_runtime)
+	if str(runtime.get("last_allowance_date", "")) == month_key:
+		return false
+	runtime["last_allowance_date"] = month_key
+	runtime["household_money"] = clampi(
+		int(runtime.get("household_money", 0)) + MONTHLY_ALLOWANCE,
+		-9999999, 99999999
+	)
+	life_runtime = runtime
+	if not save_default_state():
+		return false
+	return true
+
+func money_status() -> Dictionary:
+	#Redacted money state for UI (no history).
+	var runtime := _normalize_life_runtime(life_runtime)
+	return {
+		"household_money": int(runtime.get("household_money", 0)),
+		"last_allowance_date": str(runtime.get("last_allowance_date", "")),
+	}
 
 func apply_life_updates(
 	role: String,
@@ -506,13 +562,6 @@ func commit_user_message(
 	var role_defaults := _default_stats_for_role(role)
 	var current_stats = stats_by_role.get(role, {})
 	var working_stats := _normalize_role_stats(role, current_stats)
-	var action := str(effect_spec.get("action", ""))
-	var arousal_was_full := float(working_stats.get("arousal", 0.0)) >= 100.0
-	if action in ["kiss", "sex"]:
-		if arousal_was_full:
-			deltas["arousal"] = 0.0
-		else:
-			deltas.erase("climax")
 	var stat_changes: Array[Dictionary] = []
 	var cycle_events: Array[Dictionary] = []
 	for stat_key_variant in role_defaults:
@@ -522,18 +571,6 @@ func commit_user_message(
 		var old_value := float(working_stats[stat_key])
 		var requested_delta := float(deltas[stat_key])
 		var new_value := clampf(old_value + requested_delta, 0.0, 100.0)
-		if stat_key == "climax" and arousal_was_full and new_value >= 100.0:
-			var reset_value := _deterministic_climax_reset(event_id, role)
-			cycle_events.append({
-				"kind": "climax_cycle_completed",
-				"role_id": role,
-				"event_id": event_id,
-				"old_value": old_value,
-				"reached_value": 100.0,
-				"reset_value": reset_value,
-				"occurred_at": int(Time.get_unix_time_from_system()),
-			})
-			new_value = reset_value
 		working_stats[stat_key] = new_value
 		stat_changes.append({
 			"stat": stat_key,
@@ -1367,6 +1404,24 @@ func _normalize_life_runtime(raw_value: Variant) -> Dictionary:
 	):
 		completed_sessions = clampi(int(raw_completed_sessions), 0, 2147483647)
 	var message_scheduler := _normalize_message_scheduler(raw.get("message_scheduler", {}))
+	var raw_money: Variant = raw.get("household_money", 0)
+	var household_money := 0
+	if (
+		not raw_money is bool
+		and (raw_money is int or raw_money is float)
+		and is_finite(float(raw_money))
+	):
+		household_money = clampi(int(raw_money), -9999999, 99999999)
+	var allowance_date := str(raw.get("last_allowance_date", "")).left(10)
+	var raw_money_event_ids = raw.get("money_event_ids", [])
+	var money_event_ids: Array[String] = []
+	if raw_money_event_ids is Array:
+		for raw_id in raw_money_event_ids:
+			var id_text := str(raw_id).left(128)
+			if not id_text.is_empty():
+				money_event_ids.append(id_text)
+		while money_event_ids.size() > 256:
+			money_event_ids.pop_front()
 	return {
 		"last_update_unix": last_update,
 		"last_user_activity_unix": last_user_activity,
@@ -1383,6 +1438,9 @@ func _normalize_life_runtime(raw_value: Variant) -> Dictionary:
 			"completed_sessions": completed_sessions,
 		},
 		"message_scheduler": message_scheduler,
+		"household_money": household_money,
+		"last_allowance_date": allowance_date,
+		"money_event_ids": money_event_ids,
 	}
 
 func _normalize_message_scheduler(raw_value: Variant) -> Dictionary:
@@ -1568,10 +1626,6 @@ func _deterministic_full_milestone_id(
 ) -> String:
 	var source := "%s|%s|%s|first-100" % [source_save_id, role, stat_key]
 	return "full-" + source.sha256_text().left(48)
-
-func _deterministic_climax_reset(source_event_id: String, role: String) -> float:
-	var digest := (source_event_id + "|" + role + "|climax-reset").sha256_buffer()
-	return float(int(digest[0]) % 21) if not digest.is_empty() else 0.0
 
 func _normalize_full_stat_milestones(
 	raw_value: Variant,

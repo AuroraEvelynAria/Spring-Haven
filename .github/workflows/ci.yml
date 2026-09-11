@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Companion Core
-        run: pip install -e ./companion-core
+        run: |
+          pip install -r ./companion-core/requirements.lock.txt
+          pip install -e ./companion-core
       - name: Run backend tests
         working-directory: companion-core
         run: python -m unittest discover -s tests -v
