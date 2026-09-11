@@ -2,7 +2,8 @@
 
 - 日期:2026-09-12
 - 评审基线:commit `3fc1bc6`(P0/P1 整改完成后)
-- 性质:架构决策记录(ADR)。评审对象为 world_time 单时钟、`<<STATE_DELTA>>`、分桶滞回摘要、WebSocket 推送、有状态会话层、单写队列的设计方案,与存量代码交叉对照。评审发现的高优先级事项已拆分为 issue #22-#28。
+- 性质:架构决策记录(ADR)。评审对象为 world_time 单时钟、`<<STATE_DELTA>>`、分桶滞回摘要、WebSocket 推送、有状态会话层、单写队列的设计方案,与存量代码交叉对照。评审发现的高优先级事项已拆分为 issue #22-#29。
+- 后续 ADR:记忆检索重构与记忆网络底层设计见 `godot/docs/adr/ADR-001-heartloom-retrieval-network.md`(schema v6 冻结稿,2026-09-12 已批准)。
 - 裁决说明:评审初稿的三处可选方案争议(SQLite 并发模型、事件溯源深度、多实例策略)已按 Alpha 迭代成本裁决,见 ADR-2/ADR-1/ADR-3。
 
 ---
