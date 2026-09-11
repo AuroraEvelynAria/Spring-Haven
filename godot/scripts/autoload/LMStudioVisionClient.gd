@@ -12,10 +12,17 @@ var model := ""
 var backend_preference := "auto"
 
 func _ready() -> void:
-	var environment_url := OS.get_environment("SPRING_HEAVEN_LM_STUDIO_URL").strip_edges()
-	var environment_model := OS.get_environment("SPRING_HEAVEN_LM_STUDIO_MODEL").strip_edges()
+	var environment_url := OS.get_environment("SPRING_HAVEN_LM_STUDIO_URL").strip_edges()
+	if environment_url.is_empty():
+		# Backward-compatible alias used by early Spring Heaven builds.
+		environment_url = OS.get_environment("SPRING_HEAVEN_LM_STUDIO_URL").strip_edges()
+	var environment_model := OS.get_environment("SPRING_HAVEN_LM_STUDIO_MODEL").strip_edges()
+	if environment_model.is_empty():
+		environment_model = OS.get_environment("SPRING_HEAVEN_LM_STUDIO_MODEL").strip_edges()
 	backend_preference = _normalize_backend_mode(
-		OS.get_environment("SPRING_HEAVEN_VISION_BACKEND")
+		OS.get_environment("SPRING_HAVEN_VISION_BACKEND")
+		if not OS.get_environment("SPRING_HAVEN_VISION_BACKEND").is_empty()
+		else OS.get_environment("SPRING_HEAVEN_VISION_BACKEND")
 	)
 	if not environment_url.is_empty():
 		base_url = environment_url.trim_suffix("/")

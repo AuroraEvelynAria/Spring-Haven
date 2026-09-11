@@ -99,8 +99,13 @@ class HeartloomStore:
             check_same_thread=False,
         )
         self._connection.row_factory = sqlite3.Row
-        self._configure()
-        self._migrate()
+        try:
+            self._configure()
+            self._migrate()
+        except BaseException:
+            # 初始化失败必须释放句柄，否则 Windows 上存档文件保持锁定。
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -291,6 +296,20 @@ class HeartloomStore:
         """
         with self._lock, self._connection:
             self._connection.executescript(schema)
+            # 前向兼容守卫：更高版本创建的库缺少本版本的列/表，静默降级会损坏数据。
+            existing_version_row = self._connection.execute(
+                "SELECT value FROM heartloom_meta WHERE key = 'schema_version'"
+            ).fetchone()
+            if existing_version_row is not None:
+                try:
+                    existing_version = int(str(existing_version_row[0]))
+                except (TypeError, ValueError):
+                    existing_version = 0
+                if existing_version > SCHEMA_VERSION:
+                    raise MemoryStoreError(
+                        f"Heartloom database schema version {existing_version} is newer "
+                        f"than this build supports ({SCHEMA_VERSION}); upgrade the app to open this save"
+                    )
             # 老库迁移：为已存在的 life_events 表补充 target_role 列（幂等）
             columns = {
                 str(row["name"])

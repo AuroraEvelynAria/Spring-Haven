@@ -331,7 +331,11 @@ func _check_first_run_model_setup() -> void:
 	if _model_setup_checked:
 		return
 	_model_setup_checked = true
-	var deadline := Time.get_ticks_msec() + 12000
+	# Windows Defender 首扫 python 运行时可能远超 12s；新装的本地运行时放宽等待窗口。
+	var deadline_ms := 12000
+	if bool(CompanionCore.get_managed_core_status().get("runtime_created", false)):
+		deadline_ms = 45000
+	var deadline := Time.get_ticks_msec() + deadline_ms
 	while not CompanionCore.is_active() and Time.get_ticks_msec() < deadline:
 		await get_tree().create_timer(0.25).timeout
 	if not CompanionCore.is_active():

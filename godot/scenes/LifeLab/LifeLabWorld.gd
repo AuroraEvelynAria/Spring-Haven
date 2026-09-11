@@ -714,6 +714,8 @@ func _run_social_dialogue(event: Dictionary) -> void:
 			{},
 			request_id
 		)
+		if not is_inside_tree():
+			return
 		if bool(result.get("ok", false)):
 			break
 		if not bool(result.get("retryable", false)) or attempt >= SOCIAL_DIALOGUE_MAX_ATTEMPTS - 1:

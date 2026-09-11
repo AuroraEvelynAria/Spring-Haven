@@ -12,6 +12,11 @@ const DEFAULT_SIZE := Vector2(310.0, 224.0)
 @export var motion_strength := 1.0
 
 var _manifest: Dictionary = {}
+# _palette/_draw_backdrop 处于每帧绘制路径：缓存调色板与样式框，
+# 仅在 manifest 或角色变化时重建，避免每帧解析十余个 Color。
+var _palette_cache: Dictionary = {}
+var _palette_cache_role := ""
+var _backdrop_style: StyleBoxFlat
 var _external_layers: Dictionary = {}
 var _layer_defaults: Dictionary = {}
 var _layer_root: Control
@@ -164,6 +169,7 @@ func _load_manifest() -> void:
 		push_warning("Portrait manifest is not a JSON object: %s" % manifest_path)
 		return
 	_manifest = (parsed as Dictionary).duplicate(true)
+	_palette_cache = {}
 	var layers_variant = _manifest.get("layers", [])
 	if not layers_variant is Array:
 		return
@@ -295,12 +301,13 @@ func _draw() -> void:
 
 func _draw_backdrop() -> void:
 	var palette := _palette()
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(palette.background, 0.94)
-	style.border_color = Color(palette.accent, 0.34)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(8)
-	draw_style_box(style, Rect2(Vector2.ZERO, size))
+	if _backdrop_style == null:
+		_backdrop_style = StyleBoxFlat.new()
+		_backdrop_style.set_border_width_all(1)
+		_backdrop_style.set_corner_radius_all(8)
+	_backdrop_style.bg_color = Color(palette.background, 0.94)
+	_backdrop_style.border_color = Color(palette.accent, 0.34)
+	draw_style_box(_backdrop_style, Rect2(Vector2.ZERO, size))
 	var horizon_y := size.y * 0.76
 	draw_rect(Rect2(0.0, horizon_y, size.x, size.y - horizon_y), Color(palette.secondary, 0.10))
 	for index in 5:
@@ -524,14 +531,18 @@ func _expression_from_body_state() -> String:
 		or float(stats.get("thirst", 0.0)) >= 86.0
 	):
 		return "worried"
-	if float(stats.get("arousal", 0.0)) >= 68.0:
-		return "shy"
 	if float(stats.get("mood", 50.0)) >= 72.0 or float(stats.get("intimacy", 50.0)) >= 82.0:
 		return "happy"
 	return "neutral"
 
 
 func _palette() -> Dictionary:
+	if _palette_cache.is_empty() or _palette_cache_role != role_id:
+		_palette_cache = _build_palette()
+		_palette_cache_role = role_id
+	return _palette_cache
+
+func _build_palette() -> Dictionary:
 	var fallback := (
 		{
 			"background": Color("#182126"),

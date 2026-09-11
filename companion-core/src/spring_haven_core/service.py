@@ -645,18 +645,19 @@ class CompanionService:
         """双角色记忆传播链：A 的高价值 digest 记忆会"被告诉"B。
 
         - 仅传播 importance >= 0.7 的记忆（小事不传播）
-        - 目标角色 = 另一角色（ling <-> nai）
+        - 目标角色 = 注册表中除发送者外的第一个角色（默认双角色即另一角色）
         - LLM 润色为"从 A 那里听说"的口吻；失败回退确定性拼接
         - 幂等：source_event_id = f"heard-{source_role}-{day_key}-{n}"
         """
         importance = float(digest_memory.get("importance", 0.0))
         if importance < 0.7:
             return None
-        target_role = "nai" if source_role == "ling" else "ling"
-        source = self.roles.get(source_role)
-        target = self.roles.get(target_role)
-        if source is None or target is None:
+        others = self.roles.others(source_role)
+        if not others:
             return None
+        target = others[0]
+        target_role = target.role_id
+        source = self.roles.get(source_role)
         content = str(digest_memory.get("content", "")).strip()
         title = str(digest_memory.get("title", "")).strip()
         if not content:
