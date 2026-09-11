@@ -70,6 +70,13 @@ func set_core_key(key: String) -> void:
 		return
 	_core_key = normalized
 	_invalidate_monitor_requests()
+	# 换 key 后旧请求的鉴权上下文失效：未发出的直接清除，在途的标记取消。
+	for pending_id in _pending_requests.keys():
+		var pending_info: Dictionary = _pending_requests[pending_id]
+		if bool(pending_info.get("in_flight", false)):
+			pending_info["cancelled"] = true
+		else:
+			_pending_requests.erase(pending_id)
 	_health_elapsed = 0.0
 	if _core_key.is_empty():
 		_should_monitor = false
@@ -131,6 +138,18 @@ func set_save_id(save_id: String) -> void:
 		push_warning("忽略不符合 Companion Core 协议的存档 ID：%s" % normalized)
 		_save_id = DEFAULT_SAVE_ID
 	_memory_elapsed = 0.0
+	# 换档后清除其他存档的待处理请求，防止旧 save_id 的请求被重试到新旅程。
+	for pending_id in _pending_requests.keys():
+		var pending_info: Dictionary = _pending_requests[pending_id]
+		var pending_save_id := str(
+			(pending_info.get("payload", {}) as Dictionary).get("save_id", "")
+		)
+		if pending_save_id == _save_id:
+			continue
+		if bool(pending_info.get("in_flight", false)):
+			pending_info["cancelled"] = true
+		else:
+			_pending_requests.erase(pending_id)
 
 func get_save_id() -> String:
 	return _save_id
@@ -264,6 +283,11 @@ func retry_request(request_id: String) -> bool:
 		return false
 	var info: Dictionary = _pending_requests[request_id]
 	if bool(info.get("in_flight", false)) or not bool(info.get("retryable", false)):
+		return false
+	# 防止旧存档的失败请求被重试进新旅程。
+	var payload_save_id := str((info.get("payload", {}) as Dictionary).get("save_id", ""))
+	if not payload_save_id.is_empty() and payload_save_id != _save_id:
+		_pending_requests.erase(request_id)
 		return false
 	_dispatch_request.call_deferred(request_id)
 	return true
@@ -783,6 +807,9 @@ func _dispatch_request(request_id: String) -> void:
 	if not _pending_requests.has(request_id):
 		return
 	info = _pending_requests[request_id]
+	if bool(info.get("cancelled", false)):
+		_pending_requests.erase(request_id)
+		return
 	info.in_flight = false
 	if not bool(result.get("ok", false)):
 		var message := str(result.get("message", "Companion Core 请求失败"))
@@ -805,6 +832,12 @@ func _dispatch_request(request_id: String) -> void:
 			_set_active(false, "Companion Core 鉴权失败")
 		request_failed.emit(request_id, message, retryable)
 		error_received.emit(message)
+		if retryable:
+			# 保留给手动重试，但打上时间戳供监控循环定期清理，避免常驻泄漏。
+			info.failed_at = Time.get_ticks_msec()
+			_pending_requests[request_id] = info
+		else:
+			_pending_requests.erase(request_id)
 		return
 
 	var response_data = result.get("data", {})
@@ -848,6 +881,8 @@ func _dispatch_request(request_id: String) -> void:
 	if reply.strip_edges().is_empty():
 		info.last_error = "Companion Core 返回了空回复"
 		info.retryable = true
+		info.failed_at = Time.get_ticks_msec()
+		_pending_requests[request_id] = info
 		request_failed.emit(request_id, info.last_error, true)
 		error_received.emit(info.last_error)
 		return
@@ -860,6 +895,14 @@ func _dispatch_request(request_id: String) -> void:
 	reply_finished.emit(request_id)
 
 func _check_health() -> void:
+	# 定期清理终态失败的待处理请求（保留 5 分钟给手动重试），防止常驻泄漏。
+	var sweep_now := Time.get_ticks_msec()
+	for stale_id in _pending_requests.keys():
+		var stale_info: Dictionary = _pending_requests[stale_id]
+		if bool(stale_info.get("in_flight", false)) or not stale_info.has("failed_at"):
+			continue
+		if sweep_now - int(stale_info["failed_at"]) > 300000:
+			_pending_requests.erase(stale_id)
 	if _health_request_in_flight or not _should_monitor or not has_credentials():
 		return
 	_health_request_in_flight = true

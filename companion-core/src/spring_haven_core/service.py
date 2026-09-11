@@ -547,23 +547,26 @@ class CompanionService:
         for milestone_id, met, title, importance in rules:
             if milestone_id in existing or not met:
                 continue
-            if not self.memory.mark_milestone(save_id=save_id, milestone_id=milestone_id):
+            # 先写记忆再占位：put_memory 失败时主键未被消耗，下一轮可重试。
+            try:
+                entry = self.memory.put_memory(
+                    {
+                        "save_id": save_id,
+                        "scope_role_id": "*",
+                        "kind": "relationship",
+                        "title": title,
+                        "content": f"{title}。这段共同生活的时光，值得永远记得。",
+                        "importance": importance,
+                        "confidence": 1.0,
+                        "always_active": True,
+                        "priority": 4,
+                        "half_life_days": 0.0,
+                    },
+                    source="milestone",
+                )
+            except MemoryStoreError as exc:
+                LOGGER.warning("milestone memory write failed for %s: %s", milestone_id, exc)
                 continue
-            entry = self.memory.put_memory(
-                {
-                    "save_id": save_id,
-                    "scope_role_id": "*",
-                    "kind": "relationship",
-                    "title": title,
-                    "content": f"{title}。这段共同生活的时光，值得永远记得。",
-                    "importance": importance,
-                    "confidence": 1.0,
-                    "always_active": True,
-                    "priority": 4,
-                    "half_life_days": 0.0,
-                },
-                source="milestone",
-            )
             self.memory.mark_milestone(
                 save_id=save_id,
                 milestone_id=milestone_id,

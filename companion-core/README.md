@@ -40,6 +40,22 @@ conversation-policy endpoint, the Godot toggle, and the `roles.json`
 whitelist and adult intimacy is not part of it; arbitrary fields from Godot
 are not forwarded.
 
+### Voice adapters
+
+Speech input (ASR) and output (TTS) are provided by pluggable protocol
+adapters configured per capability in the AI settings:
+
+- **GPT-SoVITS** — dedicated adapter (`gpt_sovits_get`) calling the
+  `GET /tts` endpoint; `ref_audio_path` comes from the per-role voice ID.
+- **Voicebox** — expose its OpenAI-compatible server mode and configure the
+  TTS capability with the `openai_speech` protocol; see
+  [Voicebox integration](../godot/docs/VoiceboxIntegration.md).
+- **CozyVoice** — point the TTS capability at any OpenAI-compatible CozyVoice
+  deployment (for example a CosyVoice2 API server exposing
+  `POST /v1/audio/speech`) using the `openai_speech` protocol.
+- **Generic OpenAI-compatible** — `/audio/transcriptions` (ASR) and
+  `/audio/speech` (TTS) work with any conforming endpoint.
+
 Set the provider credential and start the service:
 
 ```powershell
