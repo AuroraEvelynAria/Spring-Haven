@@ -504,6 +504,8 @@ class CompanionService:
 
     @staticmethod
     def _iso_week_key(unix: int) -> str:
+        # #23 交界待定桩:rate=1.0 下 ISO 周与世界周恒等;倍率启用(rate≠1)时
+        # 需迁移为世界周键并处理既有 weekly source_event_id 的幂等映射(ADR-001)。
         import datetime as _dt
 
         d = _dt.datetime.fromtimestamp(unix, tz=_dt.timezone.utc)

@@ -15,9 +15,12 @@ from typing import Any, Iterable
 
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
-SCHEMA_VERSION = 5
-# 未 ack 的离线投递保留 7 天：过期后不再阻塞事件生成，也不再投递/保留。
-LIFE_OUTBOX_TTL_SECONDS = 7 * 24 * 3600
+SCHEMA_VERSION = 6
+# 离线投递 TTL:7 世界天(#23 迁移后按 world_time 计算,不再使用现实时间)。
+LIFE_OUTBOX_TTL_WORLD_DAYS = 7.0
+# 三态生命周期阈值(ADR-001 D5,后端常量,不开放 UI 配置;Phase 3 启用)。
+DORMANT_AFTER_WORLD_DAYS = 14.0
+ARCHIVE_CONFIDENCE_THRESHOLD = 0.15
 SHARED_SCOPE = "*"
 
 MEMORY_KINDS = {
@@ -151,6 +154,88 @@ class HeartloomStore:
         finally:
             target.close()
 
+    def _read_schema_version(self) -> int | None:
+        try:
+            row = self._connection.execute(
+                "SELECT value FROM heartloom_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None  # 全新库:meta 表尚未创建
+        if row is None:
+            return None
+        try:
+            return int(str(row[0]))
+        except (TypeError, ValueError):
+            return 0
+
+    def _existing_journey_ids(self) -> list[str]:
+        rows = self._connection.execute(
+            """
+            SELECT save_id FROM memory_entries
+            UNION SELECT save_id FROM life_outbox
+            UNION SELECT save_id FROM life_events
+            """
+        ).fetchall()
+        return [str(row["save_id"]) for row in rows]
+
+    def _journey_anchor_real(self, save_id: str) -> int:
+        """旅程世界时钟锚点 = 该旅程最早一条记忆/生活事件的真实时刻。"""
+        row = self._connection.execute(
+            "SELECT MIN(created_at) AS first_at FROM memory_entries WHERE save_id = ?",
+            (save_id,),
+        ).fetchone()
+        if row is not None and row["first_at"] is not None:
+            return int(row["first_at"])
+        row = self._connection.execute(
+            "SELECT MIN(occurred_at_unix) AS first_at FROM life_events WHERE save_id = ?",
+            (save_id,),
+        ).fetchone()
+        if row is not None and row["first_at"] is not None:
+            return int(row["first_at"])
+        return int(time.time())
+
+    def _journey_clock(self, save_id: str) -> tuple[int, float, float]:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT anchor_real, world_value, rate FROM journey_clock WHERE save_id = ?",
+                (save_id,),
+            ).fetchone()
+            if row is not None:
+                return int(row["anchor_real"]), float(row["world_value"]), float(row["rate"])
+            anchor = self._journey_anchor_real(save_id)
+            with self._connection:
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO journey_clock(save_id, anchor_real, world_value, rate) "
+                    "VALUES (?, ?, 0.0, 1.0)",
+                    (save_id, anchor),
+                )
+            return anchor, 0.0, 1.0
+
+    def world_now(self, save_id: str) -> float:
+        """旅程当前世界时间(REAL,单位 = 世界天)。唯一读取现实时钟的位置。"""
+        return self.world_from_real(save_id, time.time())
+
+    def world_from_real(self, save_id: str, real_ts: float) -> float:
+        anchor, world_value, rate = self._journey_clock(save_id)
+        return world_value + (float(real_ts) - anchor) / 86400.0 * rate
+
+    def set_journey_rate(self, save_id: str, rate: float) -> None:
+        """Phase 2+(离线推演倍率)入口:重锚定时钟并换挡,保证时间连续。"""
+        if rate <= 0:
+            raise MemoryStoreError("world clock rate must be positive")
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO journey_clock(save_id, anchor_real, world_value, rate)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(save_id) DO UPDATE SET
+                    anchor_real = excluded.anchor_real,
+                    world_value = excluded.world_value,
+                    rate = excluded.rate
+                """,
+                (save_id, int(time.time()), self.world_now(save_id), float(rate)),
+            )
+
     def _configure(self) -> None:
         with self._lock:
             self._connection.execute("PRAGMA foreign_keys = ON")
@@ -267,7 +352,8 @@ class HeartloomStore:
             payload_json TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             available_at INTEGER NOT NULL,
-            acked_at INTEGER NOT NULL DEFAULT 0
+            acked_at INTEGER NOT NULL DEFAULT 0,
+            world_created_at REAL NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_life_outbox_pending
             ON life_outbox(save_id, acked_at, available_at, created_at);
@@ -303,23 +389,74 @@ class HeartloomStore:
             source_memory_id TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (save_id, milestone_id)
         );
+
+        CREATE TABLE IF NOT EXISTS journey_clock (
+            save_id     TEXT PRIMARY KEY,
+            anchor_real INTEGER NOT NULL,
+            world_value REAL NOT NULL DEFAULT 0.0,
+            rate        REAL NOT NULL DEFAULT 1.0
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_links (
+            link_id          TEXT PRIMARY KEY,
+            save_id          TEXT NOT NULL,
+            src_memory_id    TEXT NOT NULL,
+            dst_memory_id    TEXT NOT NULL,
+            link_type        TEXT NOT NULL
+                             CHECK(link_type IN ('causal','association','spread','milestone')),
+            link_strength    REAL NOT NULL DEFAULT 0.5,
+            reason           TEXT NOT NULL DEFAULT '',
+            world_created_at REAL NOT NULL,
+            UNIQUE(src_memory_id, dst_memory_id, link_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_links_src
+            ON memory_links(save_id, src_memory_id, link_strength DESC);
+        CREATE INDEX IF NOT EXISTS idx_links_dst
+            ON memory_links(save_id, dst_memory_id);
+        CREATE INDEX IF NOT EXISTS idx_links_type
+            ON memory_links(save_id, link_type);
+
+        CREATE TABLE IF NOT EXISTS role_milestones (
+            milestone_id      TEXT PRIMARY KEY,
+            save_id           TEXT NOT NULL,
+            role_id           TEXT NOT NULL,
+            rule_id           TEXT NOT NULL,
+            title             TEXT NOT NULL DEFAULT '',
+            description       TEXT NOT NULL DEFAULT '',
+            icon              TEXT NOT NULL DEFAULT '',
+            source_memory_id  TEXT NOT NULL DEFAULT '',
+            unlocked_world_at REAL NOT NULL,
+            created_at        INTEGER NOT NULL,
+            UNIQUE(save_id, role_id, rule_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_role_ms_save
+            ON role_milestones(save_id, role_id, unlocked_world_at DESC);
+
+        CREATE TABLE IF NOT EXISTS state_events (
+            event_id     TEXT PRIMARY KEY,
+            save_id      TEXT NOT NULL,
+            role_id      TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            delta_json   TEXT NOT NULL DEFAULT '{}',
+            world_time   REAL NOT NULL,
+            real_unix    INTEGER NOT NULL,
+            note         TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_state_events_save_world
+            ON state_events(save_id, role_id, world_time);
         """
+        # ADR-001 Phase 1:升级到 v6 前强制备份(文件库;可重复执行,已是 v6 不重复备份)
+        stored_version = self._read_schema_version()
+        if stored_version is not None and stored_version < 6 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v6.backup")
         with self._lock, self._connection:
             self._connection.executescript(schema)
-            # 前向兼容守卫：更高版本创建的库缺少本版本的列/表，静默降级会损坏数据。
-            existing_version_row = self._connection.execute(
-                "SELECT value FROM heartloom_meta WHERE key = 'schema_version'"
-            ).fetchone()
-            if existing_version_row is not None:
-                try:
-                    existing_version = int(str(existing_version_row[0]))
-                except (TypeError, ValueError):
-                    existing_version = 0
-                if existing_version > SCHEMA_VERSION:
-                    raise MemoryStoreError(
-                        f"Heartloom database schema version {existing_version} is newer "
-                        f"than this build supports ({SCHEMA_VERSION}); upgrade the app to open this save"
-                    )
+            stored_version = self._read_schema_version()
+            if stored_version is not None and stored_version > SCHEMA_VERSION:
+                raise MemoryStoreError(
+                    f"Heartloom database schema version {stored_version} is newer "
+                    f"than this build supports ({SCHEMA_VERSION}); upgrade the app to open this save"
+                )
             # 老库迁移：为已存在的 life_events 表补充 target_role 列（幂等）
             columns = {
                 str(row["name"])
@@ -331,6 +468,92 @@ class HeartloomStore:
                 self._connection.execute(
                     "ALTER TABLE life_events ADD COLUMN target_role TEXT NOT NULL DEFAULT ''"
                 )
+            # ===== v6(ADR-001):world_time 列守卫(幂等) =====
+            memory_columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(memory_entries)"
+                ).fetchall()
+            }
+            for ddl in (
+                "ALTER TABLE memory_entries ADD COLUMN world_created_at REAL NOT NULL DEFAULT 0",
+                "ALTER TABLE memory_entries ADD COLUMN world_updated_at REAL NOT NULL DEFAULT 0",
+                "ALTER TABLE memory_entries ADD COLUMN last_recalled_world REAL NOT NULL DEFAULT 0",
+                "ALTER TABLE memory_entries ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active'",
+                "ALTER TABLE memory_entries ADD COLUMN lifecycle_changed_world REAL NOT NULL DEFAULT 0",
+                "ALTER TABLE memory_entries ADD COLUMN is_second_hand INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE memory_entries ADD COLUMN embedding_json TEXT",
+                "ALTER TABLE memory_entries ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''",
+            ):
+                column_name = ddl.split("ADD COLUMN ", 1)[1].split(" ", 1)[0]
+                if column_name not in memory_columns:
+                    self._connection.execute(ddl)
+            outbox_columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(life_outbox)"
+                ).fetchall()
+            }
+            if "world_created_at" not in outbox_columns:
+                self._connection.execute(
+                    "ALTER TABLE life_outbox ADD COLUMN world_created_at REAL NOT NULL DEFAULT 0"
+                )
+            # 既有旅程的时钟锚点初始化(新旅程在首次 world_now 时惰性创建)
+            if stored_version is None or stored_version < 6:
+                # 二手传闻标记:传播链记忆(heard_from_*)回填(ADR-001 D5)
+                self._connection.execute(
+                    "UPDATE memory_entries SET is_second_hand = 1 "
+                    "WHERE source LIKE 'heard_from_%' AND is_second_hand = 0"
+                )
+                for save_id in self._existing_journey_ids():
+                    anchor = self._journey_anchor_real(save_id)
+                    self._connection.execute(
+                        "INSERT OR IGNORE INTO journey_clock(save_id, anchor_real, world_value, rate) "
+                        "VALUES (?, ?, 0.0, 1.0)",
+                        (save_id, anchor),
+                    )
+                # world 列回填:经各旅程时钟换算,确定性幂等(仅升级时执行一次)
+                for save_id in self._existing_journey_ids():
+                    anchor, world_value, rate = self._journey_clock(save_id)
+                    memory_rows = self._connection.execute(
+                        "SELECT memory_id, created_at, updated_at, last_recalled_at "
+                        "FROM memory_entries WHERE save_id = ?",
+                        (save_id,),
+                    ).fetchall()
+                    self._connection.executemany(
+                        """
+                        UPDATE memory_entries
+                        SET world_created_at = ?, world_updated_at = ?, last_recalled_world = ?
+                        WHERE memory_id = ?
+                        """,
+                        [
+                            (
+                                world_value + (int(row["created_at"]) - anchor) / 86400.0 * rate,
+                                world_value + (int(row["updated_at"]) - anchor) / 86400.0 * rate,
+                                (
+                                    world_value + (int(row["last_recalled_at"]) - anchor) / 86400.0 * rate
+                                    if int(row["last_recalled_at"]) > 0
+                                    else 0.0
+                                ),
+                                str(row["memory_id"]),
+                            )
+                            for row in memory_rows
+                        ],
+                    )
+                    outbox_rows = self._connection.execute(
+                        "SELECT delivery_id, created_at FROM life_outbox WHERE save_id = ?",
+                        (save_id,),
+                    ).fetchall()
+                    self._connection.executemany(
+                        "UPDATE life_outbox SET world_created_at = ? WHERE delivery_id = ?",
+                        [
+                            (
+                                world_value + (int(row["created_at"]) - anchor) / 86400.0 * rate,
+                                str(row["delivery_id"]),
+                            )
+                            for row in outbox_rows
+                        ],
+                    )
             self._set_meta("schema_version", str(SCHEMA_VERSION))
             self._set_meta("engine", "heartloom")
             self._set_meta("display_name", HEARTLOOM_DISPLAY_NAME)
@@ -480,6 +703,8 @@ class HeartloomStore:
         )
         enabled = bool(raw.get("enabled", True))
         now = int(time.time())
+        world_now_value = self.world_now(save_id)
+        is_second_hand = 1 if source.startswith("heard_from_") else 0
 
         with self._lock, self._connection:
             existing = self._connection.execute(
@@ -493,8 +718,9 @@ class HeartloomStore:
                     memory_id, save_id, scope_role_id, kind, title, content,
                     trigger_terms_json, always_active, priority, importance,
                     confidence, valence, half_life_days, influence_json, source,
-                    source_event_id, created_at, updated_at, enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_event_id, created_at, updated_at, enabled,
+                    world_created_at, world_updated_at, is_second_hand
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     save_id = excluded.save_id,
                     scope_role_id = excluded.scope_role_id,
@@ -510,7 +736,8 @@ class HeartloomStore:
                     half_life_days = excluded.half_life_days,
                     influence_json = excluded.influence_json,
                     updated_at = excluded.updated_at,
-                    enabled = excluded.enabled
+                    enabled = excluded.enabled,
+                    world_updated_at = excluded.world_updated_at
                 """,
                 (
                     memory_id,
@@ -532,6 +759,9 @@ class HeartloomStore:
                     created_at,
                     now,
                     int(enabled),
+                    world_now_value,
+                    world_now_value,
+                    is_second_hand,
                 ),
             )
             self._connection.execute("DELETE FROM memory_terms WHERE memory_id = ?", (memory_id,))
@@ -644,7 +874,7 @@ class HeartloomStore:
                         item["weight"]
                     )
 
-        now = int(time.time())
+        world_now_value = self.world_now(save_id)
         scored: list[tuple[float, sqlite3.Row]] = []
         normalized_query = _normalize_text(query)
         for row in rows:
@@ -656,7 +886,8 @@ class HeartloomStore:
             trigger_hit = any(_normalize_text(item) in normalized_query for item in triggers if item)
             if trigger_hit:
                 lexical = max(lexical, 1.0)
-            age_days = max(0.0, (now - int(row["updated_at"])) / 86_400.0)
+            # 衰减/recency 全部基于 world_time(世界天),不再读取现实时间(#23)
+            age_days = max(0.0, world_now_value - float(row["world_updated_at"]))
             half_life = float(row["half_life_days"])
             decay = 1.0 if half_life <= 0.0 else math.pow(0.5, age_days / half_life)
             importance = float(row["importance"]) * decay
@@ -673,15 +904,16 @@ class HeartloomStore:
         result = [self._memory_row(row, score=score) for score, row in selected]
 
         if record_access:
+            now = int(time.time())  # 现实时间仅作日志;模拟维度写 last_recalled_world
             with self._lock, self._connection:
                 if selected:
                     self._connection.executemany(
                         """
                         UPDATE memory_entries
-                        SET last_recalled_at = ?, recall_count = recall_count + 1
+                        SET last_recalled_at = ?, last_recalled_world = ?, recall_count = recall_count + 1
                         WHERE memory_id = ?
                         """,
-                        [(now, str(row["memory_id"])) for _, row in selected],
+                        [(now, world_now_value, str(row["memory_id"])) for _, row in selected],
                     )
                 self._set_meta("last_recall_at", str(now))
                 self._set_meta("last_recall_count", str(len(selected)))
@@ -850,6 +1082,8 @@ class HeartloomStore:
             node["display_title"] = _graph_preview(display_title, 42)
 
         candidates: list[dict[str, Any]] = []
+        # 世界间隔换算系数只取一次(#23):时间分段随倍率缩放,循环内不做时钟查询
+        world_rate = self._journey_clock(save_id)[2]
         for left_index, left in enumerate(entries):
             left_id = str(left["memory_id"])
             left_terms = vector_maps.get(left_id, {})
@@ -910,7 +1144,9 @@ class HeartloomStore:
                     strength += 0.015
                 if str(left.get("scope_role_id", "")) == str(right.get("scope_role_id", "")):
                     strength += 0.010
-                time_gap = abs(int(left.get("created_at", 0)) - int(right.get("created_at", 0)))
+                time_gap = abs(
+                    int(left.get("created_at", 0)) - int(right.get("created_at", 0))
+                ) * world_rate  # 世界间隔随倍率缩放(#23)
                 # 时间分段权重：让时间上相关的事件自然浮现
                 if time_gap <= 3_600:
                     strength += 0.18
@@ -1267,12 +1503,18 @@ class HeartloomStore:
         requested = max(1, min(32, int(limit)))
         with self._lock, self._connection:
             # 过期未 ack 的投递直接清理：客户端长期不启动时避免饿死离线生成与表膨胀。
+            # TTL 按 world_time(世界天)计算(#23),现实时间仅经 journey_clock 换算。
             self._connection.execute(
                 """
                 DELETE FROM life_outbox
-                WHERE acked_at = 0 AND created_at <= ?
+                WHERE acked_at = 0
+                  AND world_created_at <= (
+                      SELECT jc.world_value + (? - jc.anchor_real) / 86400.0 * jc.rate
+                      FROM journey_clock AS jc
+                      WHERE jc.save_id = life_outbox.save_id
+                  )
                 """,
-                (timestamp - LIFE_OUTBOX_TTL_SECONDS,),
+                (timestamp - LIFE_OUTBOX_TTL_WORLD_DAYS * 86400.0,),
             )
             rows = self._connection.execute(
                 """
@@ -1284,12 +1526,16 @@ class HeartloomStore:
                       SELECT 1 FROM life_outbox AS outbox
                       WHERE outbox.save_id = state.save_id
                         AND outbox.acked_at = 0
-                        AND outbox.created_at > ?
+                        AND outbox.world_created_at > (
+                            SELECT jc.world_value + (? - jc.anchor_real) / 86400.0 * jc.rate
+                            FROM journey_clock AS jc
+                            WHERE jc.save_id = outbox.save_id
+                        )
                   )
                 ORDER BY state.next_event_at ASC
                 LIMIT ?
                 """,
-                (timestamp, timestamp - LIFE_OUTBOX_TTL_SECONDS, requested),
+                (timestamp, timestamp - LIFE_OUTBOX_TTL_WORLD_DAYS * 86400.0, requested),
             ).fetchall()
         return [self._life_state_row(row) for row in rows]
 
@@ -1368,8 +1614,8 @@ class HeartloomStore:
                 """
                 INSERT INTO life_outbox (
                     delivery_id, save_id, role_id, kind, payload_json,
-                    created_at, available_at, acked_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    created_at, available_at, acked_at, world_created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(delivery_id) DO NOTHING
                 """,
                 (
@@ -1380,6 +1626,7 @@ class HeartloomStore:
                     encoded_payload,
                     timestamp,
                     available,
+                    self.world_now(save_id),
                 ),
             )
             row = self._connection.execute(
@@ -1401,11 +1648,11 @@ class HeartloomStore:
                 """
                 SELECT * FROM life_outbox
                 WHERE save_id = ? AND acked_at = 0 AND available_at <= ?
-                  AND created_at > ?
+                  AND world_created_at > ?
                 ORDER BY created_at ASC, delivery_id ASC
                 LIMIT ?
                 """,
-                (save_id, timestamp, timestamp - LIFE_OUTBOX_TTL_SECONDS, requested),
+                (save_id, timestamp, self.world_now(save_id) - LIFE_OUTBOX_TTL_WORLD_DAYS, requested),
             ).fetchall()
         return [self._life_outbox_row(row) for row in rows]
 
@@ -1583,7 +1830,12 @@ class HeartloomStore:
         return [self._life_event_row(row) for row in rows]
 
     def digest_pending_saves(self, now: int | None = None) -> list[dict[str, str]]:
-        """Saves that have life events older than 12h not yet digested (per role/day)."""
+        """Saves that have life events older than 12h not yet digested (per role/day).
+
+        #23 交界待定桩(#22/#23 联合评审):day_key 暂为现实日期,12h 冷却暂按
+        现实时间(rate=1.0 下与 world_time 恒等);world_time 倍率启用(rate≠1)
+        时需迁移为世界日键并回填 digest_state,详见 ADR-001。
+        """
         timestamp = max(1, int(now or time.time()))
         cutoff = timestamp - 12 * 3600
         with self._lock:
