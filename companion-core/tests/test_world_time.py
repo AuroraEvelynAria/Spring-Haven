@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import time
@@ -14,6 +15,12 @@ from spring_haven_core.memory import (
     HeartloomStore,
     MemoryStoreError,
 )
+from spring_haven_core.service import CompanionService
+
+try:  # discover 模式可直接导入;单模块直跑时回退包路径
+    from test_contract import FakeProvider, make_registry
+except ImportError:
+    from tests.test_contract import FakeProvider, make_registry
 
 BASE_TS = 1_700_000_000
 DAY = 86_400
@@ -394,6 +401,75 @@ class RecallWorldAgeTests(unittest.TestCase):
         recalled = self.store.recall(save_id="save-1", role_id="ling", query="一起去看日出")
         self.assertEqual(len(recalled), 2)
         self.assertEqual(recalled[0]["title"], "新记忆", "世界时间更近的记忆应排在前面")
+
+
+class LifeDecayEngineTests(unittest.TestCase):
+    """#22 后端真相源:world_time 衰减引擎(flag 开关,默认 client 不生效)。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.roles = make_registry(self.root)
+        self.store = HeartloomStore(Path(self.temp.name) / "decay.sqlite3", self.roles.ids())
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def test_decay_applies_when_backend_truth(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot={"role_id": "ling", "stats": {"hunger": 50.0, "stamina": 60.0}},
+            last_user_activity_at=0, next_event_at=0,
+        )
+        # 首次调用建立 decay_world 水位,不产生衰减
+        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        # 世界时钟前进 0.5 天(锚点回拨)
+        self.store._connection.execute(
+            "UPDATE journey_clock SET anchor_real = anchor_real - 43200 WHERE save_id = 'save-1'"
+        )
+        self.store._connection.commit()
+        applied = service.advance_life_state_decay("save-1")
+        self.assertIsNotNone(applied)
+        self.assertAlmostEqual(applied["hunger"], 36.0, delta=0.6)
+        self.assertAlmostEqual(applied["stamina"], -14.4, delta=0.6)
+        snapshot = json.loads(
+            self.store._connection.execute(
+                "SELECT snapshot_json FROM life_state WHERE save_id = 'save-1'"
+            ).fetchone()[0]
+        )
+        self.assertAlmostEqual(snapshot["stats"]["hunger"], 86.0, delta=0.6)
+        events = self.store._connection.execute(
+            "SELECT COUNT(*) FROM state_events WHERE kind = 'decay'"
+        ).fetchone()[0]
+        self.assertEqual(int(events), 1)
+
+    def test_decay_requires_backend_truth_flag(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="client"
+        )
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot={"role_id": "ling", "stats": {"hunger": 50.0}},
+            last_user_activity_at=0, next_event_at=0,
+        )
+        self.assertIsNone(service.advance_life_state_decay("save-1"))
+
+    def test_decay_noop_when_world_time_not_advanced(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot={"role_id": "ling", "stats": {"hunger": 50.0}},
+            last_user_activity_at=0, next_event_at=0,
+        )
+        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        self.assertIsNone(service.advance_life_state_decay("save-1"))
 
 
 if __name__ == "__main__":

@@ -61,6 +61,7 @@ def build_app(
             memory_organizer_enabled=config.memory_organizer_enabled,
             memory_organizer_max_entries=config.memory_organizer_max_entries,
             weather_location=config.weather_location,
+            state_truth_source=config.state_truth_source,
         )
     else:
         runtime = service
@@ -910,6 +911,16 @@ async def _life_scheduler_loop(app: web.Application) -> None:
             raise
         except Exception:
             LOGGER.exception("unexpected offline life scheduler failure")
+        try:
+            decay_result = await asyncio.to_thread(
+                app[SERVICE_KEY].advance_life_state_decay_all
+            )
+            if decay_result:
+                LOGGER.info("life decay advanced: %s", decay_result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("unexpected life decay failure")
         digest_ticks += 1
         if digest_ticks >= 15:  # every ~15 minutes
             digest_ticks = 0

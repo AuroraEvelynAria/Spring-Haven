@@ -32,6 +32,8 @@ class CoreConfig:
     memory_organizer_max_entries: int = 3
     weather_location: str = ""  # 城市名或 "lat,lon"；空则不用真实天气
     rag_import_allow_private: bool = False  # 允许 web 导入指向私网/环回地址
+    state_truth_source: str = "client"  # "client"=现状 | "backend"=#22 后端真相源+世界时间衰减
+    rag_import_allow_private: bool = False  # 允许 web 导入指向私网/环回地址
 
     @classmethod
     def load(cls, path: str | Path) -> "CoreConfig":
@@ -114,6 +116,11 @@ class CoreConfig:
             weather_location=str(raw.get("weather_location", "")).strip()[:120],
             rag_import_allow_private=bool(
                 raw.get("rag_import_allow_private", False)
+            ),
+            state_truth_source=(
+                "backend"
+                if str(raw.get("state_truth_source", "client")).strip() == "backend"
+                else "client"
             ),
         )
         if len(config.api_key) < 32:
