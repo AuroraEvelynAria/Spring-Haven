@@ -77,6 +77,8 @@ var _core_outbox_poll_in_flight := false
 # _advance_needs,改为消费同步响应携带的权威数值。Core 离线时属性冻结,
 # 重连后由衰减水位一次性补齐。
 var _backend_truth := false
+# 自上次成功同步以来的本地生理增量(互动/自理),随快照上报 Core 调和
+var _pending_stat_deltas: Dictionary = {}
 
 func _ready() -> void:
 	_rng.randomize()
@@ -85,6 +87,7 @@ func _ready() -> void:
 	MessageScheduler.background_delivery_ready.connect(_on_scheduled_background_delivery)
 	Settings.ambient_dialogue_settings_changed.connect(_on_ambient_dialogue_settings_changed)
 	Settings.runtime_tuning_changed.connect(_on_runtime_tuning_changed)
+	Global.stat_updates_applied.connect(_on_stat_updates_applied)
 	_on_runtime_tuning_changed(Settings.get_runtime_tuning())
 	_initialize_runtime.call_deferred()
 	MessageScheduler.request_drain.call_deferred()
@@ -132,6 +135,7 @@ func _sync_core_life_state() -> void:
 		"local_time": Time.get_datetime_dict_from_system(),
 		"weather": weather,
 		"household_money": int(Global.life_runtime.get("household_money", 0)),
+		"stat_deltas": _pending_stat_deltas.duplicate(true),
 		"decay_scales": {
 			"life_time_scale": float(Settings.get_runtime_tuning_value("life_time_scale", 1.0)),
 			"role_scales": {
@@ -152,10 +156,24 @@ func _sync_core_life_state() -> void:
 			_requeue_reported_life_events(recent_events)
 		status_changed.emit("core_life_sync_degraded", str(result.get("message", "生活状态同步失败")))
 	else:
+		_pending_stat_deltas.clear()
 		var data = result.get("data", {})
 		if data is Dictionary:
 			_apply_real_weather(data)
 			_apply_backend_truth(data)
+
+func _on_stat_updates_applied(role: String, updates: Dictionary, event_id: String) -> void:
+	if event_id.begins_with("core-decay-"):
+		return
+	if role not in ["ling", "nai"] or updates.is_empty():
+		return
+	var role_deltas: Dictionary = _pending_stat_deltas.get(role, {})
+	for stat_variant in updates:
+		var stat := str(stat_variant)
+		if stat not in ["health", "stamina", "hunger", "thirst", "awake", "urine", "stress"]:
+			continue
+		role_deltas[stat] = float(role_deltas.get(stat, 0.0)) + float(updates[stat_variant])
+	_pending_stat_deltas[role] = role_deltas
 
 func _apply_backend_truth(data: Dictionary) -> void:
 	var truth_source := str(data.get("truth_source", "client"))

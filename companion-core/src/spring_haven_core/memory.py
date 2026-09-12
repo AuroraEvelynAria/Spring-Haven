@@ -868,6 +868,70 @@ class HeartloomStore:
             source="conversation_user",
         )
 
+    def _apply_client_stat_deltas(
+        self,
+        save_id: str,
+        snapshot: dict[str, Any],
+        decay_state: dict[str, Any],
+    ) -> None:
+        """#22 协议调和:把客户端自上次同步以来的互动增量并入权威衰减状态。
+
+        互动结算在客户端(Phase 1 范围),而后端按 world_time 持有六项生理
+        属性的权威值;不同步这些增量,客户端的喂食/喂水等效果会在下一次
+        同步时被权威数值回滚。增量应用后记录 state_events 供审计。
+        """
+        raw_deltas = snapshot.get("stat_deltas")
+        if not isinstance(raw_deltas, dict) or not raw_deltas:
+            return
+        if not decay_state:
+            return
+        now = int(time.time())
+        for role_id, role_deltas_variant in raw_deltas.items():
+            role_key = str(role_id)
+            if not isinstance(role_deltas_variant, dict):
+                continue
+            role_state = decay_state.get(role_key)
+            if not isinstance(role_state, dict):
+                continue
+            stats_variant = role_state.get("stats")
+            stats = dict(stats_variant) if isinstance(stats_variant, dict) else {}
+            if not stats:
+                continue
+            applied: dict[str, float] = {}
+            for stat, delta_variant in role_deltas_variant.items():
+                stat_key = str(stat)
+                if stat_key not in stats:
+                    continue
+                try:
+                    delta = float(delta_variant)
+                except (TypeError, ValueError):
+                    continue
+                new_value = max(0.0, min(100.0, float(stats[stat_key]) + delta))
+                rounded = round(new_value - float(stats[stat_key]), 2)
+                if abs(rounded) < 0.01:
+                    continue
+                stats[stat_key] = round(new_value, 2)
+                applied[stat_key] = rounded
+            if not applied:
+                continue
+            decay_state[role_key]["stats"] = stats
+            self._connection.execute(
+                """
+                INSERT INTO state_events (
+                    event_id, save_id, role_id, kind, delta_json, world_time, real_unix, note
+                ) VALUES (?, ?, ?, 'interaction_delta', ?, ?, ?, ?)
+                """,
+                (
+                    "ste-" + uuid.uuid4().hex,
+                    save_id,
+                    role_key,
+                    _json(applied),
+                    self.world_now(save_id),
+                    now,
+                    "client interaction reconciliation",
+                ),
+            )
+
     def consolidate_duplicate_user_memories(self, save_id: str = "") -> dict[str, int]:
         """合并逐字重复的 conversation_user 记忆(存量清理,幂等)。
 
@@ -2207,6 +2271,7 @@ class HeartloomStore:
                             "stats": dict(role_stats),
                             "decay_world": world_now_value,
                         }
+            self._apply_client_stat_deltas(save_id, snapshot, decay_state)
             if decay_state:
                 snapshot["decay_state"] = decay_state
         encoded_snapshot = _json(snapshot)
