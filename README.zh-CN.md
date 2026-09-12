@@ -1,6 +1,6 @@
 
 <div align="center">
-  <img src="godot/icon.svg" alt="春日庭院" width="120"/>
+  <img src="https://github.com/user-attachments/assets/dc30093f-df9c-4ad8-9225-73855975d766" alt="春日庭院" width="100%"/>
   
   # 🌿 春日庭院
   
