@@ -241,15 +241,8 @@ func _make_menu_button(text: String, filled: bool) -> Button:
 	button.add_theme_stylebox_override("normal", _menu_style(filled, false))
 	button.add_theme_stylebox_override("hover", _menu_style(filled, true))
 	button.add_theme_stylebox_override("pressed", _menu_style(false, true))
-	button.mouse_entered.connect(func():
-		UIBREATH.stop(button)
-		_scale_button(button, 1.04)
-	)
-	button.mouse_exited.connect(func():
-		_scale_button(button, 1.0)
-		if filled:
-			UIBREATH.start(button, 0.015, 2.8)  # 主按钮待机呼吸;次级按钮保持安静
-	)
+	button.mouse_entered.connect(func(): _scale_button(button, 1.04))
+	button.mouse_exited.connect(func(): _scale_button(button, 1.0))
 	return button
 
 func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
@@ -297,14 +290,14 @@ func _animate_intro() -> void:
 		tween.tween_property(child, "modulate:a", 1.0, 0.55).set_ease(Tween.EASE_OUT)
 		tween.tween_property(child, "position", target_position, 0.55).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 		delay += 0.09
-	# 呼吸感:入场结束后,标题与主按钮进入待机呼吸(幅度 1.5%/0.8%,克制)
+	# 呼吸感:入场结束后,标题与主按钮进入亮度呼吸(纯 modulate,零几何变化)
 	var breath_timer := create_tween()
 	breath_timer.tween_interval(delay + 0.6)
 	breath_timer.tween_callback(func():
 		if is_instance_valid(_title):
-			UIBREATH.start(_title, 0.008, 4.2)
+			UIBREATH.breathe(_title, 0.05, 4.2)
 		if is_instance_valid(_start_button) and not _start_button.disabled:
-			UIBREATH.start(_start_button, 0.015, 2.8)
+			UIBREATH.breathe(_start_button, 0.04, 2.8)
 	)
 
 func _scale_button(button: Button, scale_value: float) -> void:
