@@ -282,7 +282,7 @@ func _load_graph() -> void:
 		_canvas.set_graph({})
 		_empty_state.text = "无法读取记忆网络\n%s" % str(result.get("message", "Companion Core 请求失败"))
 		_status.text = "加载失败"
-		_status.add_theme_color_override("font_color", Color("#D9534F"))
+		_status.add_theme_color_override("font_color", ThemeMgr.SEMANTIC_DANGER)
 		_clear_details()
 		return
 	var data = result.get("data", {})

@@ -55,32 +55,53 @@ func _initialize_particles() -> void:
 	var viewport_size := get_viewport_rect().size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		viewport_size = Vector2(1280, 720)
-	for index in 72:
+	# 春日落花:更大的花瓣状粒子,缓落+摇摆+旋转(替代原 1px 上升微尘)
+	for index in 26:
 		_particles.append({
-			"position": Vector2(_rng.randf_range(0.0, viewport_size.x), _rng.randf_range(0.0, viewport_size.y)),
-			"speed": _rng.randf_range(5.0, 18.0),
-			"radius": _rng.randf_range(0.6, 1.8),
-			"alpha": _rng.randf_range(0.08, 0.32),
-			"phase": _rng.randf_range(0.0, TAU)
+			"position": Vector2(_rng.randf_range(0.0, viewport_size.x), _rng.randf_range(-40.0, viewport_size.y)),
+			"speed": _rng.randf_range(14.0, 34.0),
+			"radius": _rng.randf_range(3.2, 6.8),
+			"alpha": _rng.randf_range(0.22, 0.5),
+			"phase": _rng.randf_range(0.0, TAU),
+			"sway": _rng.randf_range(18.0, 42.0),
+			"spin": _rng.randf_range(-1.6, 1.6),
+			"tint": _rng.randf_range(0.0, 1.0),
 		})
+
 func _process(delta: float) -> void:
 	var viewport_size := get_viewport_rect().size
+	var now := Time.get_ticks_msec()
 	for particle in _particles:
-		particle.position.y -= particle.speed * delta
-		particle.position.x += sin(Time.get_ticks_msec() * 0.0004 + particle.phase) * delta * 3.0
-		if particle.position.y < -8.0:
-			particle.position.y = viewport_size.y + 8.0
-		if particle.position.x < -8.0:
-			particle.position.x = viewport_size.x + 8.0
-		elif particle.position.x > viewport_size.x + 8.0:
-			particle.position.x = -8.0
+		particle.position.y += float(particle.speed) * delta
+		particle.position.x += sin(now * 0.0006 + float(particle.phase)) * float(particle.sway) * delta
+		if particle.position.y > viewport_size.y + 12.0:
+			particle.position.y = -12.0
+			particle.position.x = _rng.randf_range(0.0, viewport_size.x)
+		if particle.position.x < -14.0:
+			particle.position.x = viewport_size.x + 14.0
+		elif particle.position.x > viewport_size.x + 14.0:
+			particle.position.x = -14.0
 	queue_redraw()
 
 func _draw() -> void:
 	var data := ThemeMgr.get_current_theme_data()
+	var primary := Color(data.primary)
 	for particle in _particles:
-		var alpha: float = float(particle.alpha) * (0.78 + sin(Time.get_ticks_msec() * 0.001 + float(particle.phase)) * 0.22)
-		draw_circle(particle.position, float(particle.radius), Color(data.primary, alpha))
+		var flicker: float = 0.78 + sin(Time.get_ticks_msec() * 0.0011 + float(particle.phase)) * 0.22
+		var alpha: float = float(particle.alpha) * flicker
+		var tint: float = float(particle.tint)
+		var petal_color := Color(primary, alpha).lerp(Color("#F7C9D4", alpha), tint * 0.55)
+		draw_set_transform(
+			particle.position,
+			float(particle.phase) + now_spin(),
+			Vector2(1.0, 0.52)
+		)
+		draw_circle(Vector2.ZERO, float(particle.radius), petal_color)
+		draw_circle(Vector2.ZERO, float(particle.radius) * 0.55, Color(Color.WHITE, alpha * 0.5))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func now_spin() -> float:
+	return Time.get_ticks_msec() * 0.0009
 
 func _build_background() -> void:
 	_background = ColorRect.new()
@@ -206,40 +227,68 @@ func _make_menu_button(text: String, filled: bool) -> Button:
 	var data := ThemeMgr.get_current_theme_data()
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(200, 50)
+	button.custom_minimum_size = Vector2(220, 52)
 	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	button.add_theme_font_size_override("font_size", 16)
-	button.add_theme_color_override("font_color", Color.WHITE if filled else Color(data.text))
-	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	# 对比度修复:浅色主题用压暗的主色底 + 白字;深色主题用浅主色底 + 深字
+	var font_color := Color(str(data.bg)) if bool(data.is_dark) else Color.WHITE
+	button.add_theme_color_override("font_color", font_color if filled else Color(data.text))
+	button.add_theme_color_override("font_hover_color", font_color if filled else Color(data.primary).darkened(0.2))
+	button.add_theme_color_override("font_pressed_color", font_color)
+	button.add_theme_color_override("font_focus_color", font_color)
+	button.add_theme_color_override("font_disabled_color", Color(font_color, 0.45))
 	button.add_theme_stylebox_override("normal", _menu_style(filled, false))
 	button.add_theme_stylebox_override("hover", _menu_style(filled, true))
 	button.add_theme_stylebox_override("pressed", _menu_style(false, true))
-	button.mouse_entered.connect(func(): _scale_button(button, 1.03))
+	button.mouse_entered.connect(func(): _scale_button(button, 1.04))
 	button.mouse_exited.connect(func(): _scale_button(button, 1.0))
 	return button
 
 func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
 	var data := ThemeMgr.get_current_theme_data()
 	var primary := Color(data.primary)
+	var light_theme := not bool(data.is_dark)
 	var style := StyleBoxFlat.new()
 	style.set_corner_radius_all(40)
 	style.set_border_width_all(1)
-	style.border_color = primary if filled or hover else Color(data.text, 0.16)
-	style.bg_color = primary if filled and not hover else Color(primary, 0.18 if hover else 0.07)
+	var bg := primary
+	if filled:
+		# 主按钮:压暗保证白字/浅字可读;悬停回到原色提亮
+		bg = primary.darkened(0.30) if light_theme else primary.lightened(0.06)
+		if hover:
+			bg = primary.darkened(0.18) if light_theme else primary.lightened(0.14)
+	else:
+		bg = Color(primary, 0.16 if hover else 0.07)
+	style.bg_color = bg
+	style.border_color = primary if filled or hover else Color(primary, 0.28)
 	style.content_margin_left = 30
 	style.content_margin_right = 30
 	style.content_margin_top = 12
 	style.content_margin_bottom = 12
+	# 软阴影:让按钮从纯白背景上"浮"起来
+	if filled:
+		style.shadow_size = 7
+		style.shadow_color = Color(Color(primary), 0.30 if light_theme else 0.45).darkened(0.2)
+	else:
+		style.shadow_size = 4
+		style.shadow_color = Color(0, 0, 0, 0.05)
 	return style
 
 func _animate_intro() -> void:
 	await get_tree().process_frame
-	var target_position := _content.position
-	_content.modulate.a = 0.0
-	_content.position = target_position + Vector2(0, 30)
-	_intro_tween = create_tween().set_parallel(true)
-	_intro_tween.tween_property(_content, "modulate:a", 1.0, 1.2).set_ease(Tween.EASE_OUT)
-	_intro_tween.tween_property(_content, "position", target_position, 1.2).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	# 入场阶梯:标题→副标题→按钮逐个浮入,替代整块淡入
+	var delay := 0.0
+	for child in _content.get_children():
+		if not child is Control:
+			continue
+		var target_position: Vector2 = child.position
+		child.modulate.a = 0.0
+		child.position = target_position + Vector2(0, 22)
+		var tween := create_tween()
+		tween.tween_interval(delay)
+		tween.tween_property(child, "modulate:a", 1.0, 0.55).set_ease(Tween.EASE_OUT)
+		tween.tween_property(child, "position", target_position, 0.55).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		delay += 0.09
 
 func _scale_button(button: Button, scale_value: float) -> void:
 	var tween := create_tween()
@@ -413,7 +462,8 @@ func _update_visuals() -> void:
 		var glow_material := _glow.material as ShaderMaterial
 		glow_material.set_shader_parameter("glow_color", Color(data.primary, 0.14))
 	if _start_button:
-		_start_button.add_theme_color_override("font_color", Color.WHITE)
+		# 对比度:浅色主题白字配压暗主色,深色主题深字配浅主色
+		_start_button.add_theme_color_override("font_color", Color(str(data.bg)) if bool(data.is_dark) else Color.WHITE)
 		_start_button.add_theme_stylebox_override("normal", _menu_style(true, false))
 		_start_button.add_theme_stylebox_override("hover", _menu_style(true, true))
 	if _settings_button:
