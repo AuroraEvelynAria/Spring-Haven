@@ -3,6 +3,44 @@ extends RefCounted
 
 const INTENT_TTL_SECONDS := 30 * 60
 
+# 特殊日子配置：month/day 为公历生日；actions 为当天优先执行的生活动作
+const SPECIAL_DAYS := {
+	"ling": {"month": 1, "day": 15, "actions": ["birthday_prepare", "birthday_celebration"]},
+	"nai": {"month": 3, "day": 8, "actions": ["birthday_prepare", "birthday_celebration"]},
+}
+
+# 公共节日：month/day + 节日活动（与生日机制共用 special_day_slot）
+const HOLIDAYS := [
+	{"month": 1, "day": 1, "name": "元旦", "actions": ["holiday_prepare", "holiday_celebration"]},
+	{"month": 2, "day": 17, "name": "春节", "actions": ["holiday_prepare", "holiday_celebration"]},
+	{"month": 8, "day": 15, "name": "中秋节", "actions": ["holiday_prepare", "holiday_celebration"]},
+	{"month": 8, "day": 10, "name": "七夕", "actions": ["holiday_prepare", "holiday_celebration"]},
+	{"month": 12, "day": 25, "name": "圣诞节", "actions": ["holiday_prepare", "holiday_celebration"]},
+]
+
+const HOLIDAY_ACTIONS := {
+	"holiday_prepare": {
+		"description": "为这个特别的日子准备了布置和吃的",
+		"updates": {"mood": 3.0, "stress": -2.0},
+	},
+	"holiday_celebration": {
+		"description": "和对方一起度过了这个特别的日子",
+		"updates": {"mood": 7.0, "stress": -5.0},
+		"partner_updates": {"mood": 7.0, "stress": -5.0},
+	},
+}
+
+const SPECIAL_ACTIONS := {
+	"ling": {
+		"birthday_prepare": {"description": "小玲一早开始为小奈的生日准备惊喜", "updates": {"mood": 4.0, "stress": -2.0}},
+		"birthday_celebration": {"description": "小玲和小奈一起庆祝了生日", "updates": {"mood": 8.0, "stress": -6.0}, "partner_updates": {"mood": 8.0, "stress": -6.0}},
+	},
+	"nai": {
+		"birthday_prepare": {"description": "小奈一早开始为小玲的生日准备惊喜", "updates": {"mood": 4.0, "stress": -2.0}},
+		"birthday_celebration": {"description": "小奈和小玲一起庆祝了生日", "updates": {"mood": 8.0, "stress": -6.0}, "partner_updates": {"mood": 8.0, "stress": -6.0}},
+	},
+}
+
 const PROFILES := {
 	"ling": {
 		"name": "小玲",
@@ -25,10 +63,10 @@ const PROFILES := {
 		},
 		"coping_action": "quiet_curl",
 		"routines": [
-			{"slot": "morning", "hours": [7, 10], "actions": ["morning_window_watch", "home_check"]},
-			{"slot": "afternoon", "hours": [12, 16], "actions": ["sunbathe", "read_by_window"]},
-			{"slot": "evening", "hours": [18, 22], "actions": ["evening_home_check", "quiet_companion"]},
-			{"slot": "night", "hours": [23, 3], "actions": ["night_patrol"]},
+			{"slot": "morning", "hours": [7, 10], "actions": ["morning_window_watch", "home_check"], "at": "07:30"},
+			{"slot": "afternoon", "hours": [12, 16], "actions": ["sunbathe", "read_by_window"], "at": "14:00"},
+			{"slot": "evening", "hours": [18, 22], "actions": ["evening_home_check", "quiet_companion"], "at": "19:00"},
+			{"slot": "night", "hours": [23, 3], "actions": ["night_patrol"], "at": "23:30"},
 		],
 	},
 	"nai": {
@@ -52,16 +90,20 @@ const PROFILES := {
 		},
 		"coping_action": "dance_release",
 		"routines": [
-			{"slot": "morning", "hours": [7, 10], "actions": ["morning_stretch", "organize_belongings"]},
-			{"slot": "afternoon", "hours": [12, 18], "actions": ["dance_practice", "sun_nap"]},
-			{"slot": "evening", "hours": [18, 22], "actions": ["organize_belongings", "quiet_companion"]},
-			{"slot": "night", "hours": [22, 2], "actions": ["settle_ears"]},
+			{"slot": "morning", "hours": [7, 10], "actions": ["morning_stretch", "organize_belongings"], "at": "07:45"},
+			{"slot": "afternoon", "hours": [12, 18], "actions": ["dance_practice", "sun_nap"], "at": "14:30"},
+			{"slot": "evening", "hours": [18, 22], "actions": ["organize_belongings", "quiet_companion"], "at": "19:30"},
+			{"slot": "night", "hours": [22, 2], "actions": ["settle_ears"], "at": "23:00"},
 		],
 	},
 }
 
 const ACTIONS := {
 	"ling": {
+		"toilet": {"description": "小玲暂停手边的事，先去处理如厕需要", "updates": {"urine": -72.0, "stress": -2.0}},
+		"drink": {"description": "小玲察觉口渴，先去给自己倒了水", "updates": {"thirst": -46.0, "urine": 8.0, "mood": 1.0}},
+		"eat": {"description": "小玲发现自己饿了，去找了点合适的东西吃", "updates": {"hunger": -42.0, "thirst": 2.0, "mood": 1.5}},
+		"rest": {"description": "小玲承认自己有些累，找了舒服的位置休息", "updates": {"stamina": 40.0, "awake": 28.0, "stress": -5.0, "hunger": 4.0, "thirst": 4.0}},
 		"morning_window_watch": {"description": "小玲在窗边确认天气和家里的动静", "updates": {"mood": 2.0, "stress": -1.0}},
 		"home_check": {"description": "小玲顺手检查了一遍家里的日常用品", "updates": {"mood": 2.0, "stress": -1.5, "stamina": -0.5}},
 		"sunbathe": {"description": "小玲在窗边晒了会儿太阳，尾巴慢慢放松下来", "updates": {"mood": 5.0, "stress": -4.0, "stamina": 3.0}},
@@ -74,6 +116,10 @@ const ACTIONS := {
 		"comfort_partner": {"description": "小玲注意到小奈状态不太好，先过去陪着她", "updates": {"mood": 2.0}, "partner_updates": {"mood": 5.0, "stress": -5.0}},
 	},
 	"nai": {
+		"toilet": {"description": "小奈先放下手边的事，去处理如厕需要", "updates": {"urine": -72.0, "stress": -2.0}},
+		"drink": {"description": "小奈给自己接了杯温水，小口小口喝完", "updates": {"thirst": -46.0, "urine": 8.0, "mood": 1.0}},
+		"eat": {"description": "小奈觉得饿了，去找了点合适的东西吃", "updates": {"hunger": -42.0, "thirst": 2.0, "mood": 1.5}},
+		"rest": {"description": "小奈有些疲惫，整理好耳朵后安静休息了一会儿", "updates": {"stamina": 40.0, "awake": 28.0, "stress": -5.0, "hunger": 4.0, "thirst": 4.0}},
 		"morning_stretch": {"description": "小奈起身做了几组熟悉的舞蹈拉伸", "updates": {"mood": 3.0, "stress": -2.0, "stamina": -1.0}},
 		"organize_belongings": {"description": "小奈把身边的东西重新摆整齐，心里也安定了一些", "updates": {"mood": 4.0, "stress": -4.0, "stamina": -1.0}},
 		"dance_practice": {"description": "小奈跟着心里的节拍认真练了一会儿舞", "updates": {"mood": 6.0, "stress": -6.0, "stamina": -4.0, "hunger": 1.5, "thirst": 2.5}},
@@ -93,9 +139,18 @@ static func profile(role: String) -> Dictionary:
 static func action_spec(role: String, action: String) -> Dictionary:
 	var role_actions = ACTIONS.get(role, {})
 	if not role_actions is Dictionary:
-		return {}
+		role_actions = {}
 	var value = (role_actions as Dictionary).get(action, {})
-	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
+	if value is Dictionary and not (value as Dictionary).is_empty():
+		return (value as Dictionary).duplicate(true)
+	var special_actions = SPECIAL_ACTIONS.get(role, {})
+	if not special_actions is Dictionary:
+		special_actions = {}
+	var special = (special_actions as Dictionary).get(action, {})
+	if special is Dictionary and not (special as Dictionary).is_empty():
+		return (special as Dictionary).duplicate(true)
+	var holiday = HOLIDAY_ACTIONS.get(action, {})
+	return (holiday as Dictionary).duplicate(true) if holiday is Dictionary and not (holiday as Dictionary).is_empty() else {}
 
 static func self_care_description(role: String, action: String) -> String:
 	var data := profile(role)
@@ -171,8 +226,85 @@ static func choose_intent(
 		var actions = routine.get("actions", [])
 		if not actions is Array or actions.is_empty():
 			continue
+		# 精确时刻优先：routine 带 "at" 时，命中当前小时才执行，否则继续找下一个 routine
+		var at := str(routine.get("at", "")).strip_edges()
+		if not at.is_empty():
+			var at_hour := int(at.split(":")[0]) if at.contains(":") else -1
+			if at_hour != local_hour:
+				continue
+			var exact_action := str(actions[0])
+			return _intent(role, exact_action, "按今天的生活节奏", "", slot, now)
 		var action := str(actions[rng.randi_range(0, actions.size() - 1)])
 		return _intent(role, action, "符合今天的生活节奏", "", slot, now)
+	return {}
+
+static func daily_plan_slot(role: String, local_hour: int, day_key: String) -> Dictionary:
+	"""Return the scheduled daily-plan action for this exact hour, or {} when none."""
+	if role not in PROFILES:
+		return {}
+	var routines = (PROFILES[role] as Dictionary).get("routines", [])
+	if not routines is Array:
+		return {}
+	for routine_variant in routines:
+		if not routine_variant is Dictionary:
+			continue
+		var routine: Dictionary = routine_variant
+		var slot := str(routine.get("slot", ""))
+		var at := str(routine.get("at", "")).strip_edges()
+		if at.is_empty() or slot.is_empty():
+			continue
+		var parts := at.split(":")
+		if parts.size() != 2:
+			continue
+		var hour := int(parts[0])
+		var minute := int(parts[1])
+		if hour != local_hour:
+			continue
+		var actions = routine.get("actions", [])
+		if not actions is Array or actions.is_empty():
+			continue
+		return {
+			"slot": slot,
+			"hour": hour,
+			"minute": minute,
+			"action": str(actions[0]),
+			"reason": "按今天的生活节奏",
+		}
+	return {}
+
+static func special_day_slot(role: String, month: int, day: int, day_key: String) -> Dictionary:
+	"""Return the special-day plan for today (birthday or holiday), or {} when none."""
+	if role not in PROFILES:
+		return {}
+	var special = SPECIAL_DAYS.get(role, {})
+	if special is Dictionary and int(special.get("month", 0)) == month and int(special.get("day", 0)) == day:
+		var actions = special.get("actions", [])
+		if actions is Array and not actions.is_empty():
+			return {
+				"slot": "special_day",
+				"hour": 18,
+				"minute": 30,
+				"action": str(actions[0]),
+				"reason": "今天是特别的日子",
+				"special": true,
+			}
+	for holiday_variant in HOLIDAYS:
+		if not holiday_variant is Dictionary:
+			continue
+		var holiday: Dictionary = holiday_variant
+		if int(holiday.get("month", 0)) != month or int(holiday.get("day", 0)) != day:
+			continue
+		var h_actions = holiday.get("actions", [])
+		if not h_actions is Array or h_actions.is_empty():
+			continue
+		return {
+			"slot": "holiday",
+			"hour": 18,
+			"minute": 30,
+			"action": str(h_actions[0]),
+			"reason": "今天是%s" % str(holiday.get("name", "节日")),
+			"special": true,
+		}
 	return {}
 
 static func _intent(
