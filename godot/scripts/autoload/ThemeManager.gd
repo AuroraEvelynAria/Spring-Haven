@@ -2,6 +2,19 @@ extends Node
 
 const DEFAULT_FONT_PATH := "res://assets/fonts/LXGWWenKai-Regular.ttf"
 
+# 语义色 token:全局固定,不随主题变化(统一全 UI 的成功/警告/危险/信息色)
+const SEMANTIC_SUCCESS := Color("#4CAF7D")
+const SEMANTIC_WARNING := Color("#D9A441")
+const SEMANTIC_DANGER := Color("#E25B5B")
+const SEMANTIC_INFO := Color("#5B8DEF")
+
+static func semantic(kind: String) -> Color:
+	match kind:
+		"success": return SEMANTIC_SUCCESS
+		"warning": return SEMANTIC_WARNING
+		"danger": return SEMANTIC_DANGER
+	return SEMANTIC_INFO
+
 const THEMES := {
 	"graphite": {"bg": "#F8F6F3", "primary": "#E8743C", "accent": "#2D2A24", "text": "#1A1715", "secondary": "#5A5550", "is_dark": false},
 	"aurora": {"bg": "#F5F0F8", "primary": "#5BC0BE", "accent": "#4A3F5C", "text": "#3A2F4A", "secondary": "#6A5F7A", "is_dark": false},

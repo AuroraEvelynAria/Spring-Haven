@@ -1249,7 +1249,10 @@ func _add_message(
 
 	var bubble := PanelContainer.new()
 	var bubble_color := Color(data.primary, 0.12) if sender == "ai" else Color(data.accent, 0.10)
-	bubble.add_theme_stylebox_override("panel", _panel_style(bubble_color, Color(data.text, 0.08), 14, 10))
+	var bubble_style := _panel_style(bubble_color, Color(data.text, 0.08), 14, 10)
+	bubble_style.shadow_size = 5
+	bubble_style.shadow_color = Color(0, 0, 0, 0.05)
+	bubble.add_theme_stylebox_override("panel", bubble_style)
 	group.add_child(bubble)
 	var label := Label.new()
 	label.text = "" if typewriter else text
