@@ -72,6 +72,8 @@ class StorageMaintenance:
                 backup_name = self._create_backup(now, integrity)
                 last_backup_at = now
                 self._rotate_backups()
+            # 备份成功后再合并逐字重复的对话记忆(复读根因的存量清理)
+            consolidation = self.memory.consolidate_duplicate_user_memories()
             self._status = {
                 "state": "ready",
                 "last_run_at": now,
@@ -80,6 +82,7 @@ class StorageMaintenance:
                 "last_backup_name": backup_name,
                 "integrity": integrity,
                 "checkpoints": checkpoints,
+                "duplicate_memories_merged": int(consolidation.get("merged", 0)),
                 "error": "",
             }
         except Exception as exc:
