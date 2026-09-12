@@ -42,9 +42,13 @@ class CompanionService:
         memory_organizer_enabled: bool = False,
         memory_organizer_max_entries: int = 3,
         weather_location: str = "",
+        state_truth_source: str = "client",
     ):
         self.roles = roles
         self.provider = provider
+        self.state_truth_source = (
+            "backend" if state_truth_source == "backend" else "client"
+        )
         self.memory = memory or HeartloomStore(":memory:", roles.ids())
         self.rag = rag
         self.prompts = PromptComposer(roles)
@@ -1283,6 +1287,36 @@ class CompanionService:
                 )
         except Exception as exc:
             LOGGER.warning("milestone copy polish failed: %s", type(exc).__name__)
+
+    HOURLY_NEED_RATES = {
+        "ling": {
+            "hunger": 3.0, "thirst": 4.2, "stamina": -1.2,
+            "awake": -0.7, "urine": 1.5, "stress": 0.15,
+        },
+        "nai": {
+            "hunger": 3.4, "thirst": 4.6, "stamina": -1.0,
+            "awake": -0.6, "urine": 1.7, "stress": 0.18,
+        },
+    }
+
+    def advance_life_state_decay(self, save_id: str) -> dict[str, float] | None:
+        """#22 后端真相源:world_time 生理衰减。state_truth_source=client 时 no-op。"""
+        if self.state_truth_source != "backend":
+            return None
+        return self.memory.advance_life_decay(
+            save_id=save_id, hourly_rates=self.HOURLY_NEED_RATES
+        )
+
+    def advance_life_state_decay_all(self) -> dict[str, dict[str, float]]:
+        """调度器入口:对全部已知旅程推进衰减(仅 backend 真相源模式)。"""
+        results: dict[str, dict[str, float]] = {}
+        if self.state_truth_source != "backend":
+            return results
+        for save_id in self.memory.life_save_ids():
+            applied = self.advance_life_state_decay(save_id)
+            if applied:
+                results[save_id] = applied
+        return results
 
     def recall_memories(self, raw: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):

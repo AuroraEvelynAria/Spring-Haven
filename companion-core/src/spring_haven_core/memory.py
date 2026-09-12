@@ -1973,6 +1973,71 @@ class HeartloomStore:
             ).fetchone()
         return self._life_state_row(row) if row else {}
 
+    def advance_life_decay(
+        self,
+        *,
+        save_id: str,
+        hourly_rates: dict[str, dict[str, float]],
+    ) -> dict[str, float] | None:
+        """#22 后端真相源:按 world_time 推进快照生理衰减(钳位 0-100,记事件日志)。
+
+        仅 state_truth_source=backend 时由服务层调用;world_time 增量以
+        快照内 decay_world 水位追踪,重复调用安全。
+        """
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT snapshot_json FROM life_state WHERE save_id = ?", (save_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            snapshot = _json_object(row["snapshot_json"])
+            stats = snapshot.get("stats") if isinstance(snapshot.get("stats"), dict) else {}
+            if not stats:
+                return None
+            role_id = str(snapshot.get("role_id", "ling"))
+            rates = hourly_rates.get(role_id, hourly_rates.get("ling", {}))
+            world_now_value = self.world_now(save_id)
+            last_decay = float(snapshot.get("decay_world", world_now_value))
+            elapsed_days = max(0.0, world_now_value - last_decay)
+            applied: dict[str, float] = {}
+            for stat, per_hour in rates.items():
+                if stat not in stats:
+                    continue
+                current = float(stats[stat])
+                delta = float(per_hour) * 24.0 * elapsed_days
+                new_value = max(0.0, min(100.0, current + delta))
+                rounded_delta = round(new_value - current, 2)
+                if abs(rounded_delta) < 0.01:
+                    continue
+                stats[stat] = round(new_value, 2)
+                applied[stat] = rounded_delta
+            # 水位总是写入:首次调用建立 decay_world,否则永远测不到增量(#22)
+            snapshot["stats"] = stats
+            snapshot["decay_world"] = world_now_value
+            self._connection.execute(
+                "UPDATE life_state SET snapshot_json = ?, updated_at = ? WHERE save_id = ?",
+                (_json(snapshot), int(time.time()), save_id),
+            )
+            if not applied:
+                return None
+            self._connection.execute(
+                """
+                INSERT INTO state_events (
+                    event_id, save_id, role_id, kind, delta_json, world_time, real_unix, note
+                ) VALUES (?, ?, ?, 'decay', ?, ?, ?, ?)
+                """,
+                (
+                    "ste-" + uuid.uuid4().hex,
+                    save_id,
+                    role_id,
+                    _json(applied),
+                    world_now_value,
+                    int(time.time()),
+                    f"elapsed={elapsed_days:.4f}d",
+                ),
+            )
+        return applied
+
     def due_life_states(self, now: int | None = None, limit: int = 8) -> list[dict[str, Any]]:
         timestamp = max(1, int(now or time.time()))
         requested = max(1, min(32, int(limit)))
