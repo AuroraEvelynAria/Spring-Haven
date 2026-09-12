@@ -153,33 +153,34 @@ func _run() -> void:
 		settings_panel.call("_switch_settings_category", "advanced")
 		for _frame in 8:
 			await get_tree().process_frame
-		var maintenance_backup_list := settings_panel.get("_maintenance_backup_list") as VBoxContainer
-		var maintenance_backup_status := settings_panel.get("_maintenance_backup_status") as Label
+		var advanced: Object = settings_panel.get("_advanced")
+		var maintenance_backup_list := advanced.get("_maintenance_backup_list") as VBoxContainer
+		var maintenance_backup_status := advanced.get("_maintenance_backup_status") as Label
 		if not is_instance_valid(maintenance_backup_list) or not is_instance_valid(maintenance_backup_status):
 			failures.append("备份查看与校验入口未创建")
 		settings_panel.call("_switch_settings_category", "life")
 		for _frame in 8:
 			await get_tree().process_frame
-		var ambient_controls: Dictionary = settings_panel.get("_ambient_controls")
+		var ambient_controls: Dictionary = (settings_panel.get("_advanced") as Object).get("_ambient_controls")
 		for key in [
 			"enabled", "idle_minutes", "cooldown_min_minutes", "cooldown_max_minutes",
 			"turns_min", "turns_max", "notifications_enabled", "memory_enabled"
 		]:
 			if not ambient_controls.has(key) or not is_instance_valid(ambient_controls[key]):
 				failures.append("后台生活设置缺少控件：%s" % key)
-		var ambient_status := settings_panel.get("_ambient_status") as Label
+		var ambient_status := (settings_panel.get("_advanced") as Object).get("_ambient_status") as Label
 		if not is_instance_valid(ambient_status) or ambient_status.text != "尚未修改":
 			failures.append("后台生活设置状态指示器异常")
 		settings_panel.call("_switch_settings_category", "advanced")
 		settings_panel.call("_switch_settings_subcategory", "runtime")
 		for _frame in 4:
 			await get_tree().process_frame
-		var runtime_controls: Dictionary = settings_panel.get("_runtime_controls")
+		var runtime_controls: Dictionary = (settings_panel.get("_advanced") as Object).get("_runtime_controls")
 		for key_variant in RUNTIME_TUNING.SPECS:
 			var key := str(key_variant)
 			if not runtime_controls.has(key) or not is_instance_valid(runtime_controls[key]):
 				failures.append("运行参数设置缺少控件：%s" % key)
-		var stat_controls: Dictionary = settings_panel.get("_stat_controls")
+		var stat_controls: Dictionary = (settings_panel.get("_advanced") as Object).get("_stat_controls")
 		for stat_key in ["health", "intimacy", "mood"]:
 			if not stat_controls.has(stat_key) or not is_instance_valid(stat_controls[stat_key]):
 				failures.append("当前属性编辑器缺少控件：%s" % stat_key)

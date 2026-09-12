@@ -40,3 +40,4 @@ jobs:
         run: |
           ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/InteractionRulesCheck.gd
           ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/FullMilestoneCheck.gd
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/MultiRoleStressCheck.gd
