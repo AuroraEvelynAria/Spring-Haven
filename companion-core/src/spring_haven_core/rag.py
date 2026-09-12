@@ -576,12 +576,16 @@ class KnowledgeRagStore:
             ).fetchall()
         updated = 0
         affected_documents: set[str] = set()
+        failed_documents: set[str] = set()
+        last_error = ""
         for start in range(0, len(rows), 32):
             batch = rows[start : start + 32]
             try:
                 vectors = await self.provider.embed([str(row["content"]) for row in batch])
             except ProviderError as exc:
-                raise RagStoreError(str(exc)) from exc
+                failed_documents.update(str(row["document_id"]) for row in batch)
+                last_error = str(exc)
+                continue  # 跳过失败批次,继续后续批次
             with self._lock, self._connection:
                 for row, vector in zip(batch, vectors, strict=True):
                     self._connection.execute(
@@ -600,7 +604,23 @@ class KnowledgeRagStore:
                     """,
                     (int(time.time()), document_id),
                 )
-        return {"updated_chunks": updated, "documents": len(affected_documents)}
+            for document_id in failed_documents - affected_documents:
+                self._connection.execute(
+                    """
+                    UPDATE rag_documents
+                    SET embedding_state = 'error', embedding_error = ?, updated_at = ?
+                    WHERE document_id = ?
+                    """,
+                    (last_error[:200], int(time.time()), document_id),
+                )
+        result: dict[str, Any] = {
+            "updated_chunks": updated,
+            "documents": len(affected_documents),
+        }
+        if failed_documents:
+            result["failed_documents"] = len(failed_documents - affected_documents)
+            result["error"] = last_error
+        return result
 
     def status(self) -> dict[str, Any]:
         with self._lock:
