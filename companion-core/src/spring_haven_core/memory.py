@@ -21,6 +21,20 @@ LIFE_OUTBOX_TTL_WORLD_DAYS = 7.0
 # 三态生命周期阈值(ADR-001 D5,后端常量,不开放 UI 配置;Phase 3 启用)。
 DORMANT_AFTER_WORLD_DAYS = 14.0
 ARCHIVE_CONFIDENCE_THRESHOLD = 0.15
+# ADR-001 D1:双参数衰减 + 唤醒奖励(每次召回 intrinsic 增加,上限 1.0)。
+WAKE_REWARD_PER_RECALL = 0.05
+WAKE_REWARD_CAP = 1.0
+# #15 中文语义矛盾词对:冲突检测用(前=正面,后=负面列表)
+CONTRADICTION_PAIRS = [
+    ("喜欢", ["不喜欢", "讨厌", "反感", "厌恶", "不再喜欢"]),
+    ("爱", ["不爱", "讨厌", "恨"]),
+    ("想", ["不想", "别想", "不愿"]),
+    ("要", ["不要", "别要"]),
+    ("是", ["不是", "并非"]),
+    ("可以", ["不可以", "不行", "不能"]),
+    ("会", ["不会"]),
+    ("在", ["不在"]),
+]
 SHARED_SCOPE = "*"
 
 MEMORY_KINDS = {
@@ -291,7 +305,8 @@ class HeartloomStore:
             updated_at INTEGER NOT NULL,
             last_recalled_at INTEGER NOT NULL DEFAULT 0,
             recall_count INTEGER NOT NULL DEFAULT 0,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            intrinsic REAL NOT NULL DEFAULT 0.5
         );
         CREATE INDEX IF NOT EXISTS idx_memory_scope
             ON memory_entries(save_id, scope_role_id, enabled, importance DESC);
@@ -403,7 +418,7 @@ class HeartloomStore:
             src_memory_id    TEXT NOT NULL,
             dst_memory_id    TEXT NOT NULL,
             link_type        TEXT NOT NULL
-                             CHECK(link_type IN ('causal','association','spread','milestone')),
+                             CHECK(link_type IN ('causal','association','spread','milestone','conflict')),
             link_strength    REAL NOT NULL DEFAULT 0.5,
             reason           TEXT NOT NULL DEFAULT '',
             world_created_at REAL NOT NULL,
@@ -484,6 +499,7 @@ class HeartloomStore:
                 "ALTER TABLE memory_entries ADD COLUMN is_second_hand INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE memory_entries ADD COLUMN embedding_json TEXT",
                 "ALTER TABLE memory_entries ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE memory_entries ADD COLUMN intrinsic REAL NOT NULL DEFAULT 0.5",
             ):
                 column_name = ddl.split("ADD COLUMN ", 1)[1].split(" ", 1)[0]
                 if column_name not in memory_columns:
@@ -697,6 +713,7 @@ class HeartloomStore:
         importance = _bounded_float(raw.get("importance", 0.65), 0.0, 1.0, "importance")
         confidence = _bounded_float(raw.get("confidence", 1.0), 0.0, 1.0, "confidence")
         valence = _bounded_float(raw.get("valence", 0.0), -1.0, 1.0, "valence")
+        intrinsic = _bounded_float(raw.get("intrinsic", 0.5), 0.0, 1.0, "intrinsic")
         default_half_life = 0.0 if source == "manual" else 120.0
         half_life = _bounded_float(
             raw.get("half_life_days", default_half_life), 0.0, 36_500.0, "half_life_days"
@@ -719,8 +736,8 @@ class HeartloomStore:
                     trigger_terms_json, always_active, priority, importance,
                     confidence, valence, half_life_days, influence_json, source,
                     source_event_id, created_at, updated_at, enabled,
-                    world_created_at, world_updated_at, is_second_hand
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    world_created_at, world_updated_at, is_second_hand, intrinsic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     save_id = excluded.save_id,
                     scope_role_id = excluded.scope_role_id,
@@ -737,7 +754,8 @@ class HeartloomStore:
                     influence_json = excluded.influence_json,
                     updated_at = excluded.updated_at,
                     enabled = excluded.enabled,
-                    world_updated_at = excluded.world_updated_at
+                    world_updated_at = excluded.world_updated_at,
+                    intrinsic = MAX(memory_entries.intrinsic, excluded.intrinsic)
                 """,
                 (
                     memory_id,
@@ -762,6 +780,7 @@ class HeartloomStore:
                     world_now_value,
                     world_now_value,
                     is_second_hand,
+                    intrinsic,
                 ),
             )
             self._connection.execute("DELETE FROM memory_terms WHERE memory_id = ?", (memory_id,))
@@ -778,6 +797,7 @@ class HeartloomStore:
                 # ADR-001 D4:新记忆入库即增量建边(更新不重建;候选集有界,
                 # 与写入同事务执行,离线批量下逐条成本有界)
                 self.build_links_for_memory(memory_id)
+                self._detect_conflicts(memory_id, save_id)
         return self.get_memory(save_id, memory_id) or {}
 
     def remember_user_turn(
@@ -923,9 +943,15 @@ class HeartloomStore:
                 lexical = max(lexical, 1.0)
             lexical = min(1.0, lexical)  # 归一化到 0-1,保证各通道量纲一致(ADR-001 D1)
             # 衰减/recency 全部基于 world_time(世界天),不再读取现实时间(#23)
+            # 双参数衰减(ADR-001 D1):intrinsic 越高衰减越慢;half_life=0 → 永不衰减
             age_days = max(0.0, world_now_value - float(row["world_updated_at"]))
             half_life = float(row["half_life_days"])
-            decay = 1.0 if half_life <= 0.0 else math.pow(0.5, age_days / half_life)
+            entry_intrinsic = max(0.05, float(row["intrinsic"]))
+            if half_life <= 0.0:
+                decay = 1.0
+            else:
+                effective_half_life = half_life / entry_intrinsic
+                decay = math.pow(0.5, age_days / effective_half_life)
             importance = float(row["importance"]) * decay
             recency = math.pow(0.5, age_days / 30.0)
             priority = (int(row["priority"]) + 10) / 20.0
@@ -967,10 +993,14 @@ class HeartloomStore:
                     self._connection.executemany(
                         """
                         UPDATE memory_entries
-                        SET last_recalled_at = ?, last_recalled_world = ?, recall_count = recall_count + 1
+                        SET last_recalled_at = ?, last_recalled_world = ?, recall_count = recall_count + 1,
+                            intrinsic = MIN(?, intrinsic + ?)
                         WHERE memory_id = ?
                         """,
-                        [(now, world_now_value, str(row["memory_id"])) for _, row in selected],
+                        [
+                            (now, world_now_value, WAKE_REWARD_CAP, WAKE_REWARD_PER_RECALL, str(row["memory_id"]))
+                            for _, row in selected
+                        ],
                     )
                 self._set_meta("last_recall_at", str(now))
                 self._set_meta("last_recall_count", str(len(selected)))
@@ -1071,6 +1101,63 @@ class HeartloomStore:
         if norm_a <= 0.0 or norm_b <= 0.0:
             return None
         return dot / (norm_a * norm_b)
+
+    def _detect_conflicts(self, memory_id: str, save_id: str) -> None:
+        """检测新记忆与既有记忆之间的语义矛盾,创建 conflict 类型边。"""
+        with self._lock, self._connection:
+            new_row = self._connection.execute(
+                "SELECT content FROM memory_entries WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+            if new_row is None:
+                return
+            new_content = str(new_row["content"]).lower()
+            new_terms = {
+                str(item["term"])
+                for item in self._connection.execute(
+                    "SELECT term FROM memory_terms WHERE memory_id = ?", (memory_id,)
+                ).fetchall()
+            }
+            if not new_terms:
+                return
+            placeholders = ",".join("?" for _ in new_terms)
+            candidate_rows = self._connection.execute(
+                f"""
+                SELECT DISTINCT m.memory_id, m.content
+                FROM memory_entries AS m
+                JOIN memory_terms AS t ON t.memory_id = m.memory_id
+                WHERE m.save_id = ? AND m.memory_id != ?
+                  AND m.lifecycle = 'active' AND t.term IN ({placeholders})
+                """,
+                (save_id, memory_id, *sorted(new_terms)),
+            ).fetchall()
+            world_value = self.world_now(save_id)
+            for candidate in candidate_rows:
+                candidate_id = str(candidate["memory_id"])
+                candidate_content = str(candidate["content"]).lower()
+                for positive, negatives in CONTRADICTION_PAIRS:
+                    new_has_pos = positive in new_content
+                    new_has_neg = any(neg in new_content for neg in negatives)
+                    old_has_pos = positive in candidate_content
+                    old_has_neg = any(neg in candidate_content for neg in negatives)
+                    if (new_has_pos and old_has_neg) or (new_has_neg and old_has_pos):
+                        link_id = "lnk-cf-" + hashlib.sha256(
+                            f"{memory_id}|{candidate_id}".encode("utf-8")
+                        ).hexdigest()[:40]
+                        self._connection.execute(
+                            """
+                            INSERT OR IGNORE INTO memory_links (
+                                link_id, save_id, src_memory_id, dst_memory_id,
+                                link_type, link_strength, reason, world_created_at
+                            ) VALUES (?, ?, ?, ?, 'conflict', 0.9, ?, ?)
+                            """,
+                            (
+                                link_id, save_id, memory_id, candidate_id,
+                                f"矛盾:{positive} vs {'/'.join(negatives[:2])}",
+                                world_value,
+                            ),
+                        )
+                        break
 
     def build_links_for_memory(self, memory_id: str, max_links: int = 4) -> list[dict[str, Any]]:
         """增量建边(ADR-001 D4):候选集有界,单条新记忆最多 max_links 条边。"""
