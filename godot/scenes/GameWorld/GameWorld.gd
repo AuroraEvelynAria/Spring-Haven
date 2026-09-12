@@ -14,6 +14,7 @@ const INTERACTION_RULES := preload("res://scripts/domain/InteractionRules.gd")
 const LIFE_PERSONALITY := preload("res://scripts/domain/LifePersonalityProfiles.gd")
 const RECIPIENT_RESOLVER := preload("res://scripts/domain/ConversationRecipientResolver.gd")
 const TEXT_SANITIZER := preload("res://scripts/domain/TextSanitizer.gd")
+const CHAT_PIPELINE := preload("res://scripts/domain/ChatPipeline.gd")
 const SHARED_HISTORY_LIMIT := 24
 const UI_MESSAGE_LIMIT := 72
 const STAT_TWEEN_DURATION := 0.58
@@ -82,6 +83,7 @@ var _stat_pulse_tweens: Dictionary = {}
 var _pending_full_effects: Dictionary = {}
 var _last_action_event: Dictionary = {}
 
+var _background_fx: Control
 var _glow: ColorRect
 var _nav: PanelContainer
 var _brand: Label
@@ -134,9 +136,7 @@ func _ready() -> void:
 	_stats_by_role = Global.stats_by_role
 	_conversation_history = Global.conversation_history
 	_current_role = Global.current_character if ROLE_DATA.has(Global.current_character) else "ling"
-	_initialize_background_particles()
-	_build_background_glow()
-	_build_season_overlay()
+	_build_background_fx()
 	_build_interface()
 	_settings = SETTINGS_SCENE.instantiate()
 	add_child(_settings)
@@ -294,7 +294,7 @@ func _build_season_overlay() -> void:
 	_season_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_season_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_season_tint.color = Color(0, 0, 0, 0)
-	add_child(_season_tint)
+	_background_fx.add_child(_season_tint)
 	_refresh_season_overlay()
 
 func _refresh_season_overlay() -> void:
@@ -313,6 +313,17 @@ func _season_for_month(month: int) -> String:
 		return "autumn"
 	return "winter"
 
+func _build_background_fx() -> void:
+	# #11：背景光晕与季节染色统一挂在专用子层，与界面节点明确分层。
+	_background_fx = Control.new()
+	_background_fx.name = "BackgroundFX"
+	_background_fx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_background_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_background_fx)
+	_initialize_background_particles()
+	_build_background_glow()
+	_build_season_overlay()
+
 func _build_background_glow() -> void:
 	_glow = ColorRect.new()
 	_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -322,7 +333,7 @@ func _build_background_glow() -> void:
 	material.set_shader_parameter("glow_color", Color(ThemeMgr.get_current_theme_data().primary, 0.09))
 	material.set_shader_parameter("radius", 0.64)
 	_glow.material = material
-	add_child(_glow)
+	_background_fx.add_child(_glow)
 
 func _initialize_background_particles() -> void:
 	_particles.clear()
@@ -1588,50 +1599,13 @@ func _play_committed_effect(
 		Global.stat_changed.emit(role, key, new_value)
 
 func _entry_request_state(entry: Dictionary, role_override := "") -> Dictionary:
-	var state_variant = entry.get("state", {})
-	var state: Dictionary = state_variant.duplicate(true) if state_variant is Dictionary else {}
-	var role := role_override if ROLE_DATA.has(role_override) else str(entry.get("target_role", entry.get("role", _current_role)))
-	if ROLE_DATA.has(role):
-		state["body_state"] = LifeSim.build_role_state(role)
-	var source_message_id := str(entry.get("id", "")).strip_edges()
-	if not source_message_id.is_empty():
-		state["source_message_id"] = source_message_id
-	var audience_roles: Array[String] = []
-	var audience_variant = entry.get("audience_roles", ["ling", "nai"])
-	if audience_variant is Array:
-		for audience_variant_role in audience_variant:
-			var audience_role := str(audience_variant_role)
-			if ROLE_DATA.has(audience_role) and audience_role not in audience_roles:
-				audience_roles.append(audience_role)
-	if audience_roles.is_empty():
-		audience_roles.assign(["ling", "nai"])
-	state["conversation_visibility"] = {
-		"protocol": CONVERSATION_VISIBILITY_PROTOCOL,
-		"mode": "shared_room",
-		"audience_roles": audience_roles,
-		"responder_role": role,
-		"parenthetical_content_visible": true,
-	}
-	var route_variant = entry.get("conversation_route", {})
-	if route_variant is Dictionary and not route_variant.is_empty():
-		var route: Dictionary = (route_variant as Dictionary).duplicate(true)
-		var origin_role := str(route.get("origin_role", ""))
-		var target_role := str(route.get("target_role", ""))
-		if role == origin_role:
-			route["turn_role"] = role
-			route["turn_index"] = 0
-			state["conversation_route"] = route
-		elif role == target_role:
-			route["turn_role"] = role
-			route["turn_index"] = 1
-			state["conversation_route"] = route
-	var local_effect_variant = entry.get("local_effect", {})
-	var local_effects_variant = entry.get("local_effects_by_role", {})
-	if local_effects_variant is Dictionary and (local_effects_variant as Dictionary).has(role):
-		local_effect_variant = (local_effects_variant as Dictionary).get(role, {})
-	if local_effect_variant is Dictionary and not local_effect_variant.is_empty():
-		state["local_effect"] = (local_effect_variant as Dictionary).duplicate(true)
-	return state
+	return CHAT_PIPELINE.entry_request_state(
+		entry,
+		ROLE_DATA,
+		_current_role,
+		CONVERSATION_VISIBILITY_PROTOCOL,
+		LifeSim.build_role_state
+	)
 
 func _append_history_message(
 	sender: String,
@@ -1658,21 +1632,10 @@ func _append_history_message(
 	return message_id
 
 func _find_history_entry(message_id: String) -> Dictionary:
-	for index in range(_conversation_history.size() - 1, -1, -1):
-		var entry: Dictionary = _conversation_history[index]
-		if str(entry.get("id", "")) == message_id:
-			return entry
-	return {}
+	return CHAT_PIPELINE.find_entry(_conversation_history, message_id)
 
 func _latest_ai_speaker_role() -> String:
-	for index in range(_conversation_history.size() - 1, -1, -1):
-		var entry: Dictionary = _conversation_history[index]
-		if str(entry.get("sender", "")) != "ai" or str(entry.get("status", "sent")) != "sent":
-			continue
-		var role := str(entry.get("role", ""))
-		if ROLE_DATA.has(role):
-			return role
-	return ""
+	return CHAT_PIPELINE.latest_ai_speaker_role(_conversation_history, ROLE_DATA)
 
 func _set_history_delivery_status(
 	message_id: String,
@@ -1715,67 +1678,12 @@ func _restore_conversation_ui() -> void:
 	_update_turn_hint()
 
 func _build_shared_history(_reply_role: String, excluded_message_id := "") -> Array[Dictionary]:
-	var transcript: Array[Dictionary] = []
-	var used_characters := 0
-	for index in range(_conversation_history.size() - 1, -1, -1):
-		var item: Dictionary = _conversation_history[index]
-		if str(item.get("id", "")) == excluded_message_id:
-			continue
-		if str(item.get("status", "sent")) != "sent":
-			continue
-		var sender := str(item.get("sender", ""))
-		if sender not in ["user", "ai"]:
-			continue
-		var history_role := str(item.get("role", ""))
-		var speaker := "主人"
-		if sender == "ai":
-			if not ROLE_DATA.has(history_role):
-				continue
-			speaker = str((ROLE_DATA[history_role] as Dictionary).name)
-		var history_text := TEXT_SANITIZER.strip_nul(str(item.get("text", ""))).strip_edges()
-		if history_text.is_empty():
-			continue
-		if history_text.length() > 3000:
-			history_text = history_text.left(3000)
-		var history_event_type := str(item.get("event_type", "chat"))
-		if history_event_type not in ["chat", "action"]:
-			history_event_type = "chat"
-		var entry := {
-			"id": str(item.get("id", "")).left(128),
-			"sender": sender,
-			"speaker": speaker,
-			"text": history_text,
-			"event_type": history_event_type,
-			"action": str(item.get("action", "")).left(64),
-			"created_at": int(item.get("created_at", 0))
-		}
-		var audience_roles: Array[String] = []
-		var audience_variant = item.get("audience_roles", ["ling", "nai"])
-		if audience_variant is Array:
-			for audience_role_variant in audience_variant:
-				var audience_role := str(audience_role_variant)
-				if ROLE_DATA.has(audience_role) and audience_role not in audience_roles:
-					audience_roles.append(audience_role)
-		if audience_roles.is_empty():
-			audience_roles.assign(["ling", "nai"])
-		entry["audience_roles"] = audience_roles
-		if sender == "ai":
-			entry["role_id"] = history_role
-			var ai_target_role := str(item.get("target_role", ""))
-			if ROLE_DATA.has(ai_target_role):
-				entry["target_role"] = ai_target_role
-		else:
-			entry["role"] = "user"
-			# Legacy saves may not have target_role. Omit this optional field unless valid.
-			var legacy_target_role := str(item.get("target_role", ""))
-			if ROLE_DATA.has(legacy_target_role):
-				entry["target_role"] = legacy_target_role
-		var entry_size := JSON.stringify(entry).length()
-		if transcript.size() >= SHARED_HISTORY_LIMIT or used_characters + entry_size > 6000:
-			break
-		transcript.push_front(entry)
-		used_characters += entry_size
-	return transcript
+	return CHAT_PIPELINE.build_shared_history(
+		_conversation_history,
+		ROLE_DATA,
+		excluded_message_id,
+		SHARED_HISTORY_LIMIT
+	)
 
 func _register_pending_request(
 	request_id: String,
@@ -1857,18 +1765,7 @@ func _release_foreground_scope(message_id: String) -> void:
 	MessageScheduler.end_foreground(token)
 
 func _entry_reply_roles(entry: Dictionary) -> Array[String]:
-	var result: Array[String] = []
-	var raw_roles = entry.get("target_roles", [])
-	if raw_roles is Array:
-		for role_variant in raw_roles:
-			var role := str(role_variant)
-			if ROLE_DATA.has(role) and role not in result:
-				result.append(role)
-	if result.is_empty():
-		var fallback := str(entry.get("target_role", entry.get("role", _current_role)))
-		if ROLE_DATA.has(fallback):
-			result.append(fallback)
-	return result
+	return CHAT_PIPELINE.entry_reply_roles(entry, ROLE_DATA, _current_role)
 
 func _trim_chat_nodes() -> void:
 	while _chat_list.get_child_count() > UI_MESSAGE_LIMIT:
@@ -2472,15 +2369,7 @@ func _resolve_recipients(
 	return resolved
 
 func _message_mentions_both_roles(text: String) -> bool:
-	for role in ["ling", "nai"]:
-		var mentioned := false
-		for alias_variant in RECIPIENT_RESOLVER.ROLE_ALIASES[role]:
-			if text.findn(str(alias_variant)) >= 0:
-				mentioned = true
-				break
-		if not mentioned:
-			return false
-	return true
+	return CHAT_PIPELINE.message_mentions_both_roles(text)
 
 func _other_role(role: String) -> String:
 	return "nai" if role == "ling" else "ling"
