@@ -949,6 +949,11 @@ async def _life_scheduler_loop(app: web.Application) -> None:
                 backfilled = await app[SERVICE_KEY].backfill_memory_embeddings()
                 if backfilled:
                     LOGGER.info("memory embeddings backfilled: %s", backfilled)
+                linked = await asyncio.to_thread(
+                    app[SERVICE_KEY].backfill_memory_links, None, 40
+                )
+                if linked:
+                    LOGGER.info("memory links backfilled: %s", linked)
             except asyncio.CancelledError:
                 raise
             except Exception:

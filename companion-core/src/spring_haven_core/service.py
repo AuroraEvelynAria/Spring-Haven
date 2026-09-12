@@ -1229,6 +1229,10 @@ class CompanionService:
         """三态生命周期规则(常量阈值,ADR-001 D5):dormant/archived 自动迁移。"""
         return self.memory.apply_lifecycle_transitions()
 
+    def backfill_memory_links(self, *, save_id: str | None = None, limit: int = 25) -> int:
+        """存量记忆的增量边回填(调度器分批消化,ADR-001 D4)。"""
+        return self.memory.backfill_memory_links(save_id=save_id, limit=limit)
+
     def graph_data(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             raise RequestValidationError("request must be a query object")
