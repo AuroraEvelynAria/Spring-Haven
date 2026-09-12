@@ -74,14 +74,14 @@ class MemoryNetworkTests(unittest.TestCase):
             self._put(f"filler-{index}", f"栀子花浇水的日常记录 {index}")
         new_id = self._put("new", "栀子花又开了,我们都很开心")
         built = self.store.build_links_for_memory(new_id)
-        self.assertGreaterEqual(len(built), 1)
-        self.assertLessEqual(len(built), 5, "单条记忆最多 3-5 条边(ADR-001 D4)")
-        for item in built:
-            self.assertEqual(item["link_type"], "association")
-        count = self.store._connection.execute(
-            "SELECT COUNT(*) FROM memory_links WHERE src_memory_id = ?", (new_id,)
-        ).fetchone()[0]
-        self.assertEqual(int(count), len(built))
+        # 自动建边可能已抢先建好,此时显式调用返回空集;以库内边为准
+        stored = self.store._connection.execute(
+            "SELECT link_type FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchall()
+        self.assertGreaterEqual(len(stored), 1)
+        self.assertTrue(all(str(row["link_type"]) == "association" for row in stored))
+        self.assertLessEqual(len(built) + len(stored), 5 + len(stored))
+        self.assertLessEqual(len(stored), 5, "单条记忆最多 3-5 条边(ADR-001 D4)")
 
     def test_spread_type_for_heard_from_source(self):
         base_id = self._put("base", "小玲姐姐帮我清理了兔耳")
@@ -96,8 +96,11 @@ class MemoryNetworkTests(unittest.TestCase):
             source="heard_from_ling",
         )["memory_id"]
         built = self.store.build_links_for_memory(new_id)
-        self.assertTrue(built)
-        self.assertTrue(all(item["link_type"] == "spread" for item in built))
+        stored = self.store._connection.execute(
+            "SELECT link_type FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchall()
+        self.assertGreaterEqual(len(stored), 1)
+        self.assertTrue(all(str(row["link_type"]) == "spread" for row in stored))
         self.store.close()
         self.store = make_store(Path(self.temp.name))  # 保持 tearDown 对称
         _ = base_id
@@ -106,13 +109,63 @@ class MemoryNetworkTests(unittest.TestCase):
         self._put("first", "一起照顾窗边的栀子花")
         new_id = self._put("second", "栀子花又开了")
         first_built = self.store.build_links_for_memory(new_id)
-        self.assertGreaterEqual(len(first_built), 1)
+        stored = self.store._connection.execute(
+            "SELECT link_type FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchall()
+        self.assertGreaterEqual(len(stored), 1)
+        self.assertLessEqual(len(first_built), 5)
         again = self.store.build_links_for_memory(new_id)
         self.assertEqual(again, [], "重复建边应被 UNIQUE 约束忽略,不再新增")
         count = self.store._connection.execute(
             "SELECT COUNT(*) FROM memory_links WHERE src_memory_id = ?", (new_id,)
         ).fetchone()[0]
-        self.assertEqual(int(count), len(first_built))
+        self.assertEqual(int(count), len(stored))
+
+    def test_put_memory_builds_edges_automatically(self):
+        self._put("anchor", "一起照顾窗边的栀子花")
+        new_id = self._put("auto", "栀子花今晚浇过水了")
+        count = self.store._connection.execute(
+            "SELECT COUNT(*) FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchone()[0]
+        self.assertGreaterEqual(
+            int(count), 1, "put_memory 新建记忆应自动增量建边,无需显式调用"
+        )
+
+    def test_memory_update_does_not_rebuild_edges(self):
+        payload = {
+            "save_id": "save-1",
+            "scope_role_id": "ling",
+            "kind": "episodic",
+            "content": "栀子花今晚浇过水了",
+            "source_event_id": "evt-auto",
+        }
+        new_id = str(self.store.put_memory(payload, source="organizer")["memory_id"])
+        before = self.store._connection.execute(
+            "SELECT COUNT(*) FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchone()[0]
+        self.store.put_memory(payload, source="organizer")  # 同 source_event_id 的更新
+        after = self.store._connection.execute(
+            "SELECT COUNT(*) FROM memory_links WHERE src_memory_id = ?", (new_id,)
+        ).fetchone()[0]
+        self.assertEqual(int(after), int(before), "记忆更新不应重建边")
+
+    def test_backfill_memory_links_covers_legacy_entries(self):
+        self._put("legacy-1", "一起照顾窗边的栀子花")
+        self._put("legacy-2", "栀子花又开了")
+        self.store._connection.execute("DELETE FROM memory_links")
+        self.store._connection.commit()
+        built = self.store.backfill_memory_links(save_id="save-1")
+        self.assertGreaterEqual(built, 1)
+        remaining = self.store._connection.execute(
+            """
+            SELECT COUNT(*) FROM memory_entries
+            WHERE lifecycle = 'active' AND enabled = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM memory_links WHERE src_memory_id = memory_entries.memory_id
+              )
+            """
+        ).fetchone()[0]
+        self.assertEqual(int(remaining), 0, "回填后存量 Active 记忆应都有出边")
 
     def test_lifecycle_dormant_after_constant_days(self):
         memory_id = self._put("dormant", "窗台的栀子花")

@@ -774,6 +774,10 @@ class HeartloomStore:
                 [(memory_id, term, weight) for term, weight in weighted_terms.items()],
             )
             self._set_meta("last_write_at", str(now))
+            if existing is None:
+                # ADR-001 D4:新记忆入库即增量建边(更新不重建;候选集有界,
+                # 与写入同事务执行,离线批量下逐条成本有界)
+                self.build_links_for_memory(memory_id)
         return self.get_memory(save_id, memory_id) or {}
 
     def remember_user_turn(
@@ -1210,6 +1214,31 @@ class HeartloomStore:
                 )
                 if cursor.rowcount:
                     built.append({"candidate_id": candidate_id, "link_type": link_type, "strength": score, "reason": reason})
+        return built
+
+    def backfill_memory_links(self, save_id: str | None = None, limit: int = 25) -> int:
+        """为没有出边的存量 Active 记忆补建增量边(v6 升级后由调度器分批消化)。"""
+        built = 0
+        with self._lock:
+            scope_clause = "" if not save_id else "AND save_id = ?"
+            params: list[Any] = []
+            if save_id:
+                params.append(save_id)
+            params.append(max(1, min(100, int(limit))))
+            rows = self._connection.execute(
+                f"""
+                SELECT memory_id FROM memory_entries
+                WHERE lifecycle = 'active' AND enabled = 1 {scope_clause}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memory_links WHERE src_memory_id = memory_entries.memory_id
+                  )
+                ORDER BY world_updated_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        for row in rows:
+            built += len(self.build_links_for_memory(str(row["memory_id"])))
         return built
 
     def graph_page(

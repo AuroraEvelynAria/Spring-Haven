@@ -172,7 +172,7 @@ func _build_interface() -> void:
 	_strength_slider.min_value = 0.2
 	_strength_slider.max_value = 0.9
 	_strength_slider.step = 0.01
-	_strength_slider.value = 0.55
+	_strength_slider.value = 0.2
 	_strength_slider.custom_minimum_size = Vector2(132, 34)
 	_strength_slider.value_changed.connect(_on_strength_changed)
 	filters.add_child(_strength_slider)
