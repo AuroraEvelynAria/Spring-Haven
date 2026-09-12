@@ -14,6 +14,7 @@ ALTER TABLE memory_entries ADD COLUMN lifecycle_changed_world REAL NOT NULL DEFA
 ALTER TABLE memory_entries ADD COLUMN is_second_hand INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE memory_entries ADD COLUMN embedding_json TEXT;
 ALTER TABLE memory_entries ADD COLUMN embedding_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_entries ADD COLUMN intrinsic REAL NOT NULL DEFAULT 0.5;
 
 -- ===== 2) 回填 =====
 -- 二手传闻:传播链记忆(heard_from_*)标记为二手
@@ -56,7 +57,7 @@ CREATE TABLE IF NOT EXISTS memory_links (
     src_memory_id    TEXT NOT NULL,
     dst_memory_id    TEXT NOT NULL,
     link_type        TEXT NOT NULL
-                     CHECK(link_type IN ('causal','association','spread','milestone')),
+                     CHECK(link_type IN ('causal','association','spread','milestone','conflict')),
     link_strength    REAL NOT NULL DEFAULT 0.5,
     reason           TEXT NOT NULL DEFAULT '',
     world_created_at REAL NOT NULL,
