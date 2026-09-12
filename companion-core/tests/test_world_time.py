@@ -424,7 +424,7 @@ class LifeDecayEngineTests(unittest.TestCase):
         return {
             "protocol": "spring_haven.life_snapshot.v1",
             "roles": {
-                "ling": {"role_id": "ling", "stats": {"hunger": ling_hunger, "stamina": 60.0}},
+                "ling": {"role_id": "ling", "stats": {"hunger": ling_hunger, "stamina": 60.0, "thirst": 100.0}},
                 "nai": {"role_id": "nai", "stats": {"hunger": nai_hunger, "stamina": 55.0}},
             },
             "current_role": "ling",
@@ -563,6 +563,48 @@ class LifeDecayEngineTests(unittest.TestCase):
         # nai: 3.4/h * 12h * 2.0 * 0.5 = 40.8
         self.assertAlmostEqual(applied["nai"]["hunger"], 40.8, delta=0.6)
         self.assertAlmostEqual(applied["nai"]["stamina"], -12.0, delta=0.6)
+
+    def test_client_stat_deltas_reconcile_into_decay_state(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot=self._snapshot(),
+            last_user_activity_at=0, next_event_at=0,
+        )
+        # 客户端本地互动(喂水降口渴)经快照上报,必须并入权威状态而非被回滚
+        var_snapshot = self._snapshot()
+        var_snapshot["stat_deltas"] = {"ling": {"thirst": -18.0}}
+        result = service.sync_life_state({
+            "save_id": "save-1",
+            "selected_role_id": "ling",
+            "snapshot": var_snapshot,
+            "last_user_activity_at": 0,
+        })
+        decay_state = result["decay_state"]
+        self.assertAlmostEqual(
+            float(decay_state["ling"]["stats"]["thirst"]), 82.0, delta=0.1
+        )
+        events = self.store._connection.execute(
+            "SELECT COUNT(*) FROM state_events WHERE kind = 'interaction_delta'"
+        ).fetchone()[0]
+        self.assertEqual(int(events), 1)
+
+    def test_client_stat_deltas_ignored_for_unknown_roles(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        var_snapshot = self._snapshot()
+        var_snapshot["stat_deltas"] = {"stranger": {"thirst": -50.0}}
+        result = service.sync_life_state({
+            "save_id": "save-1",
+            "selected_role_id": "ling",
+            "snapshot": var_snapshot,
+            "last_user_activity_at": 0,
+        })
+        self.assertIn("ling", result["decay_state"])
+        self.assertNotIn("stranger", result["decay_state"])
 
     def test_sync_response_carries_truth_source_and_decay_state(self):
         service = CompanionService(

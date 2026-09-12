@@ -16,6 +16,8 @@ signal role_switched(role: String)
 signal action_triggered(action: String, role: String)
 signal font_size_changed(new_size: int)
 signal life_stat_changed(role: String, stat: String, value: float)
+# #22 后端真相源:生理六项的本地增量经此信号汇总上报 Core 调和
+signal stat_updates_applied(role: String, updates: Dictionary, event_id: String)
 signal save_catalog_changed
 signal save_slot_loaded(save_id: String)
 
@@ -396,6 +398,11 @@ func apply_life_updates(
 		return _commit_error(last_save_error)
 	for change in changes:
 		life_stat_changed.emit(role, str(change.stat), float(change.new_value))
+	var applied_updates: Dictionary = {}
+	for change in changes:
+		applied_updates[str(change.stat)] = float(change.delta)
+	if not applied_updates.is_empty():
+		stat_updates_applied.emit(role, applied_updates, normalized_event_id)
 	return {"ok": true, "duplicate": false, "stat_changes": changes}
 
 func update_life_runtime(changes: Dictionary, persist := true) -> bool:

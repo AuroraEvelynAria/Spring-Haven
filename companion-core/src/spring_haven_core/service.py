@@ -344,6 +344,9 @@ class CompanionService:
             raise RequestValidationError("snapshot must contain JSON-compatible values") from exc
         if len(encoded) > 64_000:
             raise RequestValidationError("snapshot is too large")
+        if self.state_truth_source != "backend" and isinstance(snapshot, dict):
+            # client 模式下没有权威调和,互动增量留在客户端即可
+            snapshot.pop("stat_deltas", None)
         now = int(time.time())
         last_user_activity = self._timestamp(
             raw.get("last_user_activity_at"), fallback=now
