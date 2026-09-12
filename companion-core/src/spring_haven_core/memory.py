@@ -23,6 +23,9 @@ DORMANT_AFTER_WORLD_DAYS = 14.0
 ARCHIVE_CONFIDENCE_THRESHOLD = 0.15
 # ADR-001 D1:双参数衰减 + 唤醒奖励(每次召回 intrinsic 增加,上限 1.0)。
 WAKE_REWARD_PER_RECALL = 0.05
+# 同一用户动作原文在该窗口内重复出现时,强化既有记忆而不是再插一条逐字副本
+# (#22 复读根因:逐字副本被唤醒奖励越推越强,召回被模板刷屏)
+USER_TURN_REINFORCEMENT_WINDOW_WORLD_DAYS = 2.0
 WAKE_REWARD_CAP = 1.0
 # #15 中文语义矛盾词对:冲突检测用(前=正面,后=负面列表)
 CONTRADICTION_PAIRS = [
@@ -808,20 +811,156 @@ class HeartloomStore:
         text: str,
     ) -> dict[str, Any]:
         kind = _classify_memory(text)
+        # 组合后整体过一遍 _clean_text:其 NFKC 归一化会改写全角标点,
+        # 查找键必须与 put_memory 实际存储的内容逐字节一致
+        content = _clean_text(f"主人曾说：{_clean_text(text, 4_000)}", 8_000)
+        importance = _estimate_importance(text)
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                """
+                SELECT memory_id, importance, world_created_at, intrinsic
+                FROM memory_entries
+                WHERE save_id = ? AND scope_role_id = ? AND source = 'conversation_user'
+                  AND content = ? AND enabled = 1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (save_id, SHARED_SCOPE, content),
+            ).fetchone()
+            world_now_value = self.world_now(save_id)
+            if (
+                row is not None
+                and world_now_value - float(row["world_created_at"])
+                <= USER_TURN_REINFORCEMENT_WINDOW_WORLD_DAYS
+            ):
+                # 短期内同一动作原文重复:强化既有记忆而非插入逐字副本。
+                # 复发是保留价值信号,intrinsic 与唤醒奖励同幅度增长。
+                self._connection.execute(
+                    """
+                    UPDATE memory_entries
+                    SET updated_at = ?, world_updated_at = ?, confidence = 1.0,
+                        importance = MAX(importance, ?),
+                        intrinsic = MIN(?, intrinsic + ?)
+                    WHERE memory_id = ?
+                    """,
+                    (
+                        int(time.time()),
+                        world_now_value,
+                        importance,
+                        WAKE_REWARD_CAP,
+                        WAKE_REWARD_PER_RECALL,
+                        str(row["memory_id"]),
+                    ),
+                )
+                return self.get_memory(save_id, str(row["memory_id"])) or {}
         return self.put_memory(
             {
                 "save_id": save_id,
                 "scope_role_id": SHARED_SCOPE,
                 "kind": kind,
                 "title": _automatic_title(kind),
-                "content": f"主人曾说：{_clean_text(text, 4_000)}",
+                "content": content,
                 "source_event_id": source_event_id,
-                "importance": _estimate_importance(text),
+                "importance": importance,
                 "confidence": 1.0,
                 "half_life_days": _automatic_half_life(kind),
             },
             source="conversation_user",
         )
+
+    def consolidate_duplicate_user_memories(self, save_id: str = "") -> dict[str, int]:
+        """合并逐字重复的 conversation_user 记忆(存量清理,幂等)。
+
+        save_id 为空时处理全部旅程。同一旅程内 content 完全相同的对话用户记忆
+        只保留 created_at 最早的一条;召回计数取和,置信度/重要度/intrinsic 取
+        最大。被合并条目的词条与链接一并删除(链接均为自动增量构建,保留条已
+        有自己的邻接)。
+        """
+        merged = 0
+        groups = 0
+        with self._lock, self._connection:
+            if save_id:
+                save_ids = [save_id]
+            else:
+                save_ids = [
+                    str(row["save_id"])
+                    for row in self._connection.execute(
+                        "SELECT DISTINCT save_id FROM memory_entries WHERE source = 'conversation_user'"
+                    )
+                ]
+            for one_save in save_ids:
+                saved_merged, saved_groups = self._consolidate_user_memories_in_save(one_save)
+                merged += saved_merged
+                groups += saved_groups
+        return {"merged": merged, "groups": groups}
+
+    def _consolidate_user_memories_in_save(self, save_id: str) -> tuple[int, int]:
+        merged = 0
+        groups = 0
+        with self._lock, self._connection:
+            group_rows = self._connection.execute(
+                """
+                SELECT content, COUNT(*) AS n
+                FROM memory_entries
+                WHERE save_id = ? AND source = 'conversation_user' AND enabled = 1
+                GROUP BY content
+                HAVING n > 1
+                """,
+                (save_id,),
+            ).fetchall()
+            for group in group_rows:
+                groups += 1
+                rows = self._connection.execute(
+                    """
+                    SELECT memory_id, recall_count, confidence, importance, intrinsic,
+                           world_updated_at
+                    FROM memory_entries
+                    WHERE save_id = ? AND source = 'conversation_user' AND content = ?
+                      AND enabled = 1
+                    ORDER BY created_at ASC
+                    """,
+                    (save_id, str(group["content"])),
+                ).fetchall()
+                keeper_id = str(rows[0]["memory_id"])
+                duplicates = [str(row["memory_id"]) for row in rows[1:]]
+                if not duplicates:
+                    continue
+                self._connection.execute(
+                    """
+                    UPDATE memory_entries
+                    SET recall_count = recall_count + ?,
+                        confidence = MAX(confidence, ?),
+                        importance = MAX(importance, ?),
+                        intrinsic = MAX(intrinsic, ?),
+                        world_updated_at = MAX(world_updated_at, ?)
+                    WHERE memory_id = ?
+                    """,
+                    (
+                        sum(int(row["recall_count"]) for row in rows[1:]),
+                        max(float(row["confidence"]) for row in rows[1:]),
+                        max(float(row["importance"]) for row in rows[1:]),
+                        max(float(row["intrinsic"]) for row in rows[1:]),
+                        max(float(row["world_updated_at"]) for row in rows[1:]),
+                        keeper_id,
+                    ),
+                )
+                placeholders = ",".join("?" for _ in duplicates)
+                self._connection.execute(
+                    f"DELETE FROM memory_terms WHERE memory_id IN ({placeholders})",
+                    duplicates,
+                )
+                self._connection.execute(
+                    f"DELETE FROM memory_links WHERE src_memory_id IN ({placeholders}) "
+                    f"OR dst_memory_id IN ({placeholders})",
+                    (*duplicates, *duplicates),
+                )
+                self._connection.execute(
+                    f"DELETE FROM memory_entries WHERE memory_id IN ({placeholders})",
+                    duplicates,
+                )
+                merged += len(duplicates)
+        return merged, groups
+
 
     def remember_exchange(
         self,
@@ -975,7 +1114,19 @@ class HeartloomStore:
             if bool(row["always_active"]) or lexical > 0.0:
                 scored.append((score, row))
         scored.sort(key=lambda item: (item[0], int(item[1]["updated_at"])), reverse=True)
-        selected = scored[:requested]
+        # 仅对自动入库的对话用户记忆按内容去重:唤醒奖励会让重复互动的记忆
+        # 越来越强,不去重时召回集会被同一模板刷屏,直接放大模型复读倾向。
+        # manual / exchange 等来源的内容重复可能是合法的独立条目,不参与合并。
+        seen_user_turn_contents: set[str] = set()
+        deduped: list[tuple[float, sqlite3.Row]] = []
+        for score, row in scored:
+            if str(row["source"]) == "conversation_user":
+                content_key = str(row["content"])
+                if content_key in seen_user_turn_contents:
+                    continue
+                seen_user_turn_contents.add(content_key)
+            deduped.append((score, row))
+        selected = deduped[:requested]
         # dormant 命中自动唤醒(ADR-001 D5)
         dormant_hits = [str(row["memory_id"]) for _, row in selected if str(row["lifecycle"]) == "dormant"]
         if dormant_hits:
