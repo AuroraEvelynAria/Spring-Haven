@@ -404,7 +404,11 @@ class RecallWorldAgeTests(unittest.TestCase):
 
 
 class LifeDecayEngineTests(unittest.TestCase):
-    """#22 后端真相源:world_time 衰减引擎(flag 开关,默认 client 不生效)。"""
+    """#22 后端真相源:world_time 衰减引擎(flag 开关,默认 client 不生效)。
+
+    权威衰减状态位于 life_state 快照保留键 decay_state,按角色独立水位;
+    客户端重新上传快照不会回滚已衰减的数值。
+    """
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -416,36 +420,56 @@ class LifeDecayEngineTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
-    def test_decay_applies_when_backend_truth(self):
+    def _snapshot(self, ling_hunger=50.0, nai_hunger=30.0):
+        return {
+            "protocol": "spring_haven.life_snapshot.v1",
+            "roles": {
+                "ling": {"role_id": "ling", "stats": {"hunger": ling_hunger, "stamina": 60.0}},
+                "nai": {"role_id": "nai", "stats": {"hunger": nai_hunger, "stamina": 55.0}},
+            },
+            "current_role": "ling",
+        }
+
+    def _advance_clock(self, seconds):
+        self.store._connection.execute(
+            "UPDATE journey_clock SET anchor_real = anchor_real - ? WHERE save_id = 'save-1'",
+            (int(seconds),),
+        )
+        self.store._connection.commit()
+
+    def _snapshot_json(self):
+        return json.loads(
+            self.store._connection.execute(
+                "SELECT snapshot_json FROM life_state WHERE save_id = 'save-1'"
+            ).fetchone()[0]
+        )
+
+    def test_decay_applies_to_both_roles_when_backend_truth(self):
         service = CompanionService(
             self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
         )
         self.store.sync_life_state(
             save_id="save-1", selected_role_id="ling",
-            snapshot={"role_id": "ling", "stats": {"hunger": 50.0, "stamina": 60.0}},
+            snapshot=self._snapshot(),
             last_user_activity_at=0, next_event_at=0,
         )
-        # 首次调用建立 decay_world 水位,不产生衰减
-        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        # 首次调用播种水位,不产生衰减
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
         # 世界时钟前进 0.5 天(锚点回拨)
-        self.store._connection.execute(
-            "UPDATE journey_clock SET anchor_real = anchor_real - 43200 WHERE save_id = 'save-1'"
-        )
-        self.store._connection.commit()
+        self._advance_clock(43200)
         applied = service.advance_life_state_decay("save-1")
-        self.assertIsNotNone(applied)
-        self.assertAlmostEqual(applied["hunger"], 36.0, delta=0.6)
-        self.assertAlmostEqual(applied["stamina"], -14.4, delta=0.6)
-        snapshot = json.loads(
-            self.store._connection.execute(
-                "SELECT snapshot_json FROM life_state WHERE save_id = 'save-1'"
-            ).fetchone()[0]
-        )
-        self.assertAlmostEqual(snapshot["stats"]["hunger"], 86.0, delta=0.6)
+        self.assertIn("ling", applied)
+        self.assertIn("nai", applied)
+        self.assertAlmostEqual(applied["ling"]["hunger"], 36.0, delta=0.6)
+        self.assertAlmostEqual(applied["ling"]["stamina"], -14.4, delta=0.6)
+        self.assertAlmostEqual(applied["nai"]["hunger"], 40.8, delta=0.6)
+        decay_state = self._snapshot_json()["decay_state"]
+        self.assertAlmostEqual(decay_state["ling"]["stats"]["hunger"], 86.0, delta=0.6)
+        self.assertAlmostEqual(decay_state["nai"]["stats"]["hunger"], 70.8, delta=0.6)
         events = self.store._connection.execute(
             "SELECT COUNT(*) FROM state_events WHERE kind = 'decay'"
         ).fetchone()[0]
-        self.assertEqual(int(events), 1)
+        self.assertEqual(int(events), 2)
 
     def test_decay_requires_backend_truth_flag(self):
         service = CompanionService(
@@ -453,10 +477,11 @@ class LifeDecayEngineTests(unittest.TestCase):
         )
         self.store.sync_life_state(
             save_id="save-1", selected_role_id="ling",
-            snapshot={"role_id": "ling", "stats": {"hunger": 50.0}},
+            snapshot=self._snapshot(),
             last_user_activity_at=0, next_event_at=0,
         )
-        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        self._advance_clock(43200)
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
 
     def test_decay_noop_when_world_time_not_advanced(self):
         service = CompanionService(
@@ -464,12 +489,108 @@ class LifeDecayEngineTests(unittest.TestCase):
         )
         self.store.sync_life_state(
             save_id="save-1", selected_role_id="ling",
-            snapshot={"role_id": "ling", "stats": {"hunger": 50.0}},
+            snapshot=self._snapshot(),
             last_user_activity_at=0, next_event_at=0,
         )
-        self.assertIsNone(service.advance_life_state_decay("save-1"))
-        self.assertIsNone(service.advance_life_state_decay("save-1"))
-        self.assertIsNone(service.advance_life_state_decay("save-1"))
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
+
+    def test_client_sync_does_not_rollback_decay(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot=self._snapshot(),
+            last_user_activity_at=0, next_event_at=0,
+        )
+        self._advance_clock(43200)
+        first = service.advance_life_state_decay("save-1")
+        self.assertAlmostEqual(first["ling"]["hunger"], 36.0, delta=0.6)
+        # 客户端带着未衰减的旧值重新同步快照:权威衰减状态必须保留
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot=self._snapshot(),
+            last_user_activity_at=0, next_event_at=0,
+        )
+        decay_state = self._snapshot_json()["decay_state"]
+        self.assertAlmostEqual(decay_state["ling"]["stats"]["hunger"], 86.0, delta=0.6)
+        # 时钟再走 0.5 天,衰减从权威值继续,而不是从回滚值重来
+        self._advance_clock(43200)
+        second = service.advance_life_state_decay("save-1")
+        # 86 + 36 会触及 100 钳位:实际增量只有 14
+        self.assertAlmostEqual(second["ling"]["hunger"], 14.0, delta=0.6)
+        self.assertAlmostEqual(
+            self._snapshot_json()["decay_state"]["ling"]["stats"]["hunger"], 100.0, delta=0.1
+        )
+
+    def test_sync_seeds_decay_state_without_retroactive_catchup(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        # 时钟先走了 2 天,然后客户端才第一次同步:播种锚定当下,不结算缺口
+        self._advance_clock(172800)
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot=self._snapshot(),
+            last_user_activity_at=0, next_event_at=0,
+        )
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
+        decay_state = self._snapshot_json()["decay_state"]
+        self.assertAlmostEqual(decay_state["ling"]["stats"]["hunger"], 50.0, delta=0.1)
+
+    def test_decay_honors_snapshot_scales(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        # 起点压低,避免 2.0 倍率下的增量被 100 钳位截断
+        snapshot = self._snapshot(ling_hunger=20.0, nai_hunger=10.0)
+        snapshot["decay_scales"] = {
+            "life_time_scale": 2.0,
+            "role_scales": {"ling": 1.0, "nai": 0.5},
+        }
+        self.store.sync_life_state(
+            save_id="save-1", selected_role_id="ling",
+            snapshot=snapshot,
+            last_user_activity_at=0, next_event_at=0,
+        )
+        self.assertEqual(service.advance_life_state_decay("save-1"), {})
+        self._advance_clock(43200)
+        applied = service.advance_life_state_decay("save-1")
+        # ling: 3.0/h * 12h * 2.0 * 1.0 = 72.0
+        self.assertAlmostEqual(applied["ling"]["hunger"], 72.0, delta=0.6)
+        # nai: 3.4/h * 12h * 2.0 * 0.5 = 40.8
+        self.assertAlmostEqual(applied["nai"]["hunger"], 40.8, delta=0.6)
+        self.assertAlmostEqual(applied["nai"]["stamina"], -12.0, delta=0.6)
+
+    def test_sync_response_carries_truth_source_and_decay_state(self):
+        service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="backend"
+        )
+        result = service.sync_life_state({
+            "save_id": "save-1",
+            "selected_role_id": "ling",
+            "snapshot": self._snapshot(),
+            "last_user_activity_at": 0,
+        })
+        self.assertEqual(result["truth_source"], "backend")
+        self.assertIn("ling", result["decay_state"])
+        self.assertAlmostEqual(
+            float(result["decay_state"]["ling"]["stats"]["hunger"]), 50.0, delta=0.1
+        )
+        client_service = CompanionService(
+            self.roles, FakeProvider(), memory=self.store, state_truth_source="client"
+        )
+        result = client_service.sync_life_state({
+            "save_id": "save-1",
+            "selected_role_id": "ling",
+            "snapshot": self._snapshot(),
+            "last_user_activity_at": 0,
+        })
+        self.assertEqual(result["truth_source"], "client")
+        # client 模式下响应仍透出播种状态,但客户端不应据此门控本地衰减
+        self.assertIn("ling", result["decay_state"])
 
 
 if __name__ == "__main__":

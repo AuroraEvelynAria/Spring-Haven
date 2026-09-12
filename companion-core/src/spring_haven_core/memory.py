@@ -2023,6 +2023,41 @@ class HeartloomStore:
         if selected_role_id not in self.role_ids:
             raise MemoryStoreError("selected_role_id is invalid")
         timestamp = max(1, int(now or time.time()))
+        snapshot = dict(snapshot)
+        with self._lock, self._connection:
+            # #22 后端真相源:decay_state 是后端独占的保留键。客户端上传的快照
+            # 不携带它;换新快照时必须原样保留,否则权威衰减状态会被回滚。
+            previous = self._connection.execute(
+                "SELECT snapshot_json FROM life_state WHERE save_id = ?", (save_id,)
+            ).fetchone()
+            decay_state: dict[str, Any] = {}
+            if previous is not None:
+                previous_snapshot = _json_object(previous["snapshot_json"])
+                candidate = previous_snapshot.get("decay_state")
+                if isinstance(candidate, dict):
+                    decay_state = dict(candidate)
+            if not decay_state:
+                # 首次播种:采用客户端当前值,水位锚定当下,不结算迁移缺口。
+                roles_snapshot = (
+                    snapshot.get("roles")
+                    if isinstance(snapshot.get("roles"), dict)
+                    else {}
+                )
+                world_now_value = self.world_now(save_id)
+                for role_id, role_snapshot in roles_snapshot.items():
+                    role_stats = (
+                        role_snapshot.get("stats")
+                        if isinstance(role_snapshot, dict)
+                        and isinstance(role_snapshot.get("stats"), dict)
+                        else {}
+                    )
+                    if role_stats:
+                        decay_state[str(role_id)] = {
+                            "stats": dict(role_stats),
+                            "decay_world": world_now_value,
+                        }
+            if decay_state:
+                snapshot["decay_state"] = decay_state
         encoded_snapshot = _json(snapshot)
         if len(encoded_snapshot) > 64_000:
             raise MemoryStoreError("life snapshot is too large")
@@ -2065,65 +2100,115 @@ class HeartloomStore:
         *,
         save_id: str,
         hourly_rates: dict[str, dict[str, float]],
-    ) -> dict[str, float] | None:
-        """#22 后端真相源:按 world_time 推进快照生理衰减(钳位 0-100,记事件日志)。
+    ) -> dict[str, dict[str, float]]:
+        """#22 后端真相源:按 world_time 推进双角色生理衰减(钳位 0-100,记事件日志)。
 
-        仅 state_truth_source=backend 时由服务层调用;world_time 增量以
-        快照内 decay_world 水位追踪,重复调用安全。
+        权威衰减状态存放在 life_state 快照的保留键 ``decay_state`` 内(客户端永不
+        写入,sync 时由后端自行保留);水位按角色独立,重复调用安全。返回
+        ``{role_id: {stat: delta}}``,无角色发生实际变化时返回空 dict。
         """
+        results: dict[str, dict[str, float]] = {}
         with self._lock, self._connection:
             row = self._connection.execute(
                 "SELECT snapshot_json FROM life_state WHERE save_id = ?", (save_id,)
             ).fetchone()
             if row is None:
-                return None
+                return results
             snapshot = _json_object(row["snapshot_json"])
-            stats = snapshot.get("stats") if isinstance(snapshot.get("stats"), dict) else {}
-            if not stats:
-                return None
-            role_id = str(snapshot.get("role_id", "ling"))
-            rates = hourly_rates.get(role_id, hourly_rates.get("ling", {}))
+            roles_snapshot = (
+                snapshot.get("roles")
+                if isinstance(snapshot.get("roles"), dict)
+                else {}
+            )
+            if not roles_snapshot:
+                return results
+            decay_state = (
+                dict(snapshot.get("decay_state"))
+                if isinstance(snapshot.get("decay_state"), dict)
+                else {}
+            )
+            scales = (
+                snapshot.get("decay_scales")
+                if isinstance(snapshot.get("decay_scales"), dict)
+                else {}
+            )
+            life_time_scale = float(scales.get("life_time_scale", 1.0) or 1.0)
             world_now_value = self.world_now(save_id)
-            last_decay = float(snapshot.get("decay_world", world_now_value))
-            elapsed_days = max(0.0, world_now_value - last_decay)
-            applied: dict[str, float] = {}
-            for stat, per_hour in rates.items():
-                if stat not in stats:
-                    continue
-                current = float(stats[stat])
-                delta = float(per_hour) * 24.0 * elapsed_days
-                new_value = max(0.0, min(100.0, current + delta))
-                rounded_delta = round(new_value - current, 2)
-                if abs(rounded_delta) < 0.01:
-                    continue
-                stats[stat] = round(new_value, 2)
-                applied[stat] = rounded_delta
-            # 水位总是写入:首次调用建立 decay_world,否则永远测不到增量(#22)
-            snapshot["stats"] = stats
-            snapshot["decay_world"] = world_now_value
+            for role_id, role_snapshot in roles_snapshot.items():
+                role_key = str(role_id)
+                role_state = (
+                    dict(decay_state.get(role_key))
+                    if isinstance(decay_state.get(role_key), dict)
+                    else {}
+                )
+                stats = (
+                    dict(role_state.get("stats"))
+                    if isinstance(role_state.get("stats"), dict)
+                    else {}
+                )
+                if not stats:
+                    # 首次播种:直接采用客户端快照的当前值,水位锚定在当下,
+                    # 避免迁移瞬间把历史缺口一次性结算。
+                    seeded = (
+                        role_snapshot.get("stats")
+                        if isinstance(role_snapshot.get("stats"), dict)
+                        else {}
+                    )
+                    if not seeded:
+                        continue
+                    stats = dict(seeded)
+                rates = hourly_rates.get(role_key, {})
+                role_scale = float(
+                    (scales.get("role_scales", {}) or {}).get(role_key, 1.0) or 1.0
+                )
+                last_decay = float(role_state.get("decay_world", world_now_value))
+                elapsed_days = max(0.0, world_now_value - last_decay)
+                applied: dict[str, float] = {}
+                for stat, per_hour in rates.items():
+                    if stat not in stats:
+                        continue
+                    current = float(stats[stat])
+                    delta = (
+                        float(per_hour)
+                        * 24.0
+                        * elapsed_days
+                        * life_time_scale
+                        * role_scale
+                    )
+                    new_value = max(0.0, min(100.0, current + delta))
+                    rounded_delta = round(new_value - current, 2)
+                    if abs(rounded_delta) < 0.01:
+                        continue
+                    stats[stat] = round(new_value, 2)
+                    applied[stat] = rounded_delta
+                decay_state[role_key] = {
+                    "stats": stats,
+                    "decay_world": world_now_value,
+                }
+                if applied:
+                    results[role_key] = applied
+                    self._connection.execute(
+                        """
+                        INSERT INTO state_events (
+                            event_id, save_id, role_id, kind, delta_json, world_time, real_unix, note
+                        ) VALUES (?, ?, ?, 'decay', ?, ?, ?, ?)
+                        """,
+                        (
+                            "ste-" + uuid.uuid4().hex,
+                            save_id,
+                            role_key,
+                            _json(applied),
+                            world_now_value,
+                            int(time.time()),
+                            f"elapsed={elapsed_days:.4f}d",
+                        ),
+                    )
+            snapshot["decay_state"] = decay_state
             self._connection.execute(
                 "UPDATE life_state SET snapshot_json = ?, updated_at = ? WHERE save_id = ?",
                 (_json(snapshot), int(time.time()), save_id),
             )
-            if not applied:
-                return None
-            self._connection.execute(
-                """
-                INSERT INTO state_events (
-                    event_id, save_id, role_id, kind, delta_json, world_time, real_unix, note
-                ) VALUES (?, ?, ?, 'decay', ?, ?, ?, ?)
-                """,
-                (
-                    "ste-" + uuid.uuid4().hex,
-                    save_id,
-                    role_id,
-                    _json(applied),
-                    world_now_value,
-                    int(time.time()),
-                    f"elapsed={elapsed_days:.4f}d",
-                ),
-            )
-        return applied
+        return results
 
     def due_life_states(self, now: int | None = None, limit: int = 8) -> list[dict[str, Any]]:
         timestamp = max(1, int(now or time.time()))

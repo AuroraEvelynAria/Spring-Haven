@@ -362,9 +362,13 @@ class CompanionService:
             recorded = self.memory.record_life_events(
                 save_id=save_id, events=recent_events
             )
+        snapshot = state.get("snapshot", {})
+        decay_state = snapshot.get("decay_state", {}) if isinstance(snapshot, dict) else {}
         return {
             "protocol": "spring_haven.life_sync.v1",
             "state": state,
+            "truth_source": self.state_truth_source,
+            "decay_state": decay_state if isinstance(decay_state, dict) else {},
             "outbox": self.memory.life_status(save_id),
             "recent_events_recorded": recorded,
         }
@@ -1299,17 +1303,17 @@ class CompanionService:
         },
     }
 
-    def advance_life_state_decay(self, save_id: str) -> dict[str, float] | None:
-        """#22 后端真相源:world_time 生理衰减。state_truth_source=client 时 no-op。"""
+    def advance_life_state_decay(self, save_id: str) -> dict[str, dict[str, float]]:
+        """#22 后端真相源:world_time 双角色生理衰减。state_truth_source=client 时 no-op。"""
         if self.state_truth_source != "backend":
-            return None
+            return {}
         return self.memory.advance_life_decay(
             save_id=save_id, hourly_rates=self.HOURLY_NEED_RATES
         )
 
-    def advance_life_state_decay_all(self) -> dict[str, dict[str, float]]:
+    def advance_life_state_decay_all(self) -> dict[str, dict[str, dict[str, float]]]:
         """调度器入口:对全部已知旅程推进衰减(仅 backend 真相源模式)。"""
-        results: dict[str, dict[str, float]] = {}
+        results: dict[str, dict[str, dict[str, float]]] = {}
         if self.state_truth_source != "backend":
             return results
         for save_id in self.memory.life_save_ids():
