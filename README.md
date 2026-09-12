@@ -1,7 +1,6 @@
 
 <div align="center">
-  <img src="<img width="2400" height="848" alt="banner_00018" src="https://github.com/user-attachments/assets/dc30093f-df9c-4ad8-9225-73855975d766" />
-" alt="Spring Haven" width="120"/>
+  <img src="https://github.com/user-attachments/assets/dc30093f-df9c-4ad8-9225-73855975d766" alt="Spring Haven" width="100%"/>
   
   # 🌿 Spring Haven
   
