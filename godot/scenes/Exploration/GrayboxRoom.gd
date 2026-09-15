@@ -282,12 +282,53 @@ func _build_dining_area() -> void:
 
 
 func _build_anchor_markers() -> void:
+	var layout := _load_house_layout()
+	if not layout.is_empty():
+		# 自定义布局：动态创建锚点 Marker3D + 可视化标记
+		var raw_anchors = layout.get("anchors", [])
+		if raw_anchors is Array:
+			var palette: Array[Material] = [
+				_materials.anchor_dining, _materials.anchor_sofa,
+				_materials.anchor_dining, _materials.anchor_sofa,
+			]
+			var index := 0
+			for raw in raw_anchors:
+				if not raw is Dictionary:
+					continue
+				var anchor: Dictionary = raw
+				var marker := Marker3D.new()
+				marker.name = str(anchor.get("id", "anchor%d" % index))
+				marker.position = Vector3(
+					float(anchor.get("x", 0.0)), 0.04, float(anchor.get("z", 0.0))
+				)
+				add_child(marker)
+				_add_anchor_marker(
+					marker,
+					"AnchorMarker%d" % index,
+					palette[index % palette.size()],
+				)
+				index += 1
+		return
+	# 回退：场景内手写锚点
 	var dining_anchor := get_node_or_null("DiningSeatLing") as Node3D
 	var sofa_anchor := get_node_or_null("SofaSpot") as Node3D
 	if dining_anchor:
 		_add_anchor_marker(dining_anchor, "DiningAnchorMarker", _materials.anchor_dining)
 	if sofa_anchor:
 		_add_anchor_marker(sofa_anchor, "SofaAnchorMarker", _materials.anchor_sofa)
+
+
+func _load_house_layout() -> Dictionary:
+	#Load user house layout JSON, or {} when absent.
+	const LAYOUT_PATH := "user://house_layout.json"
+	if not FileAccess.file_exists(LAYOUT_PATH):
+		return {}
+	var file := FileAccess.open(LAYOUT_PATH, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
+	return parsed if parsed is Dictionary else {}
 
 
 func _add_anchor_marker(parent: Node3D, marker_name: String, material: Material) -> void:
