@@ -16,6 +16,7 @@ const LIFE_PERSONALITY := preload("res://scripts/domain/LifePersonalityProfiles.
 const RECIPIENT_RESOLVER := preload("res://scripts/domain/ConversationRecipientResolver.gd")
 const TEXT_SANITIZER := preload("res://scripts/domain/TextSanitizer.gd")
 const CHAT_PIPELINE := preload("res://scripts/domain/ChatPipeline.gd")
+const BACKGROUND_FX := preload("res://scenes/GameWorld/BackgroundFX.gd")
 const SHARED_HISTORY_LIMIT := 24
 const UI_MESSAGE_LIMIT := 72
 const STAT_TWEEN_DURATION := 0.58
@@ -70,7 +71,6 @@ var _thinking_strip_visibility := 0.0
 var _intro_active := false
 var _scene_exiting := false
 var _suppress_exit_persistence := false
-var _particles: Array = []
 var _rng := RandomNumberGenerator.new()
 var _pending_roles: Dictionary = {}
 var _foreground_scope_tokens: Dictionary = {}
@@ -84,7 +84,7 @@ var _stat_pulse_tweens: Dictionary = {}
 var _pending_full_effects: Dictionary = {}
 var _last_action_event: Dictionary = {}
 
-var _background_fx: Control
+var _background_fx: Control  # BackgroundFX.gd 实例；必须是本节点第一个子节点
 var _glow: ColorRect
 var _nav: PanelContainer
 var _brand: Label
@@ -200,17 +200,8 @@ func _ready() -> void:
 		_add_system_message("Companion Core 未配置：消息不会由本地文本冒充 AI 回复。")
 
 func _process(delta: float) -> void:
-	var viewport_size := get_viewport_rect().size
-	for particle in _particles:
-		particle.position.y -= particle.speed * delta
-		particle.position.x += sin(Time.get_ticks_msec() * 0.00035 + particle.phase) * delta * 2.0
-		if particle.position.y < -6.0:
-			particle.position.y = viewport_size.y + 6.0
-			particle.position.x = _rng.randf_range(0.0, maxf(1.0, viewport_size.x))
-		elif particle.position.x < -8.0:
-			particle.position.x = viewport_size.x + 8.0
-		elif particle.position.x > viewport_size.x + 8.0:
-			particle.position.x = -8.0
+	# #11：背景底色/柔光晕/54 粒子的逐帧动画已迁至 BackgroundFX 子层，
+	# 本节点不再每帧 queue_redraw()，界面刷新与背景动画解耦。
 	_life_mini_elapsed += delta
 	if _life_mini_elapsed >= 10.0:
 		_life_mini_elapsed = 0.0
@@ -236,7 +227,6 @@ func _process(delta: float) -> void:
 	if _life_status_elapsed >= 30.0:
 		_life_status_elapsed = fmod(_life_status_elapsed, 30.0)
 		_update_life_status_time()
-	queue_redraw()
 
 func _input(event: InputEvent) -> void:
 	if not _typewriter_active or not event.is_pressed():
@@ -284,16 +274,6 @@ func _exit_tree() -> void:
 	if history_changed:
 		Global.save_default_state()
 
-func _draw() -> void:
-	var data := ThemeMgr.get_current_theme_data()
-	var viewport_size := get_viewport_rect().size
-	var bg := Color(data.bg)
-	draw_rect(Rect2(Vector2.ZERO, viewport_size), bg)
-	draw_circle(viewport_size * Vector2(0.48, 0.52), 430.0, Color(data.primary, 0.025))
-	for particle in _particles:
-		var alpha: float = float(particle.alpha) * (0.8 + sin(Time.get_ticks_msec() * 0.001 + float(particle.phase)) * 0.2)
-		draw_circle(particle.position, float(particle.radius), Color(data.primary, alpha))
-
 const SEASON_TINTS := {
 	"spring": Color(0.42, 0.78, 0.52, 0.05),
 	"summer": Color(1.0, 0.88, 0.55, 0.04),
@@ -327,13 +307,12 @@ func _season_for_month(month: int) -> String:
 	return "winter"
 
 func _build_background_fx() -> void:
-	# #11：背景光晕与季节染色统一挂在专用子层，与界面节点明确分层。
-	_background_fx = Control.new()
+	# #11：背景底色、柔光晕、粒子、季节染色统一由 BackgroundFX 子层负责绘制。
+	# 它必须是本节点的第一个子节点（_ready 中先于 _build_interface 调用），
+	# 才能保证绘制落在所有 UI 之下——不得调换该调用顺序。
+	_background_fx = BACKGROUND_FX.new()
 	_background_fx.name = "BackgroundFX"
-	_background_fx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_background_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_background_fx)
-	_initialize_background_particles()
 	_build_background_glow()
 	_build_season_overlay()
 
@@ -347,21 +326,6 @@ func _build_background_glow() -> void:
 	material.set_shader_parameter("radius", 0.64)
 	_glow.material = material
 	_background_fx.add_child(_glow)
-
-func _initialize_background_particles() -> void:
-	_particles.clear()
-	var viewport_size := get_viewport_rect().size
-	for _index in 54:
-		_particles.append({
-			"position": Vector2(
-				_rng.randf_range(0.0, maxf(1.0, viewport_size.x)),
-				_rng.randf_range(0.0, maxf(1.0, viewport_size.y))
-			),
-			"speed": _rng.randf_range(4.0, 14.0),
-			"radius": _rng.randf_range(0.6, 1.7),
-			"alpha": _rng.randf_range(0.06, 0.24),
-			"phase": _rng.randf_range(0.0, TAU)
-		})
 
 func _stats_for_role(role: String) -> Dictionary:
 	if not ROLE_DATA.has(role):
@@ -2747,7 +2711,9 @@ func _on_theme_changed(_data: Dictionary) -> void:
 	_refresh_message_styles(data)
 	_refresh_sidebar()
 	_refresh_interaction_state()
-	queue_redraw()
+	# 背景配色由 ThemeMgr 实时读取，改主题后只需让 BackgroundFX 重绘一次。
+	if is_instance_valid(_background_fx):
+		_background_fx.call("refresh_theme")
 
 func _refresh_message_styles(data: Dictionary) -> void:
 	var plate_alpha := 0.05 if bool(data.is_dark) else 0.04
