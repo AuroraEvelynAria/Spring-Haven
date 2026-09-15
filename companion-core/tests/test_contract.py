@@ -240,6 +240,51 @@ class ContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("心情=偏高", runtime["body_state"]["state_summary"])
         self.assertNotIn("72.5", runtime["body_state"]["state_summary"])
 
+    async def test_state_summary_stays_in_tail_and_keeps_prefix_cached(self):
+        """#24 验收:状态摘要不得污染消息前缀。
+
+        前缀(角色 system + 历史)一旦被状态摘要改写,任意角色翻越分桶边界就会
+        作废整段历史的 KV 前缀缓存(DeepSeek context cache 依赖前缀稳定)。
+        本用例用两次"历史完全相同、仅生理分桶翻越边界"的请求做对照:
+        (1) 前缀必须逐字节一致;
+        (2) 动态状态块只能落在最后一条 user 消息里,且排在用户原文之后;
+        (3) 动态部分确实随分桶变化(证明对照有效,而非常量比较)。
+        """
+        # 两次请求改用不同 save_id:服务端会为同一存档累积过往记录并注入历史块,
+        # 复用同一存档会让第二次请求的前缀「合法地」变长,从而掩盖真正的变量(分桶)。
+        # 换存档后前缀只由 payload 的 history 决定,分桶成为唯一差异。
+        first = valid_payload()
+        first["save_id"] = "save-prefix-a"
+        first["request_id"] = "save-prefix-a-1"
+        await self.service.chat(first)
+        first_system, first_messages = self.provider.calls[0]
+
+        second = valid_payload()
+        second["save_id"] = "save-prefix-b"
+        second["request_id"] = "save-prefix-b-1"
+        second["state"]["body_state"]["stats"] = {"hunger": 5.0, "mood": 98.0}
+        await self.service.chat(second)
+        second_system, second_messages = self.provider.calls[1]
+
+        # (1) 角色前缀与历史(除最后一条 user)逐字节一致 → 前缀缓存不失效
+        self.assertEqual(first_system, second_system)
+        self.assertEqual(first_messages[:-1], second_messages[:-1])
+
+        # (2) 状态块位于最后一条消息,且排在用户原文之后
+        tail = second_messages[-1]["content"]
+        self.assertEqual(tail.count(RUNTIME_OPEN), 1)
+        self.assertEqual(tail.count(RUNTIME_CLOSE), 1)
+        self.assertLess(tail.index("小玲今天感觉怎么样？"), tail.index(RUNTIME_OPEN))
+
+        # (3) 动态部分确实随分桶变化,且原始浮点不进 prompt
+        def _summary(messages: list[dict]) -> str:
+            block = messages[-1]["content"].split(RUNTIME_OPEN, 1)[1].split(RUNTIME_CLOSE, 1)[0]
+            return json.loads(block)["body_state"]["state_summary"]
+
+        self.assertNotEqual(_summary(first_messages), _summary(second_messages))
+        self.assertNotIn("72.5", _summary(first_messages))
+        self.assertNotIn("98.0", _summary(second_messages))
+
     async def test_system_prompt_is_stable_across_runtime_changes(self):
         composer = PromptComposer(self.roles)
         role = self.roles.get("ling")
