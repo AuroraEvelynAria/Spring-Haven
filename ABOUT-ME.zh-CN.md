@@ -28,6 +28,13 @@
 >
 > 💭 **还在设想的**：手机这个**载体**本身（真正的手机形态界面）、双向实时语音通话、
 > 以及手机 App 形态的短信。
+>
+> ✅ **小玲和小奈是系统自带的示例角色，不是写死的。** 角色定义在一个注册表里
+> （`user_data/roles.json`，模板见 `config/roles.example.json`），每个角色可以配
+> `display_name` / `full_name` / **别名** / **人设提示词** / **记忆提示词** / `age`，
+> 人设本身是纯 markdown（`config/personas/ling.md`、`nai.md`）——
+> **玩家可以改她们，也可以从零加自己的角色。** 数据库里每张表都带 `role_id`，
+> 所以记忆、日程、生命状态、成就都是**按角色分开存**的。
 
 ## 二、自带的地形编辑器
 
@@ -75,7 +82,8 @@ LLM 只输出受控的语义信号，适配器负责表演。正式接 Live2D �
 
 以上功能涉及最基础的 ASR 和 TTS。ASR 用 Whisper 应该就够了。
 
-TTS 最初想用 **VoxCPM2** 来实现，后面在研究 **GPT-SoVITS** 和 **CozyVoice** ——
+> 🔧 **还在研究**：**VoxCPM2**（最初的想法）和 **CozyVoice** —— 都还没接成适配器；
+> **Voicebox** 有单独的集成文档，走 OpenAI 兼容这条路可以用，但同样没有专门适配器。
 我想找到一种能带来**自然音调变化和情绪**的 TTS，这一条我还没满意。
 
 > ✅ **已经接好的**：ASR 走 OpenAI 兼容 `/audio/transcriptions`（Whisper）或 Open-LLM-VTuber `/asr`；
@@ -167,7 +175,30 @@ TTS 最初想用 **VoxCPM2** 来实现，后面在研究 **GPT-SoVITS** 和 **Co
 >
 > ⚠️ 一条诚实的说明：「锚世界时间」的设计已定，但**周键到世界周的迁移还没做完**（issue #23）。
 
-## 九、项目灵感来源
+## 九、里程碑与成就
+
+它不是一张单独的成就表，而是**接在生命状态和心织之间的东西**。
+
+规则是**确定性**的：每次摘要之后由引擎跑一遍，**幂等** —— 同一个成就只会解锁一次。
+解锁的那一刻会同时做三件事：
+
+- 往记忆里写一条**永远激活的关系记忆** —— 所以「你们第一次……」，之后她**真的会记得**，
+  而不只是弹一个徽章
+- 写进 `role_milestones` 成就档案
+- 连进记忆关系图（`link_type` 里就有 `milestone` 这一类）
+
+成就的**文案不是硬编码的**：解锁时让角色自己的 LLM 写标题和描述（上限 60 / 240 字），
+失败就落回**模板占位** —— 关键是**不阻塞解锁**。
+
+客户端这边另有一本账：某项生命状态**第一次满值**时，会记一条确定性的 `full-` 里程碑
+（比如小玲的「好感度」满值），带归档迁移，重启不会重复计。
+
+> ✅ **全部已经实现**：`milestones` / `role_milestones` 两张表、
+> `run_due_milestones()` 调度、`unlock_role_milestone()` 幂等解锁、
+> `_polish_milestone_copy()` 的 LLM 文案 + 模板兜底、
+> 以及客户端满值账本 `full_stat_milestones`。
+
+## 十、项目灵感来源
 
 - **斯坦福小镇 generative_agents** — https://github.com/joonspk-research/generative_agents
 - **Neuro-Sama**（未开源）
