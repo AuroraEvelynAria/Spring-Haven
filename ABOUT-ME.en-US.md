@@ -94,9 +94,7 @@ hear how you did it.**
 
 Everything above involves basic ASR and TTS. Whisper should be enough for ASR.
 
-> 🔧 **Still researching**: **VoxCPM2** (my first idea for this) and **CozyVoice** — neither
-> is an adapter yet. **Voicebox** has its own integration doc and works through the
-> OpenAI-compatible path, but there's no dedicated adapter for it either.
+For TTS I first wanted to use **VoxCPM2**, and I've since been looking into **GPT-SoVITS**
 and **CozyVoice** — I want a TTS that gives **natural pitch variation and emotion**, and I'm
 not satisfied with that yet.
 
@@ -104,7 +102,9 @@ not satisfied with that yet.
 > Open-LLM-VTuber `/asr`; TTS through **GPT-SoVITS** or **any OpenAI-compatible speech
 > endpoint** — two adapters exist today (`openai_speech`, `gpt_sovits_get`).
 >
-> 🔧 **Still researching**: VoxCPM2, CozyVoice — neither is an adapter yet.
+> 🔧 **Still researching**: **VoxCPM2** (my first idea for this) and **CozyVoice** — neither
+> is an adapter yet. **Voicebox** has its own integration doc and works through the
+> OpenAI-compatible path, but there's no dedicated adapter for it either.
 >
 > 💭 **Still looking for**: "natural pitch variation + emotion". Recommendations welcome.
 

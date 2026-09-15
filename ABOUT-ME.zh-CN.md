@@ -82,15 +82,15 @@ LLM 只输出受控的语义信号，适配器负责表演。正式接 Live2D �
 
 以上功能涉及最基础的 ASR 和 TTS。ASR 用 Whisper 应该就够了。
 
-> 🔧 **还在研究**：**VoxCPM2**（最初的想法）和 **CozyVoice** —— 都还没接成适配器；
-> **Voicebox** 有单独的集成文档，走 OpenAI 兼容这条路可以用，但同样没有专门适配器。
+TTS 最初想用 **VoxCPM2** 来实现，后面在研究 **GPT-SoVITS** 和 **CozyVoice** ——
 我想找到一种能带来**自然音调变化和情绪**的 TTS，这一条我还没满意。
 
 > ✅ **已经接好的**：ASR 走 OpenAI 兼容 `/audio/transcriptions`（Whisper）或 Open-LLM-VTuber `/asr`；
 > TTS 已经有 **GPT-SoVITS**，以及任何 OpenAI 兼容语音接口 —— 目前代码里是两个适配器
 > （`openai_speech`、`gpt_sovits_get`）。
 >
-> 🔧 **还在研究**：VoxCPM2、CozyVoice —— 都还没接成适配器。
+> 🔧 **还在研究**：**VoxCPM2**（最初的想法）和 **CozyVoice** —— 都还没接成适配器；
+> **Voicebox** 有单独的集成文档，走 OpenAI 兼容这条路可以用，但同样没有专门适配器。
 >
 > 💭 **还没满意的**：「自然音调变化 + 情绪」，欢迎推荐。
 
