@@ -15,7 +15,8 @@ RAG_OPEN = '<spring_haven_knowledge_context version="1">'
 RAG_CLOSE = "</spring_haven_knowledge_context>"
 
 # #29 硬性约束:生理数值只以定性分桶进入 prompt(很高/偏高/普通/偏低/很低)。
-# 滞回(hysteresis)将随 #27 会话层落地;当前为无状态确定性分桶。
+# 有状态路径(state_summary)走 _BucketHysteresis 做边界滞回;无状态路径
+# (life_lab needs_by_role)走 _qualitative_bucket。原始浮点永不出域。
 _STATE_BUCKETS = (
     (85.0, "很高"),
     (65.0, "偏高"),
