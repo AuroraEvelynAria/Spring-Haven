@@ -297,6 +297,18 @@ func _apply_validated_action(action: Dictionary) -> void:
 			var target_id := str(action.get("target_id", ""))
 			var anchor: Node3D
 			var label := ""
+			# 动态布局锚点优先（家の地图编辑器生成的锚点）
+			var dynamic := _find_dynamic_anchor(target_id)
+			if is_instance_valid(dynamic.get("anchor")):
+				anchor = dynamic.get("anchor")
+				label = str(dynamic.get("label", target_id))
+				if is_instance_valid(anchor) and ling.has_method("command_move_to"):
+					if _is_reachable(ling, anchor):
+						ling.call("command_move_to", anchor.global_position, label)
+						_set_status("action_applied", "小玲到达%s" % label)
+						return
+				_set_status("action_failed", "%s当前无法到达" % label)
+				return
 			match target_id:
 				"dining_table":
 					anchor = _get_dining_anchor()
@@ -490,6 +502,25 @@ func _get_player() -> Node3D:
 func _get_ling() -> Node3D:
 	return _get_exported_node(ling_path)
 
+
+func _find_dynamic_anchor(target_id: String) -> Dictionary:
+	#Resolve target_id against layout-generated Marker3D anchors.
+	var room := get_node_or_null("../NavigationRegion3D/GrayboxRoom") as Node3D
+	if not is_instance_valid(room):
+		return {}
+	var wanted := str(target_id).strip_edges().to_lower()
+	for child in room.get_children():
+		if not child is Marker3D:
+			continue
+		var marker := child as Marker3D
+		var marker_id := str(marker.name).to_lower()
+		if marker_id == wanted or marker_id.begins_with(wanted):
+			return {"anchor": marker, "label": str(marker.name)}
+		if wanted.begins_with("dining") and marker_id.begins_with("dining"):
+			return {"anchor": marker, "label": "餐桌"}
+		if wanted.begins_with("sofa") and marker_id.begins_with("sofa"):
+			return {"anchor": marker, "label": "沙发"}
+	return {}
 
 func _get_dining_anchor() -> Node3D:
 	return _get_exported_node(dining_anchor_path)

@@ -20,3 +20,10 @@ godot/*.log
 build/
 dist/
 release/
+
+# Dev working directory only (never published)
+.zcode/
+CHANGES.md
+HANDOFF_DSH.md
+WORKLOG.md
+issue_maint.py
