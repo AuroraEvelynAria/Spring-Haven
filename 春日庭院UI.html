@@ -1,0 +1,2147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>春日庭院 · 最终原型</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&display=swap" rel="stylesheet" />
+    <style>
+        /* ============================================================
+           CSS 变量 · 12套主题系统
+           ============================================================ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* ----- 默认：Graphite ----- */
+        :root {
+            /* 基础色 */
+            --bg-base: #F8F6F3;
+            --bg-surface: rgba(255, 255, 255, 0.5);
+            --bg-card: rgba(255, 255, 255, 0.6);
+            --bg-glass: rgba(255, 255, 255, 0.4);
+            --text-primary: #1A1715;
+            --text-secondary: #5A5550;
+            --text-muted: rgba(0, 0, 0, 0.25);
+            --border-subtle: rgba(0, 0, 0, 0.08);
+
+            /* 主色 & 强调色 */
+            --theme-hue: 16;
+            --theme-sat: 75%;
+            --theme-light: 55%;
+            --theme-color: #E8743C;
+            --theme-color-rgb: 232, 116, 60;
+            --theme-glow: rgba(232, 116, 60, 0.12);
+            --theme-bg-subtle: rgba(232, 116, 60, 0.06);
+
+            /* 强调色2（辅助） */
+            --accent-secondary: #2D2A24;
+
+            /* 字体 */
+            --font-family: 'Noto Sans SC', 'Inter', -apple-system, sans-serif;
+            --font-size-base: 15px;
+        }
+
+        /* ----- 预设主题定义 ----- */
+        [data-theme="graphite"] {
+            --bg-base: #F8F6F3;
+            --bg-surface: rgba(255, 255, 255, 0.5);
+            --bg-card: rgba(255, 255, 255, 0.6);
+            --text-primary: #1A1715;
+            --text-secondary: #5A5550;
+            --text-muted: rgba(0, 0, 0, 0.25);
+            --border-subtle: rgba(0, 0, 0, 0.08);
+            --theme-color: #E8743C;
+            --theme-color-rgb: 232, 116, 60;
+            --theme-glow: rgba(232, 116, 60, 0.12);
+            --theme-bg-subtle: rgba(232, 116, 60, 0.06);
+            --accent-secondary: #2D2A24;
+            --bg-glass: rgba(255, 255, 255, 0.4);
+        }
+
+        [data-theme="aurora"] {
+            --bg-base: #F5F0F8;
+            --bg-surface: rgba(255, 255, 255, 0.45);
+            --bg-card: rgba(255, 255, 255, 0.55);
+            --text-primary: #3A2F4A;
+            --text-secondary: #6A5F7A;
+            --text-muted: rgba(60, 40, 80, 0.25);
+            --border-subtle: rgba(90, 70, 120, 0.10);
+            --theme-color: #5BC0BE;
+            --theme-color-rgb: 91, 192, 190;
+            --theme-glow: rgba(91, 192, 190, 0.12);
+            --theme-bg-subtle: rgba(91, 192, 190, 0.06);
+            --accent-secondary: #4A3F5C;
+            --bg-glass: rgba(255, 255, 255, 0.35);
+        }
+
+        [data-theme="slate"] {
+            --bg-base: #EDEEF0;
+            --bg-surface: rgba(255, 255, 255, 0.5);
+            --bg-card: rgba(255, 255, 255, 0.6);
+            --text-primary: #1A2A3A;
+            --text-secondary: #4A5A6A;
+            --text-muted: rgba(30, 50, 70, 0.25);
+            --border-subtle: rgba(0, 0, 0, 0.08);
+            --theme-color: #4A90D9;
+            --theme-color-rgb: 74, 144, 217;
+            --theme-glow: rgba(74, 144, 217, 0.12);
+            --theme-bg-subtle: rgba(74, 144, 217, 0.06);
+            --accent-secondary: #2C3E50;
+            --bg-glass: rgba(255, 255, 255, 0.4);
+        }
+
+        [data-theme="carbon"] {
+            --bg-base: #1A1715;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #EDE8E0;
+            --text-secondary: #A09888;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #6CC4A1;
+            --theme-color-rgb: 108, 196, 161;
+            --theme-glow: rgba(108, 196, 161, 0.12);
+            --theme-bg-subtle: rgba(108, 196, 161, 0.06);
+            --accent-secondary: #C4BDB5;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="nocturne"] {
+            --bg-base: #14101A;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #EDE8F0;
+            --text-secondary: #A098B0;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #C9A8D4;
+            --theme-color-rgb: 201, 168, 212;
+            --theme-glow: rgba(201, 168, 212, 0.12);
+            --theme-bg-subtle: rgba(201, 168, 212, 0.06);
+            --accent-secondary: #E8E0F0;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="amber"] {
+            --bg-base: #1A120E;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #EDE0D0;
+            --text-secondary: #A09080;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #F5A97F;
+            --theme-color-rgb: 245, 169, 127;
+            --theme-glow: rgba(245, 169, 127, 0.15);
+            --theme-bg-subtle: rgba(245, 169, 127, 0.06);
+            --accent-secondary: #E8C97A;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="wisteria"] {
+            --bg-base: #100E1A;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #EDE8F5;
+            --text-secondary: #A098B8;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #B8A6D9;
+            --theme-color-rgb: 184, 166, 217;
+            --theme-glow: rgba(184, 166, 217, 0.15);
+            --theme-bg-subtle: rgba(184, 166, 217, 0.06);
+            --accent-secondary: #E8D5F0;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="sakura"] {
+            --bg-base: #FDF5F7;
+            --bg-surface: rgba(255, 255, 255, 0.5);
+            --bg-card: rgba(255, 255, 255, 0.6);
+            --text-primary: #3A2A30;
+            --text-secondary: #7A5A6A;
+            --text-muted: rgba(60, 30, 40, 0.20);
+            --border-subtle: rgba(200, 150, 170, 0.15);
+            --theme-color: #E8A0BF;
+            --theme-color-rgb: 232, 160, 191;
+            --theme-glow: rgba(232, 160, 191, 0.12);
+            --theme-bg-subtle: rgba(232, 160, 191, 0.06);
+            --accent-secondary: #D4C5C9;
+            --bg-glass: rgba(255, 255, 255, 0.35);
+        }
+
+        [data-theme="mint"] {
+            --bg-base: #F0F5F2;
+            --bg-surface: rgba(255, 255, 255, 0.5);
+            --bg-card: rgba(255, 255, 255, 0.6);
+            --text-primary: #1A2A22;
+            --text-secondary: #4A6A5A;
+            --text-muted: rgba(30, 60, 40, 0.20);
+            --border-subtle: rgba(100, 180, 150, 0.15);
+            --theme-color: #7EC8B0;
+            --theme-color-rgb: 126, 200, 176;
+            --theme-glow: rgba(126, 200, 176, 0.12);
+            --theme-bg-subtle: rgba(126, 200, 176, 0.06);
+            --accent-secondary: #3A7A5A;
+            --bg-glass: rgba(255, 255, 255, 0.35);
+        }
+
+        [data-theme="ocean"] {
+            --bg-base: #0A0F14;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #E8EEF5;
+            --text-secondary: #8898A8;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #6B9EC4;
+            --theme-color-rgb: 107, 158, 196;
+            --theme-glow: rgba(107, 158, 196, 0.12);
+            --theme-bg-subtle: rgba(107, 158, 196, 0.06);
+            --accent-secondary: #A8D8EA;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="dusk"] {
+            --bg-base: #1A0F0F;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #EDD8D0;
+            --text-secondary: #A08880;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #C06C6C;
+            --theme-color-rgb: 192, 108, 108;
+            --theme-glow: rgba(192, 108, 108, 0.12);
+            --theme-bg-subtle: rgba(192, 108, 108, 0.06);
+            --accent-secondary: #E8C97A;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        [data-theme="stardust"] {
+            --bg-base: #0A0A14;
+            --bg-surface: rgba(255, 255, 255, 0.04);
+            --bg-card: rgba(255, 255, 255, 0.06);
+            --text-primary: #E8E8F0;
+            --text-secondary: #9898B0;
+            --text-muted: rgba(255, 255, 255, 0.25);
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --theme-color: #8B8BC0;
+            --theme-color-rgb: 139, 139, 192;
+            --theme-glow: rgba(139, 139, 192, 0.12);
+            --theme-bg-subtle: rgba(139, 139, 192, 0.06);
+            --accent-secondary: #C8C8E8;
+            --bg-glass: rgba(255, 255, 255, 0.03);
+        }
+
+        /* ----- 全局基础样式 ----- */
+        html,
+        body {
+            height: 100%;
+            font-family: var(--font-family);
+            font-size: var(--font-size-base);
+            background: var(--bg-base);
+            color: var(--text-primary);
+            transition: background 0.5s ease, color 0.5s ease;
+            overflow: hidden;
+        }
+
+        /* ============================================================
+           粒子背景 Canvas
+           ============================================================ */
+        #particleCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* ============================================================
+           覆盖层（启动界面 / 主菜单）
+           ============================================================ */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-base);
+            transition: opacity 0.8s ease, transform 0.8s ease, background 0.5s ease;
+            pointer-events: all;
+        }
+        .overlay.hidden {
+            opacity: 0;
+            transform: scale(1.03);
+            pointer-events: none;
+        }
+
+        .overlay::before {
+            content: '';
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--theme-glow), transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            filter: blur(60px);
+            transition: background 0.8s ease;
+            pointer-events: none;
+        }
+
+        .overlay .content {
+            position: relative;
+            z-index: 2;
+            text-align: center;
+            animation: fadeUp 1.2s ease both;
+        }
+
+        @keyframes fadeUp {
+            0% {
+                opacity: 0;
+                transform: translateY(30px) scale(0.96);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .overlay .title {
+            font-size: 56px;
+            font-weight: 900;
+            background: linear-gradient(135deg, var(--theme-color), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 8px;
+            transition: background 0.6s ease;
+            text-shadow: none;
+            filter: drop-shadow(0 4px 30px var(--theme-glow));
+        }
+        .overlay .subtitle {
+            font-size: 16px;
+            color: var(--text-secondary);
+            letter-spacing: 10px;
+            font-weight: 300;
+            margin-top: 4px;
+            margin-bottom: 40px;
+            transition: color 0.5s ease;
+        }
+        .overlay .menu {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-width: 200px;
+        }
+        .overlay .menu button {
+            padding: 14px 44px;
+            border-radius: 40px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: inherit;
+            letter-spacing: 2px;
+            backdrop-filter: blur(12px);
+        }
+        .overlay .menu button:hover {
+            background: var(--theme-bg-subtle);
+            border-color: var(--theme-color);
+            transform: scale(1.03);
+            box-shadow: 0 0 40px var(--theme-glow);
+        }
+        .overlay .menu button.primary {
+            background: var(--theme-color);
+            color: #fff;
+            border-color: var(--theme-color);
+        }
+        .overlay .menu button.primary:hover {
+            opacity: 0.88;
+            box-shadow: 0 0 50px var(--theme-glow);
+        }
+
+        .overlay .version {
+            position: absolute;
+            bottom: 28px;
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+            z-index: 2;
+            transition: color 0.5s ease;
+        }
+
+        /* ============================================================
+           主应用
+           ============================================================ */
+        .app {
+            display: none;
+            width: 100vw;
+            height: 100vh;
+            background: var(--bg-base);
+            overflow: hidden;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+            transition: background 0.5s ease;
+        }
+        .app.visible {
+            display: flex;
+        }
+
+        /* ===== 导航 ===== */
+        .nav {
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            background: var(--bg-glass);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            z-index: 10;
+            min-height: 52px;
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .nav .brand {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            color: var(--text-secondary);
+            transition: color 0.5s ease;
+        }
+        .nav .brand span {
+            color: var(--theme-color);
+            transition: color 0.5s ease;
+        }
+        .nav .actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .nav .actions button {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 17px;
+            cursor: pointer;
+            padding: 4px 10px;
+            border-radius: 8px;
+            transition: all 0.2s;
+            line-height: 1;
+        }
+        .nav .actions button:hover {
+            background: var(--bg-surface);
+            color: var(--text-primary);
+        }
+
+        .nav .role-switch {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-surface);
+            border-radius: 20px;
+            padding: 3px;
+            border: 1px solid var(--border-subtle);
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .nav .role-switch button {
+            padding: 4px 14px;
+            border-radius: 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: inherit;
+            font-weight: 500;
+        }
+        .nav .role-switch button.active {
+            background: var(--theme-color);
+            color: #fff;
+            box-shadow: 0 0 20px var(--theme-glow);
+        }
+        .nav .role-switch button:hover:not(.active) {
+            color: var(--text-primary);
+        }
+
+        /* ===== 主布局 ===== */
+        .main-layout {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* ===== 聊天区 ===== */
+        .chat-area {
+            flex: 7;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px 18px 8px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .chat-messages::-webkit-scrollbar {
+            width: 3px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: var(--border-subtle);
+            border-radius: 8px;
+        }
+
+        .msg {
+            display: flex;
+            flex-direction: column;
+            max-width: 80%;
+            animation: msgSlide 0.35s ease both;
+        }
+        .msg.ai {
+            align-self: flex-start;
+        }
+        .msg.user {
+            align-self: flex-end;
+            align-items: flex-end;
+        }
+        .msg .meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 3px;
+            padding-left: 4px;
+            transition: color 0.5s ease;
+        }
+        .msg .meta .avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            border: 1.5px solid var(--border-subtle);
+        }
+        .msg .meta .avatar.ling {
+            border-color: #F5A97F;
+            background: rgba(245, 169, 127, 0.15);
+        }
+        .msg .meta .avatar.nai {
+            border-color: #B8A6D9;
+            background: rgba(184, 166, 217, 0.15);
+        }
+        .msg .meta .avatar.user {
+            border-color: var(--border-subtle);
+            background: var(--bg-surface);
+        }
+        .msg .bubble {
+            padding: 10px 16px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.7;
+            word-break: break-word;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .msg.ai .bubble {
+            border-top-left-radius: 4px;
+        }
+        .msg.ai.ling .bubble {
+            border-left: 3px solid #F5A97F;
+            background: rgba(245, 169, 127, 0.06);
+        }
+        .msg.ai.nai .bubble {
+            border-left: 3px solid #B8A6D9;
+            background: rgba(184, 166, 217, 0.06);
+        }
+        .msg.user .bubble {
+            border-top-right-radius: 4px;
+            color: var(--text-secondary);
+        }
+        .msg .bubble .cursor-blink {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: var(--theme-color);
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            animation: blink 0.9s infinite;
+        }
+        @keyframes blink {
+            0%,
+            100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0;
+            }
+        }
+        @keyframes msgSlide {
+            0% {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 输入区 */
+        .chat-input-area {
+            padding: 10px 18px 14px 18px;
+            border-top: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(12px);
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .chat-input-area .input-row {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input-area input {
+            flex: 1;
+            padding: 10px 18px;
+            border-radius: 40px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            font-size: 14px;
+            outline: none;
+            transition: all 0.4s ease;
+            font-family: inherit;
+        }
+        .chat-input-area input::placeholder {
+            color: var(--text-secondary);
+            font-weight: 300;
+        }
+        .chat-input-area input:focus {
+            border-color: var(--theme-color);
+            box-shadow: 0 0 0 4px rgba(var(--theme-color-rgb), 0.08);
+        }
+        .chat-input-area input:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .chat-input-area .send-btn {
+            padding: 0 24px;
+            border-radius: 40px;
+            border: none;
+            background: var(--theme-color);
+            color: #fff;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: inherit;
+            opacity: 0.92;
+        }
+        .chat-input-area .send-btn:hover {
+            opacity: 1;
+            transform: scale(1.02);
+        }
+        .chat-input-area .send-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .action-bar {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        .action-bar button {
+            padding: 3px 12px;
+            border-radius: 30px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            font-family: inherit;
+        }
+        .action-bar button:hover {
+            background: var(--theme-bg-subtle);
+            border-color: var(--theme-color);
+            color: var(--text-primary);
+        }
+
+        /* ===== 状态面板 ===== */
+        .sidebar {
+            flex: 3;
+            min-width: 190px;
+            max-width: 300px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(16px);
+            border-left: 1px solid var(--border-subtle);
+            padding: 14px 14px 10px 14px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .sidebar::-webkit-scrollbar {
+            width: 2px;
+        }
+        .sidebar::-webkit-scrollbar-thumb {
+            background: var(--border-subtle);
+            border-radius: 8px;
+        }
+
+        .s-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            padding: 12px 14px;
+            transition: all 0.4s ease;
+            backdrop-filter: blur(4px);
+        }
+        .s-card .s-title {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .profile-s-card {
+            background: var(--theme-bg-subtle);
+            border-color: var(--theme-color);
+            border-width: 1.5px;
+            position: relative;
+            overflow: hidden;
+        }
+        .profile-s-card::after {
+            content: '';
+            position: absolute;
+            top: -40px;
+            right: -40px;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: var(--theme-glow);
+            filter: blur(50px);
+            pointer-events: none;
+        }
+        .profile-s-card .p-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: relative;
+            z-index: 1;
+        }
+        .profile-s-card .p-avatar {
+            font-size: 34px;
+            filter: drop-shadow(0 4px 12px var(--theme-glow));
+        }
+        .profile-s-card .p-info .p-name {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--theme-color);
+            transition: color 0.5s ease;
+        }
+        .profile-s-card .p-info .p-sub {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .profile-s-card .p-info .p-mood {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            opacity: 0.7;
+        }
+
+        .s-stat {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 2px 0;
+        }
+        .s-stat .s-icon {
+            font-size: 13px;
+            width: 18px;
+            text-align: center;
+            flex-shrink: 0;
+            color: var(--text-secondary);
+        }
+        .s-stat .s-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .s-stat .s-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 1px;
+            transition: color 0.5s ease;
+        }
+        .s-stat .s-label .s-val {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .s-stat .s-track {
+            height: 4px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            overflow: visible;
+            position: relative;
+        }
+        .s-stat .s-track .s-bar {
+            height: 100%;
+            border-radius: 8px;
+            width: 0%;
+            transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1), background 0.6s ease;
+        }
+        .s-stat .s-track .s-bar.warning {
+            animation: barPulse 1.2s ease-in-out infinite;
+        }
+        .s-stat .s-track .s-bar.climax-peak {
+            background: #FF80AB !important;
+            animation: climaxFlash 0.5s ease-in-out 3;
+        }
+        @keyframes barPulse {
+            0%,
+            100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.4;
+            }
+        }
+        @keyframes climaxFlash {
+            0%,
+            100% {
+                opacity: 1;
+                box-shadow: 0 0 8px rgba(255, 128, 171, 0.4);
+            }
+            50% {
+                opacity: 0.3;
+                box-shadow: 0 0 24px rgba(255, 128, 171, 0.8);
+            }
+        }
+        .s-ruler {
+            display: flex;
+            justify-content: space-between;
+            padding: 0 1px;
+            margin-top: 1px;
+        }
+        .s-ruler .s-tick {
+            font-size: 8px;
+            color: var(--text-muted);
+            font-weight: 300;
+            opacity: 0.5;
+        }
+
+        .diary-text {
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            font-style: italic;
+            font-weight: 300;
+            transition: color 0.5s ease;
+        }
+        .diary-text .highlight {
+            color: var(--theme-color);
+            font-style: normal;
+            font-weight: 400;
+            transition: color 0.5s ease;
+        }
+        .diary-footer {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-align: right;
+            margin-top: 4px;
+        }
+
+        /* 日志条 */
+        .log-bar {
+            padding: 5px 18px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            border-top: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            background: var(--bg-glass);
+            backdrop-filter: blur(8px);
+            font-size: 11px;
+            color: var(--text-muted);
+            min-height: 28px;
+            align-items: center;
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .log-bar .log-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--text-secondary);
+            animation: logFade 0.3s ease;
+        }
+        .log-bar .log-item .up {
+            color: #66BB6A;
+        }
+        .log-bar .log-item .down {
+            color: #EF5350;
+        }
+        @keyframes logFade {
+            0% {
+                opacity: 0;
+                transform: translateX(-6px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* ============================================================
+           外观设置面板（弹窗）
+           ============================================================ */
+        .settings-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            animation: fadeIn 0.3s ease;
+        }
+        .settings-overlay.open {
+            display: flex;
+        }
+        @keyframes fadeIn {
+            0% {
+                opacity: 0;
+            }
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .settings-panel {
+            width: 560px;
+            max-width: 92vw;
+            max-height: 85vh;
+            overflow-y: auto;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 28px;
+            padding: 28px 30px 24px 30px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(24px);
+            animation: slideUp 0.35s ease;
+            transition: background 0.5s ease, border-color 0.5s ease;
+        }
+        .settings-panel::-webkit-scrollbar {
+            width: 3px;
+        }
+        .settings-panel::-webkit-scrollbar-thumb {
+            background: var(--border-subtle);
+            border-radius: 8px;
+        }
+        @keyframes slideUp {
+            0% {
+                opacity: 0;
+                transform: translateY(30px) scale(0.96);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .settings-panel .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .settings-panel .panel-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            transition: color 0.5s ease;
+        }
+        .settings-panel .panel-header .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .settings-panel .panel-header .close-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .settings-panel .section {
+            margin-bottom: 18px;
+        }
+        .settings-panel .section-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        /* 主题网格 */
+        .theme-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 8px;
+        }
+        .theme-grid .theme-item {
+            padding: 8px 4px;
+            border-radius: 12px;
+            border: 2px solid var(--border-subtle);
+            background: var(--bg-surface);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: inherit;
+        }
+        .theme-grid .theme-item:hover {
+            border-color: var(--theme-color);
+            transform: scale(1.04);
+        }
+        .theme-grid .theme-item.active {
+            border-color: var(--theme-color);
+            background: var(--theme-bg-subtle);
+            color: var(--text-primary);
+            box-shadow: 0 0 20px var(--theme-glow);
+        }
+        .theme-grid .theme-item .dot {
+            display: block;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            margin: 0 auto 4px auto;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        .theme-grid .theme-item .name {
+            font-size: 10px;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+
+        /* 颜色选择器行 */
+        .color-row {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .color-row .color-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .color-row .color-group input[type="color"] {
+            width: 36px;
+            height: 36px;
+            border: 2px solid var(--border-subtle);
+            border-radius: 50%;
+            padding: 0;
+            cursor: pointer;
+            background: none;
+        }
+        .color-row .color-group input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+        .color-row .color-group input[type="color"]::-webkit-color-swatch {
+            border: none;
+            border-radius: 50%;
+        }
+
+        /* 可读性预警 */
+        .readability-alert {
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+            flex-wrap: wrap;
+        }
+        .readability-alert.good {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid rgba(76, 175, 80, 0.2);
+            color: #66BB6A;
+        }
+        .readability-alert.warning {
+            background: rgba(255, 193, 7, 0.1);
+            border: 1px solid rgba(255, 193, 7, 0.2);
+            color: #FFA726;
+        }
+        .readability-alert.danger {
+            background: rgba(239, 83, 80, 0.1);
+            border: 1px solid rgba(239, 83, 80, 0.2);
+            color: #EF5350;
+        }
+        .readability-alert .icon {
+            font-size: 20px;
+        }
+        .readability-alert .action-btn {
+            margin-left: auto;
+            padding: 4px 16px;
+            border-radius: 20px;
+            border: none;
+            background: var(--theme-color);
+            color: #fff;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: opacity 0.2s;
+        }
+        .readability-alert .action-btn:hover {
+            opacity: 0.8;
+        }
+
+        /* 字号 & 字体 */
+        .size-group {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .size-group button {
+            padding: 6px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            font-family: inherit;
+        }
+        .size-group button:hover {
+            border-color: var(--theme-color);
+            color: var(--text-primary);
+        }
+        .size-group button.active {
+            border-color: var(--theme-color);
+            background: var(--theme-bg-subtle);
+            color: var(--text-primary);
+        }
+        .size-group button .sample {
+            display: block;
+            font-size: inherit;
+            color: var(--text-muted);
+            font-weight: 300;
+        }
+
+        /* ============================================================
+           响应式
+           ============================================================ */
+        @media (max-width: 820px) {
+            .main-layout {
+                flex-direction: column;
+            }
+            .sidebar {
+                flex: none;
+                max-width: none;
+                height: 180px;
+                border-left: none;
+                border-top: 1px solid var(--border-subtle);
+                flex-direction: row;
+                flex-wrap: wrap;
+                align-content: flex-start;
+                gap: 4px;
+                padding: 8px 12px;
+                overflow-y: auto;
+            }
+            .sidebar .s-card {
+                flex: 1;
+                min-width: 90px;
+                padding: 8px 10px;
+            }
+            .sidebar .profile-s-card {
+                flex: 0 0 100%;
+            }
+            .sidebar .s-card .s-title {
+                font-size: 9px;
+            }
+            .profile-s-card .p-avatar {
+                font-size: 28px;
+            }
+            .profile-s-card .p-info .p-name {
+                font-size: 15px;
+            }
+            .nav .brand {
+                font-size: 12px;
+            }
+            .nav .role-switch button {
+                font-size: 11px;
+                padding: 3px 10px;
+            }
+            .overlay .title {
+                font-size: 34px;
+                letter-spacing: 4px;
+            }
+            .settings-panel {
+                padding: 20px 18px;
+                max-height: 90vh;
+            }
+            .theme-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+            .color-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .chat-messages {
+                padding: 8px 10px;
+            }
+            .chat-input-area {
+                padding: 6px 10px 10px 10px;
+            }
+            .chat-input-area input {
+                font-size: 13px;
+                padding: 8px 12px;
+            }
+            .action-bar button {
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+            .sidebar {
+                height: 140px;
+                padding: 4px 8px;
+                gap: 3px;
+            }
+            .sidebar .s-card {
+                padding: 6px 8px;
+                min-width: 70px;
+            }
+            .profile-s-card .p-avatar {
+                font-size: 22px;
+            }
+            .profile-s-card .p-info .p-name {
+                font-size: 13px;
+            }
+            .profile-s-card .p-info .p-sub,
+            .profile-s-card .p-info .p-mood {
+                font-size: 10px;
+            }
+            .overlay .title {
+                font-size: 26px;
+                letter-spacing: 2px;
+            }
+            .overlay .menu button {
+                padding: 10px 24px;
+                font-size: 14px;
+            }
+            .settings-panel {
+                padding: 16px 14px;
+                max-height: 95vh;
+                border-radius: 20px;
+            }
+            .settings-panel .panel-header h2 {
+                font-size: 17px;
+            }
+            .theme-grid {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 4px;
+            }
+            .theme-grid .theme-item {
+                padding: 4px 2px;
+                font-size: 9px;
+            }
+            .theme-grid .theme-item .dot {
+                width: 20px;
+                height: 20px;
+            }
+            .nav {
+                padding: 6px 12px;
+                min-height: 40px;
+            }
+            .nav .actions button {
+                font-size: 14px;
+                padding: 2px 6px;
+            }
+            .log-bar {
+                font-size: 9px;
+                padding: 3px 10px;
+                min-height: 22px;
+                gap: 6px;
+            }
+            .size-group button {
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+            .readability-alert {
+                font-size: 11px;
+                padding: 8px 12px;
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ============================================================
+    粒子背景 Canvas
+    ============================================================ -->
+    <canvas id="particleCanvas"></canvas>
+
+    <!-- ============================================================
+    启动界面 / 主菜单
+    ============================================================ -->
+    <div class="overlay" id="overlay">
+        <div class="content">
+            <div class="title">✦ 春日庭院 ✦</div>
+            <div class="subtitle">双生 · 絮语 · 陪伴</div>
+            <div class="menu">
+                <button class="primary" id="startGameBtn">🌸 开始旅程</button>
+                <button id="openSettingsFromMenu">🎨 外观</button>
+            </div>
+        </div>
+        <div class="version">v0.3.0 · 最终原型</div>
+    </div>
+
+    <!-- ============================================================
+    主应用
+    ============================================================ -->
+    <div class="app" id="app">
+        <!-- 导航 -->
+        <div class="nav">
+            <div class="brand">✦ <span>春日庭院</span></div>
+            <div class="actions">
+                <div class="role-switch" id="roleSwitch">
+                    <button class="active" data-role="ling">🐾 小玲</button>
+                    <button data-role="nai">🐇 雪奈</button>
+                </div>
+                <button id="openSettingsBtn" title="外观设置">🎨</button>
+                <button id="menuBackBtn" title="返回主菜单">⏻</button>
+            </div>
+        </div>
+
+        <!-- 主布局 -->
+        <div class="main-layout">
+            <!-- 聊天 -->
+            <div class="chat-area">
+                <div class="chat-messages" id="chatMessages">
+                    <div style="align-self:center;color:var(--text-muted);font-size:12px;opacity:0.3;letter-spacing:3px;margin:10px 0;">
+                        ✦ 絮语开始 ✦
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <div class="action-bar" id="actionBar">
+                        <button data-action="hug">🤗 拥抱</button>
+                        <button data-action="kiss">💋 亲吻</button>
+                        <button data-action="eat">🍗 喂食</button>
+                        <button data-action="drink">💧 喂水</button>
+                        <button data-action="sleep">🛏️ 休息</button>
+                        <button data-action="sex">💞 做爱</button>
+                    </div>
+                    <div class="input-row">
+                        <input type="text" id="chatInput" placeholder="说点什么..." autocomplete="off" />
+                        <button class="send-btn" id="sendBtn">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 状态面板 -->
+            <div class="sidebar" id="sidebar">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- 日志 -->
+        <div class="log-bar" id="logBar">
+            <span style="color:var(--text-muted);font-size:10px;letter-spacing:1px;">📋</span>
+            <span style="color:var(--text-muted);font-size:11px;opacity:0.4;" id="logPlaceholder">等待互动…</span>
+        </div>
+    </div>
+
+    <!-- ============================================================
+    外观设置面板
+    ============================================================ -->
+    <div class="settings-overlay" id="settingsOverlay">
+        <div class="settings-panel" id="settingsPanel">
+            <div class="panel-header">
+                <h2>🎨 外观设置</h2>
+                <button class="close-btn" id="closeSettingsBtn">✕</button>
+            </div>
+
+            <!-- 预设主题 -->
+            <div class="section">
+                <div class="section-label">预设主题</div>
+                <div class="theme-grid" id="themeGrid">
+                    <!-- 由 JS 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 自定义颜色 -->
+            <div class="section">
+                <div class="section-label">自定义颜色</div>
+                <div class="color-row">
+                    <div class="color-group">
+                        <span>背景</span>
+                        <input type="color" id="customBg" value="#1A120E" />
+                    </div>
+                    <div class="color-group">
+                        <span>主色</span>
+                        <input type="color" id="customPrimary" value="#F5A97F" />
+                    </div>
+                    <div class="color-group">
+                        <span>强调</span>
+                        <input type="color" id="customAccent" value="#E8C97A" />
+                    </div>
+                    <button id="applyCustomBtn" style="padding:6px 18px;border-radius:20px;border:1px solid var(--border-subtle);background:var(--theme-color);color:#fff;cursor:pointer;font-family:inherit;font-size:13px;">应用</button>
+                </div>
+            </div>
+
+            <!-- 可读性预警 -->
+            <div class="section">
+                <div class="readability-alert" id="readabilityAlert">
+                    <span class="icon">✅</span>
+                    <span>对比度良好 · AAA 级</span>
+                </div>
+            </div>
+
+            <!-- 字号 & 字体 -->
+            <div class="section">
+                <div class="section-label">界面字号</div>
+                <div class="size-group" id="sizeGroup">
+                    <button data-size="13">小</button>
+                    <button data-size="15" class="active">默认</button>
+                    <button data-size="17">大</button>
+                    <button data-size="19">特大</button>
+                    <button data-size="21">超大</button>
+                </div>
+            </div>
+
+            <div class="section" style="margin-bottom:0;">
+                <div class="section-label">界面字体</div>
+                <div class="size-group" id="fontGroup">
+                    <button data-font="'Noto Sans SC','Inter',sans-serif" class="active">系统</button>
+                    <button data-font="'Georgia','Noto Sans SC',serif">宋体</button>
+                    <button data-font="'Inter','Noto Sans SC',sans-serif">现代</button>
+                    <button data-font="'Courier New',monospace">等宽</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // 1. 粒子背景
+        // ============================================================
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        let w, h;
+
+        function resizeCanvas() {
+            w = canvas.width = window.innerWidth;
+            h = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Particle {
+            constructor() { this.reset(); }
+            reset() {
+                this.x = Math.random() * w;
+                this.y = Math.random() * h;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedX = (Math.random() - 0.5) * 0.3;
+                this.speedY = (Math.random() - 0.5) * 0.3;
+                this.opacity = Math.random() * 0.4 + 0.1;
+                this.pulse = Math.random() * Math.PI * 2;
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.pulse += 0.01;
+                if (this.x < 0 || this.x > w) this.speedX *= -1;
+                if (this.y < 0 || this.y > h) this.speedY *= -1;
+            }
+            draw() {
+                const alpha = this.opacity * (0.7 + 0.3 * Math.sin(this.pulse));
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 80; i++) particles.push(new Particle());
+
+        function animateParticles() {
+            ctx.clearRect(0, 0, w, h);
+            for (const p of particles) {
+                p.update();
+                p.draw();
+            }
+            requestAnimationFrame(animateParticles);
+        }
+        animateParticles();
+
+        // ============================================================
+        // 2. 主题系统
+        // ============================================================
+        const THEMES = [
+            { id: 'graphite', name: 'Graphite', bg: '#F8F6F3', primary: '#E8743C', accent: '#2D2A24' },
+            { id: 'aurora', name: 'Aurora', bg: '#F5F0F8', primary: '#5BC0BE', accent: '#4A3F5C' },
+            { id: 'slate', name: 'Slate', bg: '#EDEEF0', primary: '#4A90D9', accent: '#2C3E50' },
+            { id: 'carbon', name: 'Carbon', bg: '#1A1715', primary: '#6CC4A1', accent: '#C4BDB5' },
+            { id: 'nocturne', name: 'Nocturne', bg: '#14101A', primary: '#C9A8D4', accent: '#E8E0F0' },
+            { id: 'amber', name: 'Amber', bg: '#1A120E', primary: '#F5A97F', accent: '#E8C97A' },
+            { id: 'wisteria', name: 'Wisteria', bg: '#100E1A', primary: '#B8A6D9', accent: '#E8D5F0' },
+            { id: 'sakura', name: 'Sakura', bg: '#FDF5F7', primary: '#E8A0BF', accent: '#D4C5C9' },
+            { id: 'mint', name: 'Mint', bg: '#F0F5F2', primary: '#7EC8B0', accent: '#3A7A5A' },
+            { id: 'ocean', name: 'Ocean', bg: '#0A0F14', primary: '#6B9EC4', accent: '#A8D8EA' },
+            { id: 'dusk', name: 'Dusk', bg: '#1A0F0F', primary: '#C06C6C', accent: '#E8C97A' },
+            { id: 'stardust', name: 'Stardust', bg: '#0A0A14', primary: '#8B8BC0', accent: '#C8C8E8' },
+        ];
+
+        let currentTheme = 'amber';
+
+        function applyTheme(themeId) {
+            currentTheme = themeId;
+            document.documentElement.setAttribute('data-theme', themeId);
+            document.querySelectorAll('.theme-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.theme === themeId);
+            });
+            const theme = THEMES.find(t => t.id === themeId);
+            if (theme) {
+                document.getElementById('customBg').value = theme.bg;
+                document.getElementById('customPrimary').value = theme.primary;
+                document.getElementById('customAccent').value = theme.accent;
+            }
+            checkReadability();
+            renderSidebar();
+        }
+
+        function renderThemeGrid() {
+            const grid = document.getElementById('themeGrid');
+            grid.innerHTML = '';
+            for (const t of THEMES) {
+                const el = document.createElement('div');
+                el.className = `theme-item${t.id === currentTheme ? ' active' : ''}`;
+                el.dataset.theme = t.id;
+                el.innerHTML = `
+                    <span class="dot" style="background:${t.primary};border-color:${t.bg};"></span>
+                    <span class="name">${t.name}</span>
+                `;
+                el.addEventListener('click', () => applyTheme(t.id));
+                grid.appendChild(el);
+            }
+        }
+
+        // ============================================================
+        // 3. 可读性检测 (WCAG)
+        // ============================================================
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 0, g: 0, b: 0 };
+        }
+
+        function luminance(r, g, b) {
+            const [rs, gs, bs] = [r, g, b].map(c => {
+                c = c / 255;
+                return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+        }
+
+        function contrastRatio(hex1, hex2) {
+            const rgb1 = hexToRgb(hex1);
+            const rgb2 = hexToRgb(hex2);
+            const l1 = luminance(rgb1.r, rgb1.g, rgb1.b);
+            const l2 = luminance(rgb2.r, rgb2.g, rgb2.b);
+            const lighter = Math.max(l1, l2);
+            const darker = Math.min(l1, l2);
+            return (lighter + 0.05) / (darker + 0.05);
+        }
+
+        function isDark(hex) {
+            const rgb = hexToRgb(hex);
+            return luminance(rgb.r, rgb.g, rgb.b) < 0.4;
+        }
+
+        function getBgColor() {
+            const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim();
+            return bg || '#1A120E';
+        }
+
+        function getTextColor() {
+            const text = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim();
+            return text || '#EDE8E0';
+        }
+
+        function recommendThemes() {
+            const bg = getBgColor();
+            const bgIsDark = isDark(bg);
+            const candidates = THEMES.filter(t => isDark(t.bg) === bgIsDark);
+            const scored = candidates.map(t => {
+                const textColor = bgIsDark ? '#EDE8E0' : '#1A1715';
+                const ratio = contrastRatio(t.bg, textColor);
+                return { ...t, ratio };
+            });
+            scored.sort((a, b) => b.ratio - a.ratio);
+            return scored.slice(0, 4);
+        }
+
+        function checkReadability() {
+            const bg = getBgColor();
+            const text = getTextColor();
+            const ratio = contrastRatio(bg, text);
+            const alert = document.getElementById('readabilityAlert');
+
+            let level, icon, msg, recommendations = [];
+            if (ratio >= 7) {
+                level = 'good';
+                icon = '✅';
+                msg = `对比度 ${ratio.toFixed(1)}:1 · AAA 级 · 极佳`;
+            } else if (ratio >= 4.5) {
+                level = 'good';
+                icon = '✅';
+                msg = `对比度 ${ratio.toFixed(1)}:1 · AA 级 · 良好`;
+            } else if (ratio >= 3) {
+                level = 'warning';
+                icon = '⚠️';
+                msg = `对比度 ${ratio.toFixed(1)}:1 · 建议调整`;
+                recommendations = recommendThemes();
+            } else {
+                level = 'danger';
+                icon = '❌';
+                msg = `对比度 ${ratio.toFixed(1)}:1 · 可读性不足！`;
+                recommendations = recommendThemes();
+            }
+
+            let recHTML = '';
+            if (recommendations.length > 0) {
+                recHTML = `
+                    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;width:100%;">
+                        <span style="font-size:12px;color:var(--text-muted);margin-right:4px;">推荐切换：</span>
+                        ${recommendations.map(t => `
+                            <button class="rec-theme-btn" data-theme="${t.id}" style="
+                                padding:2px 14px;
+                                border-radius:16px;
+                                border:1px solid var(--border-subtle);
+                                background:${t.bg};
+                                color:${isDark(t.bg) ? '#EDE8E0' : '#1A1715'};
+                                font-size:11px;
+                                cursor:pointer;
+                                font-family:inherit;
+                                transition:all 0.2s;
+                            ">${t.name}</button>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+            alert.className = `readability-alert ${level}`;
+            alert.innerHTML = `
+                <span class="icon">${icon}</span>
+                <span>${msg}</span>
+                ${level !== 'good' ? `<button class="action-btn" id="autoFixBtn">智能优化</button>` : ''}
+                ${recHTML}
+            `;
+
+            document.querySelectorAll('.rec-theme-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    applyTheme(this.dataset.theme);
+                    setTimeout(checkReadability, 200);
+                });
+            });
+
+            const fixBtn = document.getElementById('autoFixBtn');
+            if (fixBtn) {
+                fixBtn.addEventListener('click', () => {
+                    const recs = recommendThemes();
+                    if (recs.length > 0) {
+                        applyTheme(recs[0].id);
+                        setTimeout(checkReadability, 200);
+                    } else {
+                        const bg = getBgColor();
+                        if (isDark(bg)) {
+                            const rgb = hexToRgb(bg);
+                            const newBg = `#${[rgb.r, rgb.g, rgb.b].map(c => Math.min(255, c + 50).toString(16).padStart(2,'0')).join('')}`;
+                            document.documentElement.style.setProperty('--bg-base', newBg);
+                            document.documentElement.style.setProperty('--text-primary', '#1A1715');
+                            document.documentElement.style.setProperty('--text-secondary', '#5A5550');
+                        } else {
+                            const rgb = hexToRgb(bg);
+                            const newBg = `#${[rgb.r, rgb.g, rgb.b].map(c => Math.max(0, c - 50).toString(16).padStart(2,'0')).join('')}`;
+                            document.documentElement.style.setProperty('--bg-base', newBg);
+                            document.documentElement.style.setProperty('--text-primary', '#EDE8E0');
+                            document.documentElement.style.setProperty('--text-secondary', '#A09888');
+                        }
+                        setTimeout(checkReadability, 200);
+                    }
+                });
+            }
+        }
+
+        // ============================================================
+        // 4. 自定义颜色
+        // ============================================================
+        function applyCustomColors() {
+            const bg = document.getElementById('customBg').value;
+            const primary = document.getElementById('customPrimary').value;
+            const accent = document.getElementById('customAccent').value;
+            const rgb = hexToRgb(primary);
+            document.documentElement.style.setProperty('--bg-base', bg);
+            document.documentElement.style.setProperty('--theme-color', primary);
+            document.documentElement.style.setProperty('--theme-color-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+            document.documentElement.style.setProperty('--accent-secondary', accent);
+            document.documentElement.style.setProperty('--theme-glow', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`);
+            document.documentElement.style.setProperty('--theme-bg-subtle', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.06)`);
+            const bgLum = luminance(rgb.r, rgb.g, rgb.b);
+            if (bgLum < 0.3) {
+                document.documentElement.style.setProperty('--text-primary', '#EDE8E0');
+                document.documentElement.style.setProperty('--text-secondary', '#A09888');
+            } else {
+                document.documentElement.style.setProperty('--text-primary', '#1A1715');
+                document.documentElement.style.setProperty('--text-secondary', '#5A5550');
+            }
+            document.querySelectorAll('.theme-item').forEach(el => el.classList.remove('active'));
+            checkReadability();
+            renderSidebar();
+        }
+
+        // ============================================================
+        // 5. 字号 & 字体
+        // ============================================================
+        function setFontSize(size) {
+            document.documentElement.style.setProperty('--font-size-base', size + 'px');
+            document.querySelectorAll('#sizeGroup button').forEach(el => {
+                el.classList.toggle('active', parseInt(el.dataset.size) === size);
+            });
+        }
+
+        function setFontFamily(font) {
+            document.documentElement.style.setProperty('--font-family', font);
+            document.querySelectorAll('#fontGroup button').forEach(el => {
+                el.classList.toggle('active', el.dataset.font === font);
+            });
+        }
+
+        // ============================================================
+        // 6. 状态 & 渲染侧栏
+        // ============================================================
+        const roleData = {
+            ling: { name: '小玲', icon: '🐾', sub: '猫娘 · 21岁', mood: '☀️ 暖洋洋', color: '#F5A97F',
+                diary: '“主人呀……刚才眯了一会儿，梦到<span class="highlight">小鱼干</span>了。醒了发现你还在，比梦好。”',
+                diaryFooter: '—— 小玲 · 午后' },
+            nai: { name: '雪奈', icon: '🐇', sub: '兔娘 · 19岁', mood: '🌸 活力满满', color: '#B8A6D9',
+                diary: '“嗯～今天排练的时候一直在想主人，跳错了好几个拍子。回来看到主人在，就对了。”',
+                diaryFooter: '—— 雪奈 · 傍晚' }
+        };
+
+        const statDefs = {
+            health: { icon: '❤️', label: '健康', colorFn: v => v > 60 ? '#4CAF50' : v > 30 ? '#FFA726' : '#EF5350',
+                warning: v => v < 25 },
+            stamina: { icon: '⚡', label: '体力', colorFn: v => `hsl(24,80%,${45+v*0.25}%)`, warning: v => v < 20 },
+            hunger: { icon: '🍗', label: '饥饿', colorFn: v => v > 75 ? '#EF5350' : v > 50 ? '#FFA726' : '#8D8D8D',
+                warning: v => v > 80 },
+            thirst: { icon: '💧', label: '口渴', colorFn: v => v > 75 ? '#EF5350' : v > 50 ? '#42A5F5' : '#8D8D8D',
+                warning: v => v > 80 },
+            awake: { icon: '😴', label: '清醒', colorFn: v => v > 60 ? '#FFD54F' : v > 30 ? '#FFA726' : '#78909C',
+                warning: v => v < 20 },
+            urine: { icon: '💦', label: '尿液', colorFn: v => v > 80 ? '#FF7043' : v > 50 ? '#FFCA28' : '#8D8D8D',
+                warning: v => v > 85 },
+            intimacy: { icon: '💞', label: '好感度', colorFn: v => `hsl(${340-v*0.5},75%,60%)`, warning: v => v < 20 },
+            mood: { icon: '🧠', label: '心情', colorFn: v => `hsl(24,80%,${45+v*0.25}%)`, warning: v => v < 30 },
+            stress: { icon: '😰', label: '压力', colorFn: v => v > 70 ? '#EF5350' : v > 40 ? '#AB47BC' : '#8D8D8D',
+                warning: v => v > 75 },
+            fertility: { icon: '❤️‍🔥', label: '着床率', colorFn: v => v > 60 ? '#E91E63' : v > 30 ? '#F06292' : '#F8BBD0',
+                warning: v => v > 70 },
+            arousal: { icon: '💕', label: '性欲值', colorFn: v => `hsl(${340-v*0.3},70%,60%)`, warning: v => v > 90 },
+            climax: { icon: '🌊', label: '高潮值', colorFn: v => v > 85 ? '#FF80AB' : '#F8BBD0', warning: v => v > 80,
+                peak: v => v >= 100 },
+            urine_sexual: { icon: '💦', label: '尿液值', colorFn: v => v > 80 ? '#FF7043' : v > 50 ? '#FFCA28' : '#8D8D8D',
+                warning: v => v > 85, labelInPanel: '尿液值' },
+        };
+
+        const state = {
+            currentRole: 'ling',
+            stats: { health: 82, stamina: 61, hunger: 40, thirst: 52, awake: 93, urine: 55, intimacy: 87, mood: 92,
+                stress: 21, fertility: 15, arousal: 76, climax: 38, urine_sexual: 55 },
+            logs: [],
+            isTyping: false,
+        };
+
+        function renderSidebar() {
+            const role = roleData[state.currentRole];
+            const s = state.stats;
+            const vitalKeys = ['health', 'stamina', 'hunger', 'thirst', 'awake', 'urine'];
+            const emotionKeys = ['intimacy', 'mood', 'stress', 'fertility'];
+            const intimacyKeys = ['arousal', 'climax', 'urine_sexual'];
+
+            function renderGroup(keys, title, icon) {
+                let html =
+                `<div class="s-card"><div class="s-title"><span class="icon">${icon}</span> ${title}</div>`;
+                for (const k of keys) {
+                    const def = statDefs[k];
+                    if (!def) continue;
+                    const val = s[k] ?? 0;
+                    const clamped = Math.max(0, Math.min(100, val));
+                    const color = def.colorFn ? def.colorFn(clamped) : 'var(--theme-color)';
+                    const warn = def.warning ? def.warning(clamped) : false;
+                    const peak = def.peak ? def.peak(clamped) : false;
+                    const label = def.labelInPanel || def.label;
+                    html += `
+                        <div class="s-stat" data-stat="${k}">
+                            <span class="s-icon">${def.icon}</span>
+                            <div class="s-info">
+                                <div class="s-label"><span>${label}</span><span class="s-val" id="sv_${k}">${Math.round(clamped)}%</span></div>
+                                <div class="s-track"><div class="s-bar ${warn?'warning':''} ${peak?'climax-peak':''}" id="sbar_${k}" style="width:${clamped}%;background:${color};"></div></div>
+                                <div class="s-ruler"><span class="s-tick">0</span><span class="s-tick">50</span><span class="s-tick">100</span></div>
+                            </div>
+                        </div>
+                    `;
+                }
+                html += `</div>`;
+                return html;
+            }
+
+            let html = `
+                <div class="s-card profile-s-card">
+                    <div class="p-row">
+                        <span class="p-avatar">${role.icon}</span>
+                        <div class="p-info">
+                            <div class="p-name">${role.name}</div>
+                            <div class="p-sub">${role.sub}</div>
+                            <div class="p-mood">${role.mood}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            html += renderGroup(vitalKeys, '生理体征', '❤️‍🩹');
+            html += renderGroup(emotionKeys, '情感状态', '💭');
+            html += renderGroup(intimacyKeys, '亲密状态', '💕');
+            html += `
+                <div class="s-card" style="background:rgba(255,255,255,0.02);border-style:dashed;">
+                    <div class="s-title"><span class="icon">📖</span> 今日絮语</div>
+                    <div class="diary-text">${role.diary}</div>
+                    <div class="diary-footer">${role.diaryFooter}</div>
+                </div>
+            `;
+            document.getElementById('sidebar').innerHTML = html;
+        }
+
+        // ============================================================
+        // 7. 聊天 & 互动
+        // ============================================================
+        function addMessage(text, sender, roleId) {
+            const container = document.getElementById('chatMessages');
+            const wrapper = document.createElement('div');
+            wrapper.className = `msg ${sender}`;
+            if (sender === 'ai') wrapper.classList.add(roleId);
+
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            if (sender === 'user') {
+                meta.innerHTML = `<span class="avatar user">👤</span><span>主人</span>`;
+            } else {
+                const role = roleData[roleId];
+                meta.innerHTML = `<span class="avatar ${roleId}">${role.icon}</span><span>${role.name}</span>`;
+            }
+            wrapper.appendChild(meta);
+
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            if (sender === 'ai') {
+                bubble.innerHTML = `<span class="typing-text"></span><span class="cursor-blink"></span>`;
+            } else {
+                bubble.textContent = text;
+            }
+            wrapper.appendChild(bubble);
+            container.appendChild(wrapper);
+            container.scrollTop = container.scrollHeight;
+
+            if (sender === 'ai') {
+                const textSpan = bubble.querySelector('.typing-text');
+                const cursor = bubble.querySelector('.cursor-blink');
+                let i = 0;
+                const speed = 25;
+
+                function type() {
+                    if (i < text.length) {
+                        textSpan.textContent += text.charAt(i);
+                        i++;
+                        container.scrollTop = container.scrollHeight;
+                        setTimeout(type, speed);
+                    } else {
+                        if (cursor) cursor.remove();
+                    }
+                }
+                type();
+            }
+        }
+
+        function simulateReply(userText) {
+            if (state.isTyping) return;
+            state.isTyping = true;
+            document.getElementById('chatInput').disabled = true;
+            document.getElementById('sendBtn').disabled = true;
+
+            const nextRole = state.currentRole === 'ling' ? 'nai' : 'ling';
+            state.currentRole = nextRole;
+            updateRoleUI();
+
+            let reply = '';
+            const lower = userText.toLowerCase();
+            if (lower.includes('你好') || lower.includes('嗨')) {
+                reply = nextRole === 'ling' ? '喵～主人今天怎么这么客气？' : '嗯～主人！雪奈等你好久了！';
+            } else if (lower.includes('想') || lower.includes('念')) {
+                reply = nextRole === 'ling' ? '（尾巴慢慢缠上来）……知道了，我也想你。' :
+                    '（耳朵竖起来）真的吗？雪奈今天练习的时候一直在想主人！';
+            } else if (lower.includes('吃') || lower.includes('饿')) {
+                reply = nextRole === 'ling' ? '小鱼干分你一半喵。' : '雪奈带了便当，一起吃吧！';
+            } else {
+                const lingReplies = ['喵～今天太阳很好呢。', '（眯着眼睛）你说得都对。', '让我靠一会儿喵……就一会儿。', '尾巴都翘起来了，你看不见吗？'];
+                const naiReplies = ['主人……雪奈在这里哦。', '（耳朵蹭过来）嗯～好舒服。', '今天排练的时候摔了一跤，但看到主人就不疼了。'];
+                const pool = nextRole === 'ling' ? lingReplies : naiReplies;
+                reply = pool[Math.floor(Math.random() * pool.length)];
+            }
+
+            setTimeout(() => {
+                addMessage(reply, 'ai', nextRole);
+                state.isTyping = false;
+                document.getElementById('chatInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('chatInput').focus();
+                renderSidebar();
+            }, 400 + Math.random() * 300);
+        }
+
+        function applyAction(action) {
+            let updates = [];
+            let userMsg = '';
+            switch (action) {
+                case 'hug':
+                    updates = [{ key: 'intimacy', delta: 2, icon: '💞', label: '好感度' }, { key: 'mood', delta: 1,
+                        icon: '🧠', label: '心情' }, { key: 'stress', delta: -2, icon: '😰', label: '压力' }];
+                    userMsg = '🤗 主人拥抱了你';
+                    break;
+                case 'kiss':
+                    updates = [{ key: 'intimacy', delta: 4, icon: '💞', label: '好感度' }, { key: 'mood', delta: 3,
+                        icon: '🧠', label: '心情' }, { key: 'arousal', delta: 8, icon: '💕', label: '性欲值' },
+                    { key: 'stamina', delta: -3, icon: '⚡', label: '体力' }];
+                    userMsg = '💋 主人轻吻了你';
+                    break;
+                case 'eat':
+                    updates = [{ key: 'hunger', delta: -15, icon: '🍗', label: '饥饿' }, { key: 'health', delta: 1,
+                        icon: '❤️', label: '健康' }, { key: 'mood', delta: 2, icon: '🧠', label: '心情' }];
+                    userMsg = '🍗 主人喂你吃了东西';
+                    break;
+                case 'drink':
+                    updates = [{ key: 'thirst', delta: -12, icon: '💧', label: '口渴' }, { key: 'urine', delta: 5,
+                        icon: '💦', label: '尿液' }, { key: 'health', delta: 1, icon: '❤️', label: '健康' }];
+                    userMsg = '💧 主人喂你喝了水';
+                    break;
+                case 'sleep':
+                    updates = [{ key: 'stamina', delta: 20, icon: '⚡', label: '体力' }, { key: 'awake', delta: -25,
+                        icon: '😴', label: '清醒' }, { key: 'stress', delta: -5, icon: '😰', label: '压力' }];
+                    userMsg = '🛏️ 主人让你好好休息';
+                    break;
+                case 'sex':
+                    updates = [{ key: 'intimacy', delta: 5, icon: '💞', label: '好感度' }, { key: 'arousal', delta: -30,
+                        icon: '💕', label: '性欲值' }, { key: 'climax', delta: 20, icon: '🌊', label: '高潮值' },
+                    { key: 'stamina', delta: -15, icon: '⚡', label: '体力' }, { key: 'hunger', delta: 8,
+                        icon: '🍗', label: '饥饿' }, { key: 'thirst', delta: 10, icon: '💧', label: '口渴' },
+                    { key: 'urine_sexual', delta: -20, icon: '💦', label: '尿液值' }];
+                    userMsg = '💞 主人与你缠绵……';
+                    break;
+                default:
+                    return;
+            }
+
+            addMessage(userMsg, 'user');
+            for (const u of updates) {
+                const oldVal = state.stats[u.key] || 0;
+                const newVal = Math.max(0, Math.min(100, oldVal + u.delta));
+                state.stats[u.key] = newVal;
+                const bar = document.getElementById(`sbar_${u.key}`);
+                if (bar) {
+                    const def = statDefs[u.key];
+                    const color = def.colorFn ? def.colorFn(newVal) : 'var(--theme-color)';
+                    bar.style.width = `${newVal}%`;
+                    bar.style.background = color;
+                }
+                const valEl = document.getElementById(`sv_${u.key}`);
+                if (valEl) valEl.textContent = `${Math.round(newVal)}%`;
+            }
+            renderSidebar();
+
+            const role = state.currentRole;
+            const replies = {
+                hug: role === 'ling' ? '喵…被抱着的感觉…还不错。' : '嗯～主人的怀抱好暖…',
+                kiss: role === 'ling' ? '（尾巴微微颤了一下）…你突然干什么喵…' : '（耳朵刷地红了）主人…雪奈还没准备好…',
+                eat: role === 'ling' ? '（小口小口地吃）…哼，还算用心。' : '好吃！主人的手艺最棒了！',
+                drink: role === 'ling' ? '（喝完舔了舔嘴角）…谢了喵。' : '咕噜咕噜…啊～活过来了！',
+                sleep: role === 'ling' ? '（蜷成一团）嗯…那眯一会儿…' : '（乖乖躺下）主人可以摸摸雪奈的头吗…',
+                sex: role === 'ling' ? '（喘息着）主人…慢点…喵…' : '（耳根通红）主人…雪奈…好奇怪…'
+            };
+            setTimeout(() => addMessage(replies[action] || '喵～', 'ai', role), 300);
+        }
+
+        // ============================================================
+        // 8. UI 控制
+        // ============================================================
+        function updateRoleUI() {
+            document.querySelectorAll('#roleSwitch button').forEach(el => {
+                el.classList.toggle('active', el.dataset.role === state.currentRole);
+            });
+            renderSidebar();
+        }
+
+        function toggleSettings(open) {
+            document.getElementById('settingsOverlay').classList.toggle('open', open);
+            if (open) {
+                renderThemeGrid();
+                checkReadability();
+            }
+        }
+
+        // ============================================================
+        // 9. 事件绑定
+        // ============================================================
+        document.getElementById('startGameBtn').addEventListener('click', () => {
+            document.getElementById('overlay').classList.add('hidden');
+            document.getElementById('app').classList.add('visible');
+            renderSidebar();
+            setTimeout(() => {
+                addMessage('喵～你来了。我在窗台上晒了好一会儿太阳了。', 'ai', 'ling');
+                setTimeout(() => {
+                    state.currentRole = 'nai';
+                    updateRoleUI();
+                    addMessage('嗯～小玲姐姐！主人来了怎么不叫我！', 'ai', 'nai');
+                    setTimeout(() => {
+                        state.currentRole = 'ling';
+                        updateRoleUI();
+                        addMessage('喵……你急什么，主人又不会跑。', 'ai', 'ling');
+                    }, 800);
+                }, 1000);
+            }, 400);
+            document.getElementById('chatInput').focus();
+        });
+
+        document.getElementById('openSettingsFromMenu').addEventListener('click', () => toggleSettings(true));
+        document.getElementById('openSettingsBtn').addEventListener('click', () => toggleSettings(true));
+        document.getElementById('closeSettingsBtn').addEventListener('click', () => toggleSettings(false));
+        document.getElementById('settingsOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) toggleSettings(false);
+        });
+
+        document.getElementById('menuBackBtn').addEventListener('click', () => {
+            if (confirm('确定返回主菜单吗？进度会保留。')) {
+                document.getElementById('app').classList.remove('visible');
+                document.getElementById('overlay').classList.remove('hidden');
+            }
+        });
+
+        document.querySelectorAll('#roleSwitch button').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const role = this.dataset.role;
+                if (role === state.currentRole) return;
+                state.currentRole = role;
+                updateRoleUI();
+                const name = roleData[role].name;
+                addMessage(`（你轻轻唤了一声“${name}”，她抬起头看向你。）`, 'user');
+                setTimeout(() => {
+                    addMessage(role === 'ling' ? '喵？你叫我了？' : '嗯？主人！雪奈在！', 'ai', role);
+                }, 400);
+            });
+        });
+
+        function handleSend() {
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            if (!text || state.isTyping) return;
+            addMessage(text, 'user');
+            input.value = '';
+            simulateReply(text);
+        }
+        document.getElementById('sendBtn').addEventListener('click', handleSend);
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleSend();
+        });
+
+        document.getElementById('actionBar').addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            applyAction(btn.dataset.action);
+        });
+
+        document.getElementById('applyCustomBtn').addEventListener('click', applyCustomColors);
+
+        document.querySelectorAll('#sizeGroup button').forEach(btn => {
+            btn.addEventListener('click', function() {
+                setFontSize(parseInt(this.dataset.size));
+            });
+        });
+
+        document.querySelectorAll('#fontGroup button').forEach(btn => {
+            btn.addEventListener('click', function() {
+                setFontFamily(this.dataset.font);
+            });
+        });
+
+        // ============================================================
+        // 10. 初始化
+        // ============================================================
+        applyTheme('amber');
+        renderThemeGrid();
+
+        console.log('🌸 春日庭院 · 最终原型已加载');
+        console.log('🎨 12套主题 + 自定义颜色 + 可读性预警 + 背景粒子');
+        console.log('💡 点击 🎨 打开外观设置面板');
+    </script>
+</body>
+</html>
