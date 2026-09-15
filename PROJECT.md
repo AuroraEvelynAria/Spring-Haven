@@ -20,9 +20,12 @@ phone upside down.)
 > ✅ **Shipped**: characters **message you proactively** (offline messages are generated
 > by the character's own LLM with her stable persona prompt — never faked by local
 > templates), and they **take photos inside the 3D scene and send them to you**.
-> Schedules are laid out hour by hour.
+> Schedules are laid out hour by hour. On the user's side **voice input already works**:
+> hold the mic button and speak → Whisper transcribes it → the character answers out
+> loud through TTS.
 >
-> 💭 **Still an idea**: the phone itself as a device, voice calls, and text messages.
+> 💭 **Still an idea**: the **phone as a device** (a real phone-shaped UI), two-way
+> real-time voice calls, and text messages in the shape of a phone app.
 
 ## 2. A built-in terrain editor
 
@@ -83,8 +86,8 @@ want to find something that gives **natural pitch variation and emotion**.
 > Open-LLM-VTuber `/asr`; TTS through **GPT-SoVITS** or **any OpenAI-compatible speech
 > endpoint** — two adapters exist today (`openai_speech`, `gpt_sovits_get`).
 >
-> 💭 **Not an adapter yet**: Voicebox / CozyVoice — reachable through the OpenAI-compatible
-> path, but I have not wired them up.
+> 🔧 **Still researching**: **VoxCPM2** (my first idea for this) and **CozyVoice** — neither
+> is an adapter yet.
 >
 > 💭 **Still looking for**: "natural pitch variation + emotion" — I'm not satisfied yet.
 > Recommendations welcome.
