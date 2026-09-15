@@ -33,6 +33,14 @@ down.)
 >
 > 💭 **Still an idea**: the **phone as a device** (a real phone-shaped UI), two-way
 > real-time voice calls, and text messages in the shape of a phone app.
+>
+> ✅ **Ling and Nai are the built-in example characters — not hard-coded.** Characters come
+> from a registry (`user_data/roles.json`; template in `config/roles.example.json`). Each
+> entry can define `display_name` / `full_name` / **aliases** / a **persona prompt** / a
+> **memory prompt** / `age`, and the personas themselves are plain markdown
+> (`config/personas/ling.md`, `nai.md`) — **players can edit them, or add characters from
+> scratch.** Every table in the database carries a `role_id`, so memory, schedules, life
+> state and achievements are all **stored per character**.
 
 ## 2. A built-in terrain editor
 
@@ -86,7 +94,9 @@ hear how you did it.**
 
 Everything above involves basic ASR and TTS. Whisper should be enough for ASR.
 
-For TTS I first wanted to use **VoxCPM2**, and I've since been looking into **GPT-SoVITS**
+> 🔧 **Still researching**: **VoxCPM2** (my first idea for this) and **CozyVoice** — neither
+> is an adapter yet. **Voicebox** has its own integration doc and works through the
+> OpenAI-compatible path, but there's no dedicated adapter for it either.
 and **CozyVoice** — I want a TTS that gives **natural pitch variation and emotion**, and I'm
 not satisfied with that yet.
 
@@ -196,7 +206,33 @@ time she speaks.
 > ⚠️ One honest caveat: the **world-time anchoring is designed but the week-key migration
 > isn't finished** (issue #23).
 
-## 9. Inspirations
+## 9. Milestones and achievements
+
+It isn't a separate achievements table — it's the thing **wired between the life state and
+Heartloom**.
+
+The rules are **deterministic**: the engine runs them after each digest, and they are
+**idempotent** — an achievement unlocks once. The moment it unlocks, three things happen:
+
+- An **always-active relationship memory** is written — so "the first time you…" is something
+  she **actually remembers**, not just a badge that pops up
+- It's written into the `role_milestones` achievement archive
+- It's linked into the memory relation graph (`milestone` is one of the `link_type` values)
+
+The achievement **copy isn't hard-coded**: the character's own LLM writes the title and
+description on unlock (capped at 60 / 240 characters), and if that fails it falls back to a
+**template placeholder** — the important part is that it **never blocks the unlock**.
+
+The client keeps its own ledger too: the **first time** a life stat hits its maximum, a
+deterministic `full-` milestone is recorded (e.g. Ling's affinity reaching full), with
+archive migration so a restart can't double-count.
+
+> ✅ **All implemented**: the `milestones` / `role_milestones` tables, the
+> `run_due_milestones()` scheduler, idempotent `unlock_role_milestone()`,
+> `_polish_milestone_copy()` with its LLM copy + template fallback, and the client-side
+> full-stat ledger (`full_stat_milestones`).
+
+## 10. Inspirations
 
 - **Stanford generative_agents** — https://github.com/joonspk-research/generative_agents
 - **Neuro-Sama** (not open source)
