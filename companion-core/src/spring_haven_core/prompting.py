@@ -30,12 +30,53 @@ def _qualitative_bucket(value: float) -> str:
             return label
     return "很低"
 
+def _bucket_label(index: int) -> str:
+    if index < len(_STATE_BUCKETS):
+        return _STATE_BUCKETS[index][1]
+    return "很低"
+
+def _bucket_boundary(last_index: int, next_index: int) -> float:
+    """相邻两档之间的分界阈值(用于滞回判定)。"""
+    higher = min(last_index, next_index)
+    if higher < len(_STATE_BUCKETS):
+        return float(_STATE_BUCKETS[higher][0])
+    return float(_STATE_BUCKETS[-1][0])
+
+class _BucketHysteresis:
+	"""#29 分桶滞回:相邻档位需越过边界 ±MARGIN 才切换,避免数值在边界附近反复横跳。"""
+
+	MARGIN = 2.0
+
+	def __init__(self) -> None:
+		self._last_index: dict[tuple[str, str], int] = {}
+
+	def resolve(self, subject_id: str, stat: str, value: float) -> str:
+		raw_index = len(_STATE_BUCKETS)
+		for index, (threshold, _label) in enumerate(_STATE_BUCKETS):
+			if value >= threshold:
+				raw_index = index
+				break
+		key = (subject_id, stat)
+		if key not in self._last_index:
+			self._last_index[key] = raw_index
+			return _bucket_label(raw_index)
+		last_index = self._last_index[key]
+		if raw_index == last_index:
+			return _bucket_label(last_index)
+		boundary = _bucket_boundary(last_index, raw_index)
+		if raw_index < last_index and value >= boundary + self.MARGIN:
+			self._last_index[key] = raw_index
+		elif raw_index > last_index and value < boundary - self.MARGIN:
+			self._last_index[key] = raw_index
+		return _bucket_label(self._last_index[key])
+
 
 class PromptComposer:
     """Builds a stable role prefix and a small validated per-turn runtime block."""
 
     def __init__(self, roles: RoleRegistry):
         self._roles = roles
+        self._hysteresis = _BucketHysteresis()
 
     def system_prompt(self, role: RoleDefinition) -> str:
         others = self._roles.others(role.role_id)
@@ -244,10 +285,6 @@ class PromptComposer:
                 "kind": str(raw.get("kind", "episodic"))[:32],
                 "title": str(raw.get("title", ""))[:120],
                 "content": content,
-                "confidence": round(float(raw.get("confidence", 1.0)), 3),
-                "importance": round(float(raw.get("importance", 0.5)), 3),
-                "updated_at": int(raw.get("updated_at", 0)),
-                "influence": raw.get("influence", {}) if isinstance(raw.get("influence"), dict) else {},
             }
             serialized_size = len(json.dumps(item, ensure_ascii=False))
             if used_characters + serialized_size > 12_000:
@@ -307,7 +344,7 @@ class PromptComposer:
                     parsed = float(value)
                     if not math.isfinite(parsed):
                         continue
-                    parts.append(f"{stat_label}={_qualitative_bucket(max(0.0, min(100.0, parsed)))}")
+                    parts.append(f"{stat_label}={self._hysteresis.resolve(role.role_id, stat_key, max(0.0, min(100.0, parsed)))}")
                 state_summary = "；".join(parts)
             sensations: list[str] | dict[str, str] = []
             raw_sensations = raw_body.get("sensations", [])
@@ -472,7 +509,8 @@ class PromptComposer:
         participants = list(dict.fromkeys(participants))
         if role.role_id not in participants:
             return {}
-        needs_by_role: dict[str, dict[str, float]] = {}
+        # #29 硬性约束:参与者需求只以定性分桶进入 prompt,不携带原始浮点
+        needs_by_role: dict[str, dict[str, str]] = {}
         raw_needs = raw.get("needs_by_role", {})
         if isinstance(raw_needs, dict):
             for role_id in participants:
@@ -480,7 +518,7 @@ class PromptComposer:
                 if not isinstance(values, dict):
                     continue
                 needs_by_role[role_id] = {
-                    key: round(max(0.0, min(100.0, float(value))), 2)
+                    key: _qualitative_bucket(max(0.0, min(100.0, float(value))))
                     for key, value in values.items()
                     if key in {"hunger", "thirst", "stamina", "mood"}
                     and isinstance(value, (int, float))
