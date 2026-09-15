@@ -30,9 +30,14 @@ Lets the user customise the geography of the area the house sits in, and the int
 decoration — down to where the wall switches are and which way each piece of furniture
 faces.
 
-> 🔧 **Planned** (Phase 3, GridMap-based).
+> ✅ **Shipped**: a **2D top-down layout editor** — drag-and-drop anchors for the places
+> characters can walk to, an icon picker for each anchor, saved to `user_data/house_layout.json`
+> (`godot/scenes/HouseEditor/HouseLayoutEditor.gd`, 391 lines).
 >
-> The "wall switches / furniture orientation" detail is my design intent, not built yet.
+> 🔧 **Planned** (Phase 3, GridMap-based): editing the geography itself.
+>
+> 💭 **Still an idea**: the "wall switch positions / furniture orientation" detail — that is
+> my design intent, not built yet.
 
 ## 3. 2D interaction — the cheapest way to spend time with them
 
@@ -75,8 +80,11 @@ Everything above involves basic ASR and TTS. Whisper should be enough for ASR. F
 want to find something that gives **natural pitch variation and emotion**.
 
 > ✅ **Already wired up**: ASR through OpenAI-compatible `/audio/transcriptions` or
-> Open-LLM-VTuber `/asr`; TTS through **GPT-SoVITS, Voicebox, CozyVoice**, or any
-> OpenAI-compatible speech endpoint.
+> Open-LLM-VTuber `/asr`; TTS through **GPT-SoVITS** or **any OpenAI-compatible speech
+> endpoint** — two adapters exist today (`openai_speech`, `gpt_sovits_get`).
+>
+> 💭 **Not an adapter yet**: Voicebox / CozyVoice — reachable through the OpenAI-compatible
+> path, but I have not wired them up.
 >
 > 💭 **Still looking for**: "natural pitch variation + emotion" — I'm not satisfied yet.
 > Recommendations welcome.
@@ -131,8 +139,11 @@ reduce cache hit rate.
 > maps to ADR-002 numeric hygiene plus hysteresis: **no raw physiological float ever enters
 > the context**; stats are bucketed into qualitative descriptions first.
 >
-> ✅ **No NSFW, and it's enforced at the application level** — a fixed action whitelist with
-> no setting that can re-enable it.
+> ✅ **No NSFW, and it's enforced at the application level**: a dedicated
+> `[Spring Haven content rating policy]` block in the system prompt that explicitly outranks
+> every other part of the prompt and **cannot be overridden by runtime markers, persona
+> config, or user instructions**, reinforced by the persona files. The adult-content toggle
+> was **removed from the settings UI**, and a startup diagnostic fails if it ever returns.
 
 ## 8. Heartloom memory system
 

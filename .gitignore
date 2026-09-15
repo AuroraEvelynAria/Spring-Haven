@@ -27,3 +27,7 @@ CHANGES.md
 HANDOFF_DSH.md
 WORKLOG.md
 issue_maint.py
+
+# 本地素材源（Blender 工程，不发布）
+_source_assets/
+reasonix.toml
