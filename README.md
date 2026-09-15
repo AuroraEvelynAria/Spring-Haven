@@ -135,8 +135,8 @@ These aren't scripted NPCs. They're characters with **persistent memory, physiol
 
 To help you get started, Spring Haven includes two fully-realized example characters:
 
-- **小玲 (Suzune)** — A 21-year-old cat-girl with a lazy, tsundere personality. She's slow to warm up but deeply loyal.
-- **雪奈 (Yukina)** — A 19-year-old rabbit-girl who's affectionate, clingy, and honest about her feelings.
+- **小玲 (Suzune)** — A 21-year-old cat-girl, full name 春日铃音. Lazy, sharp and a little tsundere, but reliable and caring; she shows affection through short observations and light teasing.
+- **小奈 (Yukina)** — A 19-year-old rabbit-girl, full name 白濑雪奈. Frank, warm and quick to act; affectionate, but with her own plans, interests and boundaries.
 
 **These are just examples.** You can customize them, create your own characters from scratch, or download characters made by the community via Workshop.
 
