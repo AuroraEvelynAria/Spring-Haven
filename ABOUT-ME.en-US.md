@@ -273,4 +273,4 @@ straight into the AIRI frontend. Where I think I can be genuinely useful:
 If any of that is useful, I'm happy to work on it. And if you've done the Live2D side, I'd
 really like to hear how you approached it.
 
-**Looking forward to contribute.**
+**Looking forward to contributing.**
