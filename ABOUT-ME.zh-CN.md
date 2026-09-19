@@ -234,4 +234,4 @@ TTS 最初想用 **VoxCPM2** 来实现，后面在研究 **GPT-SoVITS** 和 **Co
 
 如果这些里有能用的，我很乐意出力。如果有人做过 Live2D 这边，我真的很想知道你们是怎么做的。
 
-**Looking forward to contribute.**
+**Looking forward to contributing.**
