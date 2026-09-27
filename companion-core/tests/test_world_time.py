@@ -228,6 +228,66 @@ class MigrationDrillTests(unittest.TestCase):
         with self.assertRaises(MemoryStoreError):
             self._open("future.sqlite3")
 
+    def test_v7_life_events_world_day_backfilled(self):
+        path = self.root / "v7-events.sqlite3"
+        _make_v5_db(path)
+        store = self._open("v7-events.sqlite3")
+        try:
+            value = store._connection.execute(
+                "SELECT world_occurred_at FROM life_events WHERE event_id = 'evt-1'"
+            ).fetchone()[0]
+            # 时钟锚 = 最早记忆 created_at(BASE_TS);事件在 BASE_TS+1h → 世界日 1/24
+            self.assertAlmostEqual(float(value), 3600.0 / 86400.0, places=4)
+        finally:
+            store.close()
+
+    def test_v7_digest_state_keys_remapped_to_world_days(self):
+        path = self.root / "v7-digest.sqlite3"
+        _make_v5_db(path)
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO digest_state (save_id, role_id, day_key, memory_id, created_at) "
+            "VALUES ('save-1', 'ling', ?, 'mem-old-1', ?)",
+            (time.strftime("%Y-%m-%d", time.localtime(BASE_TS)), BASE_TS),
+        )
+        conn.commit()
+        conn.close()
+        store = self._open("v7-digest.sqlite3")
+        try:
+            keys = [
+                str(row["day_key"])
+                for row in store._connection.execute(
+                    "SELECT day_key FROM digest_state WHERE save_id = 'save-1'"
+                ).fetchall()
+            ]
+            # 旧现实日期键保留,同时映射出一条世界日键(幂等映射回填)
+            self.assertEqual(len(keys), 2, keys)
+            # 正午换算落在锚点 ±12h 内 → 世界日 0,与时区无关
+            self.assertIn("w0000", keys)
+        finally:
+            store.close()
+
+    def test_v7_upgrade_is_idempotent(self):
+        path = self.root / "v7-twice.sqlite3"
+        _make_v5_db(path)
+        store = self._open("v7-twice.sqlite3")
+        rows_first = store._connection.execute(
+            "SELECT COUNT(*) FROM digest_state"
+        ).fetchone()[0]
+        store.close()
+        store = self._open("v7-twice.sqlite3")
+        try:
+            rows_second = store._connection.execute(
+                "SELECT COUNT(*) FROM digest_state"
+            ).fetchone()[0]
+            self.assertEqual(rows_first, rows_second)
+            version = store._connection.execute(
+                "SELECT value FROM heartloom_meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            self.assertEqual(str(version), str(SCHEMA_VERSION))
+        finally:
+            store.close()
+
 
 class WorldClockTests(unittest.TestCase):
     def setUp(self):

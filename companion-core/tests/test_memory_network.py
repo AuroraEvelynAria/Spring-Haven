@@ -68,6 +68,84 @@ class MemoryNetworkTests(unittest.TestCase):
         entry = self.store.put_memory(payload, source="organizer")
         return str(entry["memory_id"])
 
+    def test_always_active_floor_requires_lexical_relevance(self):
+        """里程碑保底分不再霸占每次召回:查询只命中普通记忆时,普通记忆第一。
+
+        修复前 always_active 无条件 max(score, 0.82+…) → 里程碑出现在每次
+        召回头部;修复后保底分仅在该记忆自身有词法关联时生效。
+        """
+        milestone_id = self._put(
+            "milestone", "第一百个心织回忆。这段共同生活的时光,值得永远记得。",
+            kind="relationship", always_active=True, priority=4,
+            importance=0.9, half_life_days=0.0,
+        )
+        normal_id = self._put("normal", "窗台上的薄荷花开了,淡紫色很好看", importance=0.9)
+        rows = self.store.recall(
+            save_id="save-1", role_id="ling", query="薄荷 开花",
+            limit=5, record_access=False,
+        )
+        self.assertTrue(rows)
+        self.assertNotEqual(
+            rows[0]["memory_id"], milestone_id,
+            "与查询无关的里程碑不应靠保底分占据第一",
+        )
+        self.assertEqual(rows[0]["memory_id"], normal_id)
+        # 查询本身指向里程碑时,保底分依然把它顶到最前(「永远记得」不变)
+        rows = self.store.recall(
+            save_id="save-1", role_id="ling", query="第一百个心织回忆",
+            limit=5, record_access=False,
+        )
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["memory_id"], milestone_id)
+
+    def test_lexical_idf_downweights_pool_common_terms(self):
+        """池内局部 IDF:全库高频词(主人)贡献被压低,稀有词记忆反超。
+
+        11 条共享「主人」的 filler 与 1 条只含「薄荷」的记忆,重要度全部
+        相同;修复前两者词法分相同(并列,靠写入顺序分先后),修复后
+        稀有词记忆以 IDF 优势明确胜出。
+        """
+        for index in range(11):
+            self._put(f"common-{index}", "主人在家休息")
+        rare_id = self._put("rare", "薄荷开花了")
+        rows = self.store.recall(
+            save_id="save-1", role_id="ling", query="主人薄荷浇水",
+            limit=12, record_access=False,
+        )
+        self.assertTrue(rows, "召回不应为空")
+        self.assertEqual(rows[0]["memory_id"], rare_id)
+        self.assertGreater(
+            float(rows[0]["recall_score"]) - float(rows[1]["recall_score"]), 0.03,
+            "稀有词记忆应凭 IDF 优势与高频词记忆拉开差距",
+        )
+
+    def test_embedding_backfill_selects_model_mismatch(self):
+        """换 embedding 模型后,向量模型不匹配的存量必须进入重嵌清单。"""
+        with_vector = self._put("with-vector", "窗台上的薄荷花开了")
+        without_vector = self._put("no-vector", "阳台上晾着刚洗好的床单")
+        self.store.update_memory_embedding(with_vector, [0.1, 0.9], "old-model")
+
+        plain = self.store.memories_without_embedding("save-1")
+        self.assertEqual(
+            {row["memory_id"] for row in plain}, {without_vector},
+            "未传 model 时只回填 NULL 向量(保持旧行为)",
+        )
+
+        stale = self.store.memories_without_embedding("save-1", model="new-model")
+        self.assertEqual(
+            {row["memory_id"] for row in stale},
+            {with_vector, without_vector},
+            "传入新 model 时,旧模型向量与 NULL 向量都应入选",
+        )
+        models = {row["memory_id"]: row["embedding_model"] for row in stale}
+        self.assertEqual(models[with_vector], "old-model")
+
+        same = self.store.memories_without_embedding("save-1", model="old-model")
+        self.assertEqual(
+            {row["memory_id"] for row in same}, {without_vector},
+            "模型匹配的存量不应重复回填",
+        )
+
     def test_incremental_edges_are_bounded(self):
         anchor_id = self._put("anchor", "一起照顾窗边的栀子花")
         for index in range(10):

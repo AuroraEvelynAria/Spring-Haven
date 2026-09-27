@@ -135,7 +135,7 @@ class TargetRoleTests(unittest.TestCase):
             source="manual",
         )
         self.assertEqual(self.store.memory_count("s"), 3)
-        recent = self.store.recent_digest_memories(save_id="s", since_unix=now - 10)
+        recent = self.store.recent_digest_memories(save_id="s", since_world=-1.0)
         self.assertEqual(len(recent), 2)
 
 
@@ -202,6 +202,17 @@ class MilestoneServiceTests(unittest.IsolatedAsyncioTestCase):
         memories = self.store.list_memories(save_id="ms-save")
         weekly = [m for m in memories if m["source"] == "weekly_insight"]
         self.assertEqual(len(weekly), 1)
+
+    async def test_weekly_insight_skips_when_legacy_memory_in_bucket(self) -> None:
+        # 旧档升级:现实周键的存量周反思已落在当前世界周桶内 → 不得重复生成
+        self.store.put_memory(
+            {"save_id": "ms-save", "scope_role_id": "ling", "kind": "identity",
+             "title": "旧周反思", "content": "上周的事"},
+            source="weekly_insight",
+        )
+        result = await self.service.run_due_weekly_insights()
+        self.assertEqual(result["created"], 0, result)
+        self.assertEqual(result["skipped"], 1, result)
 
     async def test_weekly_fallback_when_provider_fails(self) -> None:
         self.provider.fail = True

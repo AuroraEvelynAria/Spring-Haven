@@ -84,6 +84,15 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
     async def _seed(self, save_id: str, role: str, importance: float) -> None:
         now = int(time.time())
         day_start = int(time.mktime((2026, 2, 10, 0, 0, 0, -1, -1, -1)))
+        # 锚世界时钟:day_start == 世界第 0 天;世界随现实推进,该天早已结束
+        self.store._connection.execute(
+            "INSERT INTO journey_clock(save_id, anchor_real, world_value, rate) "
+            "VALUES (?, ?, 0.0, 1.0) "
+            "ON CONFLICT(save_id) DO UPDATE SET "
+            "anchor_real = excluded.anchor_real, world_value = 0.0, rate = 1.0",
+            (save_id, day_start),
+        )
+        self.store._connection.commit()
         self.store.record_life_events(
             save_id=save_id,
             events=[{

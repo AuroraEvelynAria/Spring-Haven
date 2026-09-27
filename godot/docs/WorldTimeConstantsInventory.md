@@ -32,18 +32,24 @@
 - outbox TTL 计算：`memory.py:2434,2583` —— 按世界天，现实时间仅经 `journey_clock` 换算。
 - 冻结测试：`tests/test_world_time.py::WorldClockTests::test_constants_are_frozen`。
 
-## 2. 待迁移（#23 剩余工作）
+## 2. 待迁移（#23 剩余工作）—— ✅ 已全部完成（2026-09-27，schema v7）
 
-| 项 | 位置 | 现状 | 倍率下的问题 |
-|---|---|---|---|
-| **周反思周键** | `service.py:540 _iso_week_key()` | 现实 ISO 周；代码内自标「**#23 交界待定桩**」 | rate≠1 时「世界周」与「ISO 周」不再恒等 |
-| **周反思 7 天窗口** | `service.py:432` `since = timestamp - 7 * 86_400` | 现实秒 | 窗口覆盖的世界天数 ≠ 7 |
-| **digest 查询窗口** | `service.py:447` → `memory.py:2839 recent_digest_memories(since_unix=…)` | 现实 unix（`memory.py:2841` 注释自承） | 同上 |
-| **milestone / weekly 范围** | `memory.py:2798` `_life_save_ids` 注释 | 现实时间 | 影响里程碑与周反思的扫描范围 |
+原四项遗留已随 **schema v7**（`migrations/v7_world_time_digest.sql`）收尾：
 
-**迁移注意（代码内已标注）**：`source_event_id = "weekly-{week_key}"` 是周反思的幂等键。
-周键从现实 ISO 周改为世界周后，**既有 `weekly-*` 记忆必须做一次幂等映射回填**，
-否则升级后会对同一周重复生成反思记忆。
+| 项 | 原位置/现状 | 迁移后 |
+|---|---|---|
+| **周反思周键** | `service.py _iso_week_key()` 现实 ISO 周 | 已删除；改为**各存档自己的世界周键** `world-w{week:04d}`（`run_due_weekly_insights`） |
+| **周反思 7 天窗口** | `timestamp - 7 * 86_400` 现实秒 | 窗口 = 当前世界周桶 `[7n, 7n+7)` 世界日（`recent_digest_memories(since_world=…)`） |
+| **digest 查询/分桶窗口** | `recent_digest_memories(since_unix=…)` 现实 unix | `digest_day_events(world_day=…)` / `digest_pending_saves` 全按 `life_events.world_occurred_at`（世界日键 `w{day:04d}`）；原 12h 现实冷却由「该世界日已结束」判定取代 |
+| **milestone first_digest 范围** | `recent_digest_memories(since_unix=0)` 现实 created_at | `since_world=-1.0`，按 world_created_at 判定 |
+
+**旧档幂等映射（v7 回填，两项）**：
+1. 既有 `life_events` 按当前时钟线性映射出 `world_occurred_at`（钳 0，防补报旧事件落负世界日）；
+2. 既有 `digest_state` 的现实日期键按同口径映射出 `w{day:04d}` 新键（`INSERT OR IGNORE`，旧键保留）。
+
+周反思的重复生成防护**不靠改写旧 `weekly-*` source_event_id**：新增
+`weekly_insight_exists_in_world_week()`，当前世界周桶内已存在任何 `weekly_insight`
+记忆（含旧现实周键存量，其 `world_created_at` 已由 v6/v7 映射）即跳过本周期。
 
 ## 3. 合法现实时间（不应迁移）
 
@@ -59,14 +65,15 @@
 
 ## 4. 旧档迁移与演练
 
-- `SCHEMA_VERSION = 6`（`memory.py:18`）；脚本 `migrations/v6_world_time.sql` + 回滚稿 `v6_world_time_rollback.sql`。
-- 回填约定：世界时钟零点 = 迁移时刻；旧记忆按存档内最早 `real created_at` 的相对偏移（天）映射。
-- 演练覆盖：`tests/test_world_time.py::MigrationDrillTests`（6 例，含旧档回填、备份幂等、v6 前向兼容守卫）。
+- `SCHEMA_VERSION = 7`（`memory.py:18`）；v6：`migrations/v6_world_time.sql`，v7：`migrations/v7_world_time_digest.sql`（各带回滚稿）。
+- 回填约定：世界时钟零点 = 迁移时刻；旧记忆按存档内最早 `real created_at` 的相对偏移（天）映射；v7 起旧 `life_events` / `digest_state` 按当前时钟线性映射（钳 0）。
+- 演练覆盖：`tests/test_world_time.py::MigrationDrillTests`（9 例：v6 旧档回填、备份幂等、前向兼容守卫、v7 世界日回填、digest_state 键映射、v7 幂等）。
 - TTL / 倍率行为：`WorldTtlTests`（3 例）+ `WorldClockTests::test_rate_scaling_advances_world_time_faster`。
 
 ## 5. 结论
 
-**#23 未完成。** 记忆衰减 / recency / outbox TTL / 迁移链 / 时钟换算已全部切到 world_time；
-**周反思与 digest 仍锚定现实时间**，且缺少周键的旧档幂等映射。
+**#23 完成（2026-09-27）。** 记忆衰减 / recency / outbox TTL / 迁移链 / 时钟换算 /
+**digest 分桶与窗口 / 周反思周键与窗口 / 里程碑扫描范围**已全部切到 world_time，
+旧档映射回填与演练齐备。仅存的现实时间使用见第 3 节（均为合法用途）。
 
 建议迁移顺序：**周键 → 7 天窗口 → digest 查询**，并为既有 `weekly-*` 记忆补一次幂等回填测试。

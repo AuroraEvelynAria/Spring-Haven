@@ -13,8 +13,12 @@ Heartloom 现状(`memory_entries` 21 列,save_id 即旅程键):主检索为词�
 ### D1 检索主链路:有界候选池混合召回
 
 - 三段式:硬过滤(save_id + lifecycle='active' + enabled=1)→ 有界候选池(≤400:world_time 最近窗口 300 条 ∪ always_active 常驻 ∪ memory_terms/词法命中集 ∪ importance≥0.8,超限按 recency+importance 截断)→ 池内混合打分。
-- 融合公式(各通道归一化 0-1):
-  `final = 0.40·semantic + 0.25·lexical + 0.20·time_decay + 0.10·importance + 0.05·graph_boost`
+- 融合公式(各通道归一化 0-1;2026-09-27 与 `memory.py` 实现对齐):
+  `final = 0.40·semantic + 0.25·lexical + 0.20·(importance·time_decay) + 0.10·recency + 0.05·priority`,在 `min(1,·)` 截断后**再加** `+ 0.05·graph_boost`。
+  - `importance·time_decay`:重要度先经双参数衰减打折(`effective_half_life = half_life/intrinsic`)再进 0.20 通道;
+  - `recency = 0.5^(世界天龄/30)`;`priority = (priority+10)/20`;
+  - `graph_boost` 加在融合分之外,不属于括号内权重和;
+  - query_vector 缺失时,语义路权重并回其余四路(四路和除以 0.60 归一)。
 - **graph_boost 权重冻结为 0.05(Alpha 不调高,待评测集验证后再评估),且仅读取一级直接邻接边**:候选记忆的 graph_boost = 其与最近召回集/当前词法命中集之间一级邻接边的最大 link_strength;禁止递归遍历多级关联,邻居不参与权重传递。
 - semantic 通道:复用现有 embedding 基建(`provider.embed`),cosine 映射 (cos+1)/2;embedding 延后回填(`embedding_json` 允许 NULL,调度器限速回填),回填缺失期间该路权重并回 lexical;记录 model+dim,与当前 provider 不匹配时该路静默弃用。
 - 权重为后端常量,Alpha 不暴露配置;调参以 20-30 条"查询→期望记忆"评测集回归为准(建评测集是调参前置条件)。
@@ -22,6 +26,9 @@ Heartloom 现状(`memory_entries` 21 列,save_id 即旅程键):主检索为词�
 ### D2 词法检索:写入侧关键词,Alpha 不引入 FTS5 / bm25s
 
 - 检索主入口 = `memory_terms` 倒查(精确/前缀)+ `content LIKE` 兜底(已含 ESCAPE);替代裸 LIKE 全扫。
+- **词法贡献 = Σ min(3, w)·idf(term) / min(8, |query_terms|)**,其中 idf = ln(1 + N池/(1+df)) 为**候选池内局部 IDF**(2026-09-27):全库高频词(「主人」类)贡献被压低,稀有具体词获得更高话语权;只在候选池(≤400)上统计,免维护全库词频表。
+- **触发词命中不再平面削平至 1.0**(2026-09-27):策展触发词以 3.0 权重参与同一 IDF 归一;原 `max(lexical, 1.0)` 会把高频触发与稀有触发拉成同分,词法通道失去区分度。
+- **always_active 里程碑保底分(0.82+priority·0.12)仅当该记忆自身 lexical>0 时生效**(2026-09-27,D1 修订):里程碑仍永驻候选池、永不休眠(「永远记得」),但不再无条件占据每次召回头部。
 - 写入侧丰富词条:organizer/传播的 LLM JSON 契约增加 `keywords` 数组字段;规则生成的记忆从事件类型/角色/动作词派生必填词条,全部入 `memory_terms`。
 - FTS5(unicode61 对中文基本不可用;trigram 需 ≥3 字符,中文 2 字查询退化回 LIKE)与 bm25s+jieba(索引生命周期与离线批量写入耦合)均**不在 Alpha 引入**。升级触发条件:单旅程 memory_entries > 5000 或 recall p95 > 200ms 或实测召回不足;届时优先 FTS5 trigram 与 keywords 联合,bm25s 为最末备选。
 

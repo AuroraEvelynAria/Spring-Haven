@@ -110,6 +110,11 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
             return web.json_response(
                 {"error": {"message": "invalid key"}}, status=401
             )
+        if payload.get("model") == "balance-402":
+            self.failure_calls += 1
+            return web.json_response(
+                {"error": {"message": "Insufficient Balance"}}, status=402
+            )
         if payload.get("model") == "empty-once":
             self.empty_reply_calls += 1
             self.empty_reply_payloads.append(payload)
@@ -474,6 +479,33 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
         status = self.provider.circuit_status()["chat"]
         self.assertEqual(status["active_candidate_id"], "primary")
         self.assertEqual(status["state"], "closed")
+
+    async def test_payment_required_switches_to_fallback(self):
+        # 402 欠费是容量类问题:主档没钱时备用通道必须接管(实弹 livetest1
+        # 二轮官方 key 402 中断);与 401 配置错误原地暴露的语义相对。
+        self.settings.update(
+            base_url=str(self.server.make_url("/v1")).rstrip("/"),
+            model="balance-402",
+        )
+        self.settings.update_fallbacks(
+            "chat",
+            [{
+                "id": "backup",
+                "label": "Backup",
+                "base_url": str(self.server.make_url("/v1")).rstrip("/"),
+                "model": "fallback-model",
+                "enabled": True,
+                "protocol": "openai_chat",
+                "inherit_chat_key": False,
+            }],
+        )
+        reply = await self.provider.complete(
+            "system", [{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(reply.text, "chat reply")
+        status = self.provider.circuit_status()["chat"]
+        self.assertEqual(status["active_candidate_id"], "backup")
+        self.assertEqual(self.failure_calls, 1)
 
     async def test_each_capability_has_a_redacted_live_diagnostic(self):
         for capability in ["chat", "vision", "embedding", "rerank"]:
