@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<!-- ═══════════════════════════════════════════════════════════════════════
+  春日庭院 · 主界面 UI 预览 v3 —— 场景即屏幕(HUD 锚点式构图)
+  与 v2 的区别:去掉仪表盘三栏与全部 emoji,改为
+    左上:宋体标题锁定   右上:线性图标栏+换肤   左中:角色在场徽章
+    右下:剪影立绘+窗光  底部:视觉小说式对话面板(内嵌输入)
+  Godot 对照::root token 块 = base_theme.tres;四角锚定 = Control 锚点;
+  .card 样式族 = StyleBoxFlat;data-theme 换肤 = 主题 .tres;动效 = Tween。
+  ═══════════════════════════════════════════════════════════════════════ -->
+<html lang="zh-CN" data-theme="amber">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>春日庭院 · 主界面 UI 预览 v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ═══ Godot 对照:整块 = base_theme.tres 的 token ═══ */
+:root{
+  --bg:#F6F1E7;
+  --ink:#33291F;
+  --ink-2:#6B5D4C;
+  --ink-3:rgba(51,41,31,.42);
+  --line:rgba(51,41,31,.10);
+  --glass:rgba(255,252,246,.62);
+  --glass-strong:rgba(255,252,246,.82);
+  --accent:#C96B2E;
+  --accent-ink:#9E4E1B;
+  --accent-soft:rgba(201,107,46,.12);
+  --accent-glow:rgba(201,107,46,.25);
+  --green:#6E7F52;
+  --gold:#B98A2E;
+  --rose:#C46A8E;
+  --wood:#7A4E2E;
+  --pane-a:#FFE9C8;--pane-b:#FDF6E7;
+  --leaf-a:#5F7247;--leaf-b:#43532F;
+  --halo:rgba(255,214,150,.55);
+  --mote:rgba(255,236,200,.85);
+  --petal:rgba(233,160,130,.5);
+  --shadow-1:0 2px 10px rgba(60,40,20,.08);
+  --shadow-2:0 10px 34px rgba(60,40,20,.14);
+  --shadow-3:0 18px 50px rgba(60,40,20,.2);
+  --r:16px;
+  --fast:.18s;--med:.3s;--slow:.7s;
+  --ease:cubic-bezier(.22,.8,.32,1);
+  --serif:"Noto Serif SC","Songti SC","STSong",serif;
+  --sans:"Noto Sans SC","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+}
+[data-theme="sakura"]{
+  --bg:#FAF0F1;--accent:#C2507E;--accent-ink:#A03A66;--accent-soft:rgba(194,80,126,.12);
+  --accent-glow:rgba(194,80,126,.25);--wood:#6E4A3A;--pane-a:#FFE3EC;--pane-b:#FFF4F6;
+  --leaf-a:#7A8757;--leaf-b:#5C683E;--halo:rgba(255,214,225,.6);--petal:rgba(233,140,170,.55);
+}
+[data-theme="mint"]{
+  --bg:#EFF4EC;--accent:#3E8A68;--accent-ink:#2C6E50;--accent-soft:rgba(62,138,104,.12);
+  --accent-glow:rgba(62,138,104,.25);--wood:#5C6E4E;--pane-a:#E7F3E4;--pane-b:#F7FBF2;
+  --halo:rgba(220,240,210,.6);--petal:rgba(150,200,170,.45);
+}
+[data-theme="nocturne"]{
+  --bg:#171521;--ink:#EAE4D8;--ink-2:#B5AA9A;--ink-3:rgba(234,228,216,.4);
+  --line:rgba(255,255,255,.09);--glass:rgba(38,34,50,.6);--glass-strong:rgba(44,40,58,.85);
+  --accent:#E8935C;--accent-ink:#F0A874;--accent-soft:rgba(232,147,92,.14);
+  --accent-glow:rgba(232,147,92,.3);--gold:#D9B36A;--rose:#C87E9C;
+  --wood:#2C2438;--pane-a:#2C3560;--pane-b:#1E2540;
+  --leaf-a:#25301F;--leaf-b:#182112;--halo:rgba(120,110,180,.28);
+  --mote:rgba(255,220,150,.9);--petal:rgba(200,160,150,.14);
+  --shadow-1:0 2px 12px rgba(0,0,0,.4);
+  --shadow-2:0 12px 38px rgba(0,0,0,.5);
+  --shadow-3:0 20px 54px rgba(0,0,0,.6);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--sans);color:var(--ink);overflow:hidden;
+  background:
+    radial-gradient(90rem 60rem at 18% -12%,rgba(255,236,200,.75),transparent 55%),
+    radial-gradient(70rem 50rem at 88% 4%,rgba(160,190,150,.16),transparent 55%),
+    linear-gradient(180deg,var(--bg) 0%,var(--bg) 78%,rgba(60,40,20,.06) 100%);
+  transition:background 1s var(--ease);
+}
+/* 夜色整体压暗(仅 nocturne) */
+[data-theme="nocturne"] body{background:
+  radial-gradient(90rem 60rem at 18% -12%,rgba(90,80,140,.18),transparent 55%),
+  radial-gradient(70rem 50rem at 88% 4%,rgba(60,90,120,.10),transparent 55%),
+  var(--bg)}
+/* 噪点+暗角(Godot:背景 shader) */
+body::before{content:"";position:fixed;inset:0;z-index:40;pointer-events:none;opacity:.045;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")}
+body::after{content:"";position:fixed;inset:0;z-index:40;pointer-events:none;
+  background:radial-gradient(130% 95% at 50% 42%,transparent 52%,rgba(40,25,10,.2) 135%);
+  transition:background 1s var(--ease)}
+[data-theme="nocturne"] body::after{background:radial-gradient(130% 95% at 50% 42%,transparent 45%,rgba(0,0,5,.55) 135%)}
+
+/* ── 场景层:窗 / 光束 / 地板 / 前景植物(Godot:场景 TextureRect 层) ── */
+.scene{position:fixed;inset:0;z-index:1;pointer-events:none}
+.window{
+  position:absolute;left:-4%;top:11%;width:min(280px,26vw);aspect-ratio:4/4.4;
+  background:linear-gradient(180deg,var(--pane-a),var(--pane-b));
+  border:8px solid var(--wood);border-radius:8px;
+  box-shadow:0 14px 44px rgba(60,40,20,.18),inset 0 0 30px rgba(255,255,255,.35);
+  display:grid;grid-template:1fr 1fr/1fr 1fr;gap:8px;padding:8px;
+  transition:background 1s var(--ease)}
+.window i{border-radius:3px;background:linear-gradient(180deg,rgba(255,255,255,.28),transparent 45%)}
+[data-theme="nocturne"] .window i{background:
+  radial-gradient(12px 12px at 70% 28%,rgba(240,240,255,.9),transparent 60%),linear-gradient(180deg,rgba(120,130,200,.12),transparent)}
+.window .mullion{position:absolute;background:var(--wood)}
+.window .mh{left:8px;right:8px;top:calc(50% - 4px);height:8px}
+.window .mv{top:8px;bottom:8px;left:calc(50% - 4px);width:8px}
+/* 光束(晨光斜射) */
+.shaft{position:absolute;left:-2%;top:9%;width:52%;height:84%;
+  background:linear-gradient(115deg,rgba(255,238,200,.5),rgba(255,238,200,0) 55%);
+  transform:skewX(-14deg);filter:blur(6px)}
+[data-theme="nocturne"] .shaft{opacity:.14}
+.floor{position:absolute;left:0;right:0;bottom:0;height:17%;
+  background:linear-gradient(180deg,transparent,rgba(90,60,30,.10) 60%,rgba(90,60,30,.16));
+  border-top:1px solid rgba(90,60,30,.14)}
+[data-theme="nocturne"] .floor{background:linear-gradient(180deg,transparent,rgba(0,0,10,.3) 70%);border-top-color:rgba(255,255,255,.05)}
+.leaves{position:absolute;bottom:-2%;left:-3%;width:340px;filter:blur(1.6px);opacity:.95;transform:rotate(6deg)}
+.leaves.tr{left:auto;right:-4%;top:-4%;bottom:auto;width:280px;transform:rotate(-24deg) scaleX(-1);opacity:.6;filter:blur(2.4px)}
+
+/* 微尘 / 萤火(Godot:GPUParticles2D) */
+.motes{position:fixed;inset:0;z-index:2;pointer-events:none}
+.mote{position:absolute;border-radius:50%;background:var(--mote);
+  box-shadow:0 0 8px var(--mote);animation:drift ease-in-out infinite alternate}
+@keyframes drift{from{transform:translate3d(0,0,0);opacity:.15}50%{opacity:.85}to{transform:translate3d(3vw,-7vh,0);opacity:.2}}
+.petals{position:fixed;inset:0;z-index:2;pointer-events:none;overflow:hidden}
+.petal{position:absolute;top:-4vh;border-radius:60% 40% 55% 45%/55% 60% 40% 45%;
+  background:var(--petal);animation:fall linear infinite}
+@keyframes fall{to{transform:translate3d(9vw,110vh,0) rotate(300deg)}}
+
+/* ═══ 四角锚定 HUD(Godot:Control 锚点)═══ */
+/* 左上:标题锁定 —— 宋体排印撑起成熟感 */
+.lockup{position:fixed;left:26px;top:20px;z-index:10;line-height:1}
+.lockup h1{font-family:var(--serif);font-weight:900;font-size:27px;letter-spacing:.32em;
+  color:var(--ink);text-shadow:0 1px 0 rgba(255,255,255,.5)}
+[data-theme="nocturne"] .lockup h1{text-shadow:0 2px 14px rgba(0,0,0,.6)}
+.lockup .rule{width:150px;height:2px;margin:9px 0 7px;
+  background:linear-gradient(90deg,var(--accent),transparent);border-radius:2px}
+.lockup p{font-size:11px;letter-spacing:.24em;color:var(--ink-2)}
+.lockup p b{color:var(--accent-ink);font-weight:700}
+
+/* 右上:图标栏(自绘线性 SVG,零 emoji) */
+.rail{position:fixed;right:22px;top:18px;z-index:10;display:flex;align-items:center;gap:6px}
+.rail .btn{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;
+  color:var(--ink-2);cursor:pointer;border:1px solid transparent;
+  background:var(--glass);box-shadow:var(--shadow-1);backdrop-filter:blur(10px);
+  transition:all var(--fast) var(--ease)}
+.rail .btn:hover{color:var(--accent-ink);box-shadow:0 0 0 3px var(--accent-glow);transform:translateY(-1px)}
+.rail .btn:active{transform:scale(.9)}
+.rail .swatches{display:flex;gap:7px;margin-left:10px;padding-left:12px;border-left:1px solid var(--line)}
+.sw{width:17px;height:17px;border-radius:50%;cursor:pointer;border:2px solid rgba(255,255,255,.7);
+  box-shadow:0 1px 5px rgba(60,40,20,.25);transition:transform var(--fast) var(--ease)}
+.sw:hover{transform:scale(1.18)}
+.sw.active{border-color:var(--ink);transform:scale(1.12)}
+.sw[data-t="amber"]{background:linear-gradient(135deg,#E8A266,#C96B2E)}
+.sw[data-t="sakura"]{background:linear-gradient(135deg,#E89AB8,#C2507E)}
+.sw[data-t="mint"]{background:linear-gradient(135deg,#8CC0A4,#3E8A68)}
+.sw[data-t="nocturne"]{background:linear-gradient(135deg,#4A4268,#221E30)}
+
+/* 左中:在场徽章 —— 悬浮,无卡片框 */
+.presence{position:fixed;left:26px;top:50%;transform:translateY(-60%);z-index:10;
+  display:flex;flex-direction:column;gap:22px}
+.pv{display:flex;gap:11px;align-items:center;opacity:0;animation:rise .7s var(--ease) forwards}
+.pv:nth-child(2){animation-delay:.12s}
+.pv-ava{width:46px;height:46px;border-radius:50%;flex:none;display:grid;place-items:center;
+  font-family:var(--serif);font-weight:900;font-size:19px;color:#FFF7EE;
+  border:2px solid rgba(255,255,255,.75);box-shadow:0 6px 16px rgba(60,40,20,.28);
+  transition:transform var(--fast) var(--ease)}
+.pv:hover .pv-ava{transform:scale(1.08)}
+.pv-ava.ling{background:linear-gradient(140deg,#E8A266,#B65B24)}
+.pv-ava.nai{background:linear-gradient(140deg,#9CB8DC,#5F83B4)}
+.pv-name{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:7px}
+.speaking{width:7px;height:7px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-glow);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+.pv-state{font-size:11.5px;color:var(--ink-2);margin:2px 0 5px}
+.pv-bar{width:86px;height:4px;border-radius:99px;background:rgba(60,40,20,.14);overflow:hidden}
+[data-theme="nocturne"] .pv-bar{background:rgba(255,255,255,.12)}
+.pv-bar i{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent-soft),var(--accent));
+  transition:width 1s var(--ease) .5s}
+
+/* ── 右下:立绘剪影 + 背光(Godot:TextureRect + Tween) ── */
+.stage{position:fixed;right:9%;bottom:132px;z-index:5;pointer-events:none}
+.halo{position:absolute;left:50%;top:52%;width:420px;height:420px;transform:translate(-50%,-50%);
+  border-radius:50%;background:radial-gradient(circle,var(--halo),transparent 62%);
+  animation:haloB 5s ease-in-out infinite}
+@keyframes haloB{0%,100%{opacity:.85;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.05)}}
+.figure{position:relative;animation:breathe 4.8s ease-in-out infinite;transform-origin:50% 100%}
+@keyframes breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-6px) scale(1.012)}}
+.ground{width:230px;height:26px;margin:6px auto 0;border-radius:50%;
+  background:radial-gradient(50% 50% at 50% 50%,rgba(50,32,14,.3),transparent 70%)}
+[data-theme="nocturne"] .ground{background:radial-gradient(50% 50% at 50% 50%,rgba(0,0,0,.55),transparent 70%)}
+
+/* ── 底部:视觉小说式对话面板(Godot:PanelContainer + HBox) ── */
+.vn{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10;
+  width:min(780px,calc(100vw - 32px))}
+.dlg{
+  background:var(--glass-strong);border:1px solid var(--line);border-radius:20px;
+  box-shadow:var(--shadow-3);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  padding:15px 20px 13px;
+  animation:rise .7s var(--ease) .25s backwards;
+  transition:border-color var(--fast) var(--ease)}
+.dlg:focus-within{border-color:var(--accent)}
+.dlg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:5px}
+.dlg-name{font-family:var(--serif);font-weight:900;font-size:17px;color:var(--accent-ink);letter-spacing:.14em}
+[data-theme="nocturne"] .dlg-name{color:var(--accent)}
+.dlg-sub{font-size:10.5px;letter-spacing:.22em;color:var(--ink-3)}
+.dlg-text{font-family:var(--serif);font-size:16.5px;line-height:1.85;min-height:58px;color:var(--ink)}
+.dots{display:inline-flex;gap:5px;margin-left:8px;vertical-align:middle}
+.dots i{width:5.5px;height:5.5px;border-radius:50%;background:var(--ink-3);animation:pulse 1.2s infinite var(--ease)}
+.dots i:nth-child(2){animation-delay:.18s}.dots i:nth-child(3){animation-delay:.36s}
+.dlg-divider{height:1px;background:var(--line);margin:9px 0 9px}
+.dlg-input{display:flex;align-items:center;gap:8px}
+.qa{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;
+  color:var(--ink-2);cursor:pointer;background:transparent;border:1px solid transparent;
+  transition:all var(--fast) var(--ease)}
+.qa:hover{color:var(--accent-ink);background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-glow)}
+.qa:active{transform:scale(.88)}
+.qa-sep{width:1px;height:20px;background:var(--line);margin:0 3px}
+.dlg-input input{flex:1;border:none;outline:none;background:transparent;
+  font:14.5px var(--sans);color:var(--ink)}
+.dlg-input input::placeholder{color:var(--ink-3)}
+.mic,.send{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+  border:none;transition:all var(--fast) var(--ease)}
+.mic{background:transparent;color:var(--ink-2)}
+.mic:hover{color:var(--accent-ink);background:var(--accent-soft)}
+.send{background:linear-gradient(135deg,var(--accent),var(--accent-ink));color:#FFF7EE;
+  box-shadow:0 5px 16px var(--accent-glow)}
+.send:hover{transform:translateY(-2px);box-shadow:0 9px 24px var(--accent-glow)}
+.send:active{transform:scale(.9)}
+.ic{width:19px;height:19px}
+.qa .ic{width:17px;height:17px}
+
+/* 花瓣入场 / 通用动效 */
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.pv{--y:0}
+#vp{position:fixed;left:10px;bottom:10px;z-index:50;font-size:11px;color:var(--ink-2);
+  background:var(--glass-strong);border:1px solid var(--line);padding:3px 9px;
+  border-radius:99px;cursor:pointer;user-select:none;backdrop-filter:blur(8px)}
+
+/* ═══ Godot 对照:断点 = 锚点重排 + stretch expand ═══ */
+@media (max-width:1080px){
+  .stage{right:50%;transform:translateX(46%);bottom:200px;opacity:.9}
+  .stage .halo{width:330px;height:330px}
+  .presence{top:auto;bottom:150px;transform:none;flex-direction:row;gap:26px}
+  .window{left:4%;top:7%;width:min(240px,34vw)}
+}
+@media (max-width:680px){
+  .lockup{left:14px;top:12px}
+  .lockup h1{font-size:17px;letter-spacing:.18em}
+  .lockup p{font-size:9px;letter-spacing:.13em}
+  .lockup .rule{width:110px;margin:6px 0 5px}
+  .rail{right:10px;top:10px;gap:4px}
+  .rail .btn{width:32px;height:32px;border-radius:10px}
+  .rail .ic{width:17px;height:17px}
+  .rail .swatches{gap:5px;margin-left:6px;padding-left:8px}
+  .sw{width:14px;height:14px}
+  .scene .window{left:-16%;top:5%;width:52vw}
+  .qa,.qa-sep{display:none}
+  .dlg{padding:12px 14px 11px}
+  .dlg-input input{font-size:13.5px}
+  .mic,.send{width:33px;height:33px}
+  .stage{bottom:262px;right:50%;transform:translateX(50%)}
+  .figure svg{width:170px}
+  .ground{width:130px}
+  .halo{width:250px;height:250px}
+  .presence{top:auto;bottom:214px;left:50%;transform:translateX(-50%);
+    flex-direction:row;gap:18px}
+  .pv-ava{width:38px;height:38px;font-size:15px}
+  .pv-bar{display:none}
+  .pv-state{display:none}
+  .pv-name{font-size:12px;white-space:nowrap}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<!-- 自绘线性图标(零 emoji):Godot 里对应 SVG 纹理图标集 -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-mem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="5.5" cy="7" r="2.2"/><circle cx="18" cy="5.5" r="2.2"/>
+    <circle cx="12.5" cy="16.5" r="2.2"/><circle cx="19.5" cy="16" r="1.7"/>
+    <path d="M7.6 8.1 10.6 15M15.9 6.4 14.4 14.6M7.7 7.2 15.8 5.8M14.7 17 17.8 16.3"/>
+  </symbol>
+  <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 5.5C7 4.3 10 4.8 12 6.4 14 4.8 17 4.3 20 5.5V19C17 17.8 14 18.3 12 19.9 10 18.3 7 17.8 4 19Z"/>
+    <path d="M12 6.4V19.9"/>
+  </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+    <path d="M4 7.2h9M17.5 7.2H20M4 16.8h4M12.5 16.8H20"/>
+    <circle cx="15" cy="7.2" r="2.3"/><circle cx="10" cy="16.8" r="2.3"/>
+  </symbol>
+  <symbol id="i-paw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+    <ellipse cx="12" cy="15.8" rx="3.6" ry="3"/>
+    <circle cx="7" cy="10.5" r="1.5"/><circle cx="12" cy="8.6" r="1.6"/><circle cx="17" cy="10.5" r="1.5"/>
+  </symbol>
+  <symbol id="i-tea" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 10.5h11v3.6a5.5 5.5 0 0 1-11 0Z"/>
+    <path d="M16 11.6a2.6 2.6 0 1 1 .4 5"/>
+    <path d="M9 4.2c-.7 1.1.7 1.8 0 3M12.8 4.2c-.7 1.1.7 1.8 0 3"/>
+  </symbol>
+  <symbol id="i-walk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="13.2" cy="4.6" r="1.9"/>
+    <path d="M13 7.6 12 12l2.6 3.4L14 20M12 12l-3 2-1 4.5M12.6 9.4l3 1.2 2 2"/>
+  </symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="7.2" width="16" height="11.6" rx="2.6"/>
+    <circle cx="12" cy="13" r="3.3"/><path d="M9.2 7.2 10.6 5h2.8l1.4 2.2"/>
+  </symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+    <rect x="9.2" y="3.4" width="5.6" height="10.2" rx="2.8"/>
+    <path d="M6.4 11.4a5.6 5.6 0 0 0 11.2 0M12 17v3.4M8.8 20.4h6.4"/>
+  </symbol>
+  <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 11.6 19.5 5l-5 14.4-3.3-6.2Z"/><path d="M11.2 13.2 19.5 5"/>
+  </symbol>
+</svg>
+
+<!-- 场景层 -->
+<div class="scene" id="scene">
+  <div class="shaft parallax" data-depth="6"></div>
+  <div class="window parallax" data-depth="10"><i></i><i></i><i></i><i></i>
+    <span class="mullion mh"></span><span class="mullion mv"></span>
+  </div>
+  <div class="floor"></div>
+  <svg class="leaves parallax" data-depth="16" viewBox="0 0 200 140">
+    <path d="M20 140C30 96 62 66 104 58c8 30-10 66-44 82Z" fill="var(--leaf-a)"/>
+    <path d="M60 140c2-40 26-72 66-80 6 28-14 62-46 80Z" fill="var(--leaf-b)" opacity=".92"/>
+    <path d="M0 120c14-26 44-40 74-36-4 24-30 42-58 44Z" fill="var(--leaf-b)" opacity=".75"/>
+  </svg>
+  <svg class="leaves tr parallax" data-depth="20" viewBox="0 0 200 140">
+    <path d="M20 140C30 96 62 66 104 58c8 30-10 66-44 82Z" fill="var(--leaf-a)"/>
+    <path d="M60 140c2-40 26-72 66-80 6 28-14 62-46 80Z" fill="var(--leaf-b)" opacity=".9"/>
+  </svg>
+</div>
+<div class="motes" id="motes"></div>
+<div class="petals" id="petals"></div>
+
+<!-- 左上:标题锁定 -->
+<header class="lockup rise">
+  <h1>春日庭院</h1>
+  <div class="rule"></div>
+  <p>SPRING HAVEN · 旅程一 · <b>第 128 天</b> · 上午 · 晴</p>
+</header>
+
+<!-- 右上:图标栏 + 换肤 -->
+<nav class="rail rise" style="animation-delay:.08s">
+  <button class="btn" title="心织记忆网络"><svg class="ic"><use href="#i-mem"/></svg></button>
+  <button class="btn" title="回忆档案"><svg class="ic"><use href="#i-book"/></svg></button>
+  <button class="btn" title="设置"><svg class="ic"><use href="#i-gear"/></svg></button>
+  <div class="swatches" title="一键换肤 = 主题 .tres">
+    <span class="sw active" data-t="amber"></span>
+    <span class="sw" data-t="sakura"></span>
+    <span class="sw" data-t="mint"></span>
+    <span class="sw" data-t="nocturne"></span>
+  </div>
+</nav>
+
+<!-- 左中:在场徽章 -->
+<aside class="presence">
+  <div class="pv">
+    <div class="pv-ava ling">玲</div>
+    <div>
+      <div class="pv-name">春日铃音 <span class="speaking" title="正在说话"></span></div>
+      <div class="pv-state">窗台读书 · 心情愉悦 · 想晒太阳</div>
+      <div class="pv-bar"><i data-val="78%"></i></div>
+    </div>
+  </div>
+  <div class="pv">
+    <div class="pv-ava nai">奈</div>
+    <div>
+      <div class="pv-name">白濑雪奈</div>
+      <div class="pv-state">院子里练舞 · 第三遍落稳了</div>
+      <div class="pv-bar"><i data-val="54%"></i></div>
+    </div>
+  </div>
+</aside>
+
+<!-- 右下:立绘剪影(背光) -->
+<div class="stage rise" style="animation-delay:.15s">
+  <div class="halo"></div>
+  <div class="figure">
+    <svg width="300" height="330" viewBox="0 0 260 300" aria-label="立绘占位">
+      <defs>
+        <linearGradient id="fig" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#5C4232"/><stop offset="1" stop-color="#382A20"/>
+        </linearGradient>
+        <linearGradient id="rim" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#FFD9A0" stop-opacity=".85"/>
+          <stop offset="1" stop-color="#FFD9A0" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <!-- 单一轮廓:双耳并入头部剪影,无内耳色块 -->
+      <path d="M104 20
+               C 96 34 90 46 88 56
+               C 76 70 71 92 75 118
+               C 78 150 70 176 58 198
+               C 88 216 180 216 206 198
+               C 194 176 186 150 189 118
+               C 193 92 188 70 176 56
+               C 174 46 168 34 160 20
+               C 152 34 146 42 140 45
+               C 136 43 128 43 124 45
+               C 118 42 112 34 104 20 Z" fill="url(#fig)"/>
+      <!-- 身体 / 裙摆 -->
+      <path d="M100 170 C76 190 62 236 58 274 L208 274 C204 236 190 190 166 170 C146 182 120 182 100 170 Z" fill="url(#fig)"/>
+      <!-- 尾巴 -->
+      <path d="M202 254 C238 248 252 214 232 198" fill="none" stroke="url(#fig)" stroke-width="15" stroke-linecap="round"/>
+      <!-- 窗光轮廓光:沿左缘一整条 -->
+      <path d="M102 30 C96 40 91 50 88 58 C77 72 72 94 76 118 C79 150 71 176 60 196 C56 204 58 208 60 212" fill="none" stroke="url(#rim)" stroke-width="3.6" stroke-linecap="round" opacity=".9"/>
+      <path d="M70 220 C62 238 59 256 58 272" fill="none" stroke="url(#rim)" stroke-width="3" stroke-linecap="round" opacity=".55"/>
+    </svg>
+    <div class="ground"></div>
+  </div>
+</div>
+
+<!-- 底部:对话面板(视觉小说式) -->
+<footer class="vn rise" style="animation-delay:.22s">
+  <div class="dlg">
+    <div class="dlg-head">
+      <span class="dlg-name">小玲</span>
+      <span class="dlg-sub">CHUNRIU LING · 正在说话</span>
+    </div>
+    <p class="dlg-text">主人,窗台的薄荷冒新芽了——嫩嫩的两片,像小奈的耳朵尖。
+      等它再长高一点,我们一起泡茶看好不好?<span class="dots"><i></i><i></i><i></i></span></p>
+    <div class="dlg-divider"></div>
+    <div class="dlg-input">
+      <button class="qa" title="摸摸头"><svg class="ic"><use href="#i-paw"/></svg></button>
+      <button class="qa" title="一起泡茶"><svg class="ic"><use href="#i-tea"/></svg></button>
+      <button class="qa" title="出门散步"><svg class="ic"><use href="#i-walk"/></svg></button>
+      <button class="qa" title="拍生活照片"><svg class="ic"><use href="#i-cam"/></svg></button>
+      <span class="qa-sep"></span>
+      <input type="text" placeholder="和小玲、小奈说点什么……">
+      <button class="mic" title="语音输入(ASR)"><svg class="ic"><use href="#i-mic"/></svg></button>
+      <button class="send" title="发送"><svg class="ic"><use href="#i-send"/></svg></button>
+    </div>
+  </div>
+</footer>
+
+<div id="vp" title="点击隐藏 · 多分辨率自测">—</div>
+
+<script>
+/* 换肤:Godot 里即切换 theme.tres */
+document.querySelectorAll('.sw').forEach(sw=>{
+  sw.addEventListener('click',()=>{
+    document.documentElement.dataset.theme=sw.dataset.t;
+    document.querySelectorAll('.sw').forEach(s=>s.classList.toggle('active',s===sw));
+  });
+});
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(!reduced){
+  /* 花瓣 + 微尘(夜主题下即萤火) */
+  const petals=document.getElementById('petals'),motes=document.getElementById('motes');
+  for(let i=0;i<8;i++){
+    const p=document.createElement('span');p.className='petal';const s=7+Math.random()*8;
+    p.style.cssText=`left:${Math.random()*100}vw;width:${s}px;height:${s*.8}px;
+      animation-duration:${10+Math.random()*9}s;animation-delay:${-Math.random()*16}s;opacity:${.4+Math.random()*.5}`;
+    petals.appendChild(p);
+  }
+  for(let i=0;i<9;i++){
+    const m=document.createElement('span');m.className='mote';const s=3+Math.random()*3.5;
+    m.style.cssText=`left:${Math.random()*100}vw;top:${20+Math.random()*70}vh;width:${s}px;height:${s}px;
+      animation-duration:${8+Math.random()*10}s;animation-delay:${-Math.random()*12}s`;
+    motes.appendChild(m);
+  }
+  /* 轻视差:场景层随鼠标缓移(Godot:可做视差 TextureRect) */
+  const layers=document.querySelectorAll('.parallax');
+  addEventListener('mousemove',e=>{
+    const dx=(e.clientX/innerWidth-.5),dy=(e.clientY/innerHeight-.5);
+    layers.forEach(l=>{
+      const d=+l.dataset.depth||8;
+      l.style.translate=`${-dx*d}px ${-dy*d}px`;
+    });
+  });
+}
+/* 状态条入场 */
+requestAnimationFrame(()=>setTimeout(()=>{
+  document.querySelectorAll('.pv-bar i').forEach(b=>b.style.width=b.dataset.val);
+},400));
+/* 视口角标 */
+const vp=document.getElementById('vp');
+const upd=()=>vp.textContent=`${innerWidth} × ${innerHeight}`;
+addEventListener('resize',upd);upd();
+vp.addEventListener('click',()=>vp.style.display='none');
+</script>
+</body>
+</html>
