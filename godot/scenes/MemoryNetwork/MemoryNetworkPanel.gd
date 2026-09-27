@@ -23,6 +23,8 @@ var _scope_select: OptionButton
 var _search_input: LineEdit
 var _strength_slider: HSlider
 var _strength_label: Label
+var _time_slider: HSlider
+var _time_label: Label
 var _status: Label
 var _empty_state: Label
 var _detail_title: Label
@@ -177,6 +179,33 @@ func _build_interface() -> void:
 	_strength_slider.value_changed.connect(_on_strength_changed)
 	filters.add_child(_strength_slider)
 
+	# ADR-010:世界日时间滑杆 —— 拨回过去看心智生长,拖动结束才请求
+	var time_row := HBoxContainer.new()
+	time_row.add_theme_constant_override("separation", 8)
+	content.add_child(time_row)
+	_time_label = Label.new()
+	_time_label.text = "时间 · 现在"
+	_time_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_time_label.custom_minimum_size = Vector2(120, 30)
+	_time_label.tooltip_text = "把心织图谱拨回过去：只显示那一刻已经存在的记忆与联系。"
+	_time_label.add_theme_font_size_override("font_size", 12)
+	time_row.add_child(_time_label)
+	_time_slider = HSlider.new()
+	_time_slider.min_value = 0.0
+	_time_slider.max_value = 1.0
+	_time_slider.step = 0.1
+	_time_slider.value = 1.0
+	_time_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_time_slider.custom_minimum_size = Vector2(180, 30)
+	_time_slider.value_changed.connect(_on_time_value_changed)
+	time_row.add_child(_time_slider)
+	var now_button := Button.new()
+	now_button.text = "现在"
+	now_button.tooltip_text = "回到当前心智"
+	now_button.custom_minimum_size = Vector2(56, 30)
+	now_button.pressed.connect(_snap_time_to_now)
+	time_row.add_child(now_button)
+
 	_body = BoxContainer.new()
 	_body.vertical = false
 	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -270,10 +299,12 @@ func _load_graph() -> void:
 	_status.text = "正在整理记忆之间的联系……"
 	_empty_state.text = "正在读取心织记忆……"
 	_empty_state.show()
+	# ADR-010(修订):时间滑杆纯客户端调光 —— 始终加载全量图谱,
+	# 拖动滑杆只改画布亮度,不发请求、不重排布局
 	var result: Dictionary = await CompanionCore.get_heartloom_graph(
 		_selected_scope(),
 		_search_input.text,
-		100
+		200
 	)
 	if generation != _load_generation or not is_inside_tree():
 		return
@@ -316,6 +347,22 @@ func _load_graph() -> void:
 	_graph = {"nodes": mapped_nodes, "edges": mapped_edges}
 	_canvas.set_graph(_graph)
 	_canvas.set_min_strength(float(_strength_slider.value))
+	_canvas.set_time_cursor(_current_cursor_value())
+	# ADR-010:用响应里的世界时间量程校准滑杆(earliest→world_now,恒定量程)
+	var world_now := float(data.get("world_now", 0.0))
+	var world_range_variant = data.get("world_range", {})
+	if world_range_variant is Dictionary:
+		var world_range: Dictionary = world_range_variant
+		var earliest := float(world_range.get("earliest", 0.0))
+		var latest := maxf(world_now, earliest + 1.0)
+		_time_slider.min_value = earliest
+		_time_slider.max_value = latest
+		_time_slider.step = 0.1
+		# 软边渐变带宽度 ≈ 时间线总量的 3%(限制在 1~45 世界日)
+		_canvas.set_time_fade_days(clampf((latest - earliest) * 0.03, 1.0, 45.0))
+		if _time_slider.value >= latest - 0.01:
+			_time_slider.set_value_no_signal(latest)
+		_update_time_label(_time_slider.value)
 	var node_count := int(data.get("node_count", 0))
 	_empty_state.visible = node_count == 0
 	_empty_state.text = "没有匹配的长期记忆" if node_count == 0 else ""
@@ -419,6 +466,37 @@ func _on_strength_changed(value: float) -> void:
 			int(summary.get("edge_count", 0)),
 			int(summary.get("isolated_node_count", 0))
 		)
+
+
+func _update_time_label(value: float) -> void:
+	if _time_slider == null:
+		return
+	if value >= _time_slider.max_value - 0.01:
+		_time_label.text = "时间 · 现在"
+	else:
+		_time_label.text = "时间 · 世界第 %d 天" % (int(value) + 1)
+
+
+func _current_cursor_value() -> float:
+	"""ADR-010(修订):滑杆在最大值 = 实时态(-1,全部点亮);否则返回世界日。"""
+	if _time_slider == null:
+		return -1.0
+	if _time_slider.value >= _time_slider.max_value - 0.01:
+		return -1.0
+	return float(_time_slider.value)
+
+
+func _on_time_value_changed(value: float) -> void:
+	# 纯客户端调光:不发请求、不重排,画布只改亮度
+	_update_time_label(value)
+	if _canvas != null:
+		_canvas.set_time_cursor(_current_cursor_value())
+
+
+func _snap_time_to_now() -> void:
+	_time_slider.set_value_no_signal(_time_slider.max_value)
+	_update_time_label(_time_slider.max_value)
+	_canvas.set_time_cursor(-1.0)
 
 
 func _update_summary_status(node_count: int, available_count: int, edge_count: int, isolated: int) -> void:

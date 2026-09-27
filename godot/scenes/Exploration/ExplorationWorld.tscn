@@ -89,6 +89,7 @@ position = Vector3(2.18, 0.04, -3.2)
 [node name="LocalRoomVisual" type="Node3D" parent="."]
 position = Vector3(-1.079417, 0, -1.211583)
 script = ExtResource("6_room_visual")
+load_local_room_model = false
 
 [node name="Player3D" parent="." instance=ExtResource("3_player")]
 position = Vector3(-2.5, 0.05, 2.7)

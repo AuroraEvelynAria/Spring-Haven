@@ -9,6 +9,9 @@ const CHAT_ROLE_ID := "ling"
 const CHAT_TEXT_LIMIT := 3000
 const CHAT_LOG_LINE_LIMIT := 6
 const CHAT_LOG_TEXT_LIMIT := 260
+# ADR 探索阶段①(SLG 交互层):可感知组件与角色交互动词
+const PERCEIVABLE_SCRIPT := preload("res://scenes/Exploration/Perception/Perceivable3D.gd")
+const LING_INTERACT_RANGE := 2.4
 
 var _navigation_ready := false
 var _navigation_sync_pending := false
@@ -53,6 +56,17 @@ var _global_state_configured := false
 @onready var _chat_send_button: Button = $HUD/SafeMargin/CommandPanel/PanelMargin/Commands/ChatInputRow/ChatSendButton
 @onready var _ai_waiting_label: Label = $HUD/SafeMargin/CommandPanel/PanelMargin/Commands/AIWaitingLabel
 
+# ADR 探索阶段①:玩家交互提示(代码创建,挂 HUD)
+var _interact_hint: Label
+# SLG 交互层:动作菜单 + 角色本体交互
+var _interact_menu: PanelContainer
+var _interact_menu_list: VBoxContainer
+var _interact_menu_open := false
+var _menu_target: Dictionary = {}
+var _ray_target_active := false
+var _ling_nearby := false
+var _ling_perceivable: Node
+
 
 func _ready() -> void:
 	_wander_rng.randomize()
@@ -65,6 +79,13 @@ func _ready() -> void:
 	var life_sim := get_node_or_null("/root/LifeSim")
 	if is_instance_valid(life_sim) and life_sim.has_signal("autonomous_action"):
 		life_sim.connect("autonomous_action", Callable(self, "_on_life_autonomous_action"))
+	# ADR 探索阶段①:玩家交互(按 E) → 动词执行 → 事件进 Heartloom
+	if is_instance_valid(_player):
+		_player.connect("interact_target_changed", Callable(self, "_on_interact_target_changed"))
+		_player.connect("interact_requested", Callable(self, "_on_player_interact_requested"))
+	_build_interact_hint()
+	_build_interact_menu()
+	_attach_ling_perceivable()
 	_restore_chat_log()
 	_set_ai_waiting(false)
 	_set_command_buttons_enabled(false)
@@ -91,6 +112,7 @@ func _physics_process(_delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_update_autonomous_exploration(delta)
+	_update_ling_proximity()
 	if not _ai_waiting:
 		return
 	_thinking_elapsed += delta
@@ -783,3 +805,350 @@ func _show_status(message: String, color: Color) -> void:
 func _release_button_focus(button: Button) -> void:
 	if button.has_focus():
 		button.release_focus()
+
+
+# ===== ADR 探索阶段①:玩家交互(按 E)=====
+
+func _build_interact_hint() -> void:
+	if _interact_hint != null:
+		return
+	_interact_hint = Label.new()
+	_interact_hint.name = "InteractHint"
+	_interact_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_interact_hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	_interact_hint.offset_left = -240.0
+	_interact_hint.offset_right = 240.0
+	_interact_hint.offset_top = 48.0
+	_interact_hint.offset_bottom = 78.0
+	_interact_hint.add_theme_font_size_override("font_size", 14)
+	_interact_hint.modulate.a = 0.0
+	_interact_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hud := $HUD
+	if is_instance_valid(hud):
+		hud.add_child(_interact_hint)
+
+
+func _pick_interact_action(actions_variant: Array) -> String:
+	var preferred := ["observe", "water", "drink", "photograph", "sit", "eat", "rest", "refill", "place_item"]
+	var available := {}
+	for item in actions_variant:
+		available[str(item)] = true
+	for action in preferred:
+		if available.has(action):
+			return action
+	for action in available:
+		return str(action)
+	return ""
+
+
+func _action_label(action: String) -> String:
+	var labels := {
+		"observe": "观察", "water": "浇水", "drink": "喝一口", "photograph": "拍照",
+		"sit": "坐下", "eat": "吃点东西", "rest": "休息", "refill": "续满",
+		"place_item": "放个小东西",
+		"talk": "交谈", "pat_head": "摸摸头", "brew_tea": "一起泡茶",
+	}
+	return str(labels.get(action, action))
+
+
+func _on_interact_target_changed(target: Dictionary) -> void:
+	if _interact_hint == null:
+		return
+	var snapshot: Dictionary = target.get("snapshot", {})
+	_ray_target_active = not snapshot.is_empty()
+	if _interact_menu_open:
+		return
+	if snapshot.is_empty():
+		_set_interact_hint("", false)
+		return
+	var object_name := str(snapshot.get("name", "物件"))
+	var action := _pick_interact_action(snapshot.get("available_actions", []))
+	var verb_label := _action_label(action) if not action.is_empty() else "观察"
+	if snapshot.get("available_actions", []).size() > 1:
+		_set_interact_hint("按 E · %s（打开动作菜单）" % object_name, false)
+	else:
+		_set_interact_hint("按 E · %s（%s）" % [object_name, verb_label], false)
+
+
+func _on_player_interact_requested(target: Dictionary) -> void:
+	# SLG 交互层:按 E 打开动作菜单而不是直接执行第一个动词
+	_open_interact_menu(target)
+
+
+func _build_interact_menu() -> void:
+	_interact_menu = PanelContainer.new()
+	_interact_menu.name = "InteractMenu"
+	_interact_menu.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	_interact_menu.offset_left = -150.0
+	_interact_menu.offset_right = 150.0
+	_interact_menu.offset_top = 40.0
+	_interact_menu.offset_bottom = 40.0
+	_interact_menu.visible = false
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 10)
+	_interact_menu.add_child(margin)
+	_interact_menu_list = VBoxContainer.new()
+	_interact_menu_list.add_theme_constant_override("separation", 6)
+	margin.add_child(_interact_menu_list)
+	var hud := $HUD
+	if is_instance_valid(hud):
+		hud.add_child(_interact_menu)
+
+
+func _open_interact_menu(target: Dictionary) -> void:
+	var snapshot: Dictionary = target.get("snapshot", {})
+	var actions: Array = snapshot.get("available_actions", [])
+	if actions.is_empty() or _interact_menu == null:
+		return
+	_menu_target = target
+	_interact_menu_open = true
+	for child in _interact_menu_list.get_children():
+		child.queue_free()
+	var object_name := str(snapshot.get("name", "物件"))
+	var title := Label.new()
+	title.text = "· %s ·" % object_name
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 14)
+	_interact_menu_list.add_child(title)
+	var hotkey := 1
+	for action_variant in actions:
+		var action := str(action_variant)
+		var button := Button.new()
+		button.text = "%d. %s" % [hotkey, _action_label(action)]
+		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		button.pressed.connect(_on_interact_menu_action.bind(action))
+		_interact_menu_list.add_child(button)
+		hotkey += 1
+	var cancel := Button.new()
+	cancel.text = "取消（右键）"
+	cancel.flat = true
+	cancel.pressed.connect(_close_interact_menu)
+	_interact_menu_list.add_child(cancel)
+	_interact_menu.visible = true
+	_interact_menu.modulate.a = 0.0
+	var tween := create_tween()
+	tween.tween_property(_interact_menu, "modulate:a", 1.0, 0.14)
+	# 菜单打开期间:释放鼠标、停用移动,把选择权交给菜单
+	if is_instance_valid(_player):
+		_player.call("set_input_enabled", false)
+		_player.call("set_mouse_captured", false)
+	_set_interact_hint("", false)
+
+
+func _on_interact_menu_action(action: String) -> void:
+	var target := _menu_target
+	_close_interact_menu()
+	_execute_interact_action(action, target)
+
+
+func _close_interact_menu(reassume_controls := true) -> void:
+	if not _interact_menu_open:
+		return
+	_interact_menu_open = false
+	if _interact_menu != null:
+		_interact_menu.visible = false
+	_menu_target = {}
+	if is_instance_valid(_player):
+		_player.set_input_enabled(true)
+		if reassume_controls:
+			_player.call("set_mouse_captured", true)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# SLG 交互层:走近小玲时按 E 打开她的交互菜单;右键/ESC 关闭菜单
+	if _interact_menu_open:
+		if event is InputEventMouseButton:
+			var mouse_event := event as InputEventMouseButton
+			if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+				_close_interact_menu()
+				get_viewport().set_input_as_handled()
+		return
+	if _ling_nearby and not _ray_target_active and event is InputEventKey:
+		var key_event := event as InputEventKey
+		if key_event.pressed and not key_event.echo:
+			if key_event.physical_keycode == KEY_E or key_event.keycode == KEY_E:
+				_open_interact_menu(_ling_menu_target())
+				get_viewport().set_input_as_handled()
+
+
+func _ling_menu_target() -> Dictionary:
+	return {
+		"perceivable": _ling_perceivable,
+		"entity_id": "ling",
+		"snapshot": {
+			"name": "小玲",
+			"available_actions": ["talk", "pat_head", "brew_tea"],
+		},
+	}
+
+
+func _update_ling_proximity() -> void:
+	var near := (
+		is_instance_valid(_ling_agent)
+		and is_instance_valid(_player)
+		and _ling_agent.global_position.distance_to(_player.global_position) <= LING_INTERACT_RANGE
+	)
+	if near != _ling_nearby:
+		_ling_nearby = near
+		if _ling_nearby and not _ray_target_active and not _interact_menu_open:
+			_set_interact_hint("按 E · 小玲（交谈）", false)
+		elif not _ray_target_active and not _interact_menu_open:
+			_set_interact_hint("", false)
+
+
+func _execute_interact_action(action: String, target: Dictionary) -> void:
+	var perceivable_variant = target.get("perceivable")
+	var snapshot: Dictionary = target.get("snapshot", {})
+	var object_name := str(snapshot.get("name", "物件"))
+	# 角色本体交互:交谈直接切到聊天输入,不产生第三方描述
+	if action == "talk":
+		_append_chat_log_line("小玲", "转过身来，安静地看着你，等你开口。")
+		_chat_input.grab_focus()
+		return
+	if perceivable_variant == null or not is_instance_valid(perceivable_variant):
+		# 小玲的摸头/泡茶不需要物件本体
+		_record_role_interaction(action, object_name)
+		return
+	var perceivable: Node = perceivable_variant
+	# 最小动词效果:容器水位可变,其余动词以记录为主
+	if action == "water":
+		perceivable.set("fill_ratio", 1.0)
+	elif action == "drink":
+		perceivable.set("fill_ratio", maxf(0.0, float(perceivable.get("fill_ratio") or 0.0) - 0.35))
+	# ADR 探索阶段③前置:拍照动词 → 截帧 → DeepSeek 视觉描述 → 小玲"看见"的内容
+	var visual_note := ""
+	if action == "photograph":
+		_set_interact_hint("正在给%s拍照……" % object_name, false)
+		var snapshot_result: Dictionary = await _capture_object_snapshot(perceivable, object_name)
+		if bool(snapshot_result.get("ok", false)):
+			visual_note = str(snapshot_result.get("visual_summary", "")).strip_edges()
+	var templates := {
+		"observe": "主人在客餐厅仔细观察了{obj}",
+		"water": "主人给{obj}浇了水",
+		"drink": "主人从{obj}里喝了一口",
+		"photograph": "主人给{obj}拍了一张照片",
+		"sit": "主人在{obj}上坐了一会儿",
+		"eat": "主人在{obj}前吃了点东西",
+		"rest": "主人在{obj}旁休息了片刻",
+		"refill": "主人把{obj}重新续满",
+		"place_item": "主人在{obj}上放了一样小东西",
+	}
+	var description := str(templates.get(action, "主人在客餐厅与{obj}互动")).format({"obj": object_name})
+	var detail := str(snapshot.get("description", "")).strip_edges()
+	if not detail.is_empty():
+		description += "（%s）" % detail.left(80)
+	if not visual_note.is_empty():
+		description += " 小玲看到：%s" % visual_note.left(220)
+		_append_chat_log_line("小玲", "我看了看拍下来的%s——%s" % [object_name, visual_note.left(160)])
+	var life_sim := get_node_or_null("/root/LifeSim")
+	var queued := false
+	if is_instance_valid(life_sim) and life_sim.has_method("queue_player_action_event"):
+		queued = bool(life_sim.call("queue_player_action_event", action, description, "ling"))
+	if _interact_hint == null:
+		return
+	if queued:
+		_set_interact_hint("✓ %s（已记进心织）" % _action_label(action), true)
+		get_tree().create_timer(1.4).timeout.connect(func():
+			if is_instance_valid(_interact_hint) and is_instance_valid(_player):
+				_on_interact_target_changed(_player.call("get_interact_target"))
+		)
+	else:
+		_set_interact_hint("这次互动没能记录下来", true)
+		get_tree().create_timer(1.4).timeout.connect(func():
+			if is_instance_valid(_interact_hint):
+				_set_interact_hint("", false)
+		)
+
+
+func _record_role_interaction(action: String, object_name: String) -> void:
+	var descriptions := {
+		"pat_head": "主人揉了揉小玲的头发，她的尾巴愉快地晃了两下",
+		"brew_tea": "主人和小玲一起泡了一壶茶，茶香漫过餐桌",
+	}
+	var description := str(descriptions.get(action, "主人和%s互动" % object_name))
+	_append_chat_log_line("小玲", {"pat_head": "眯起眼睛，尾巴晃了两下。", "brew_tea": "起身去烧水：'那就泡一壶吧。'"}.get(action, "轻轻点了点头。"))
+	var life_sim := get_node_or_null("/root/LifeSim")
+	if is_instance_valid(life_sim) and life_sim.has_method("queue_player_action_event"):
+		life_sim.call("queue_player_action_event", action, description, "ling")
+
+
+## 泛化的物件拍照:SubViewport 对准任意可感知物件 → 相册落盘 → 视觉模型描述。
+## 复用绿植拍照的既有管线(Photos + Vision),不再只限绿植。
+func _capture_object_snapshot(perceivable: Node, object_name: String) -> Dictionary:
+	var result := {"ok": false, "absolute_path": "", "visual_summary": ""}
+	if perceivable == null or not is_instance_valid(perceivable) or not perceivable is Node3D:
+		return result
+	var subject_position := (perceivable as Node3D).global_position + Vector3(0.0, 0.55, 0.0)
+	var sub_viewport := SubViewport.new()
+	sub_viewport.name = "ObjectPhotoViewport"
+	sub_viewport.size = Vector2i(640, 400)
+	sub_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	sub_viewport.world_3d = get_world_3d()
+	add_child(sub_viewport)
+	var camera := Camera3D.new()
+	camera.fov = 50.0
+	camera.near = 0.05
+	camera.far = 30.0
+	sub_viewport.add_child(camera)
+	# 相机放在玩家与物件之间的斜上方,看向物件中心
+	var toward_player := _player.global_position - subject_position
+	var flat := Vector3(toward_player.x, 0.0, toward_player.z)
+	if flat.length() < 0.8:
+		flat = Vector3(0.0, 0.0, 1.0)
+	flat = flat.normalized()
+	var camera_position := subject_position + flat * 1.7 + Vector3(0.0, 0.72, 0.0)
+	camera.look_at_from_position(camera_position, subject_position, Vector3.UP)
+	camera.current = true
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var photos := get_node_or_null("/root/Photos")
+	if is_instance_valid(photos) and photos.has_method("capture_viewport"):
+		var photo_variant = photos.call("capture_viewport", sub_viewport, "ling", "explore3d")
+		if photo_variant is Dictionary:
+			result.merge(photo_variant, true)
+	sub_viewport.queue_free()
+	if not bool(result.get("ok", false)):
+		return result
+	var vision := get_node_or_null("/root/Vision")
+	if is_instance_valid(vision) and vision.has_method("discover_model"):
+		var discovery_variant = await vision.call("discover_model")
+		if not is_inside_tree():
+			return result
+		if discovery_variant is Dictionary and bool((discovery_variant as Dictionary).get("ok", false)):
+			var vision_variant = await vision.call(
+				"describe_image",
+				str(result.get("absolute_path", "")),
+				{"subject": "explore3d", "object_name": object_name}
+			)
+			if not is_inside_tree():
+				return result
+			if vision_variant is Dictionary and bool((vision_variant as Dictionary).get("ok", false)):
+				result["visual_summary"] = str((vision_variant as Dictionary).get("text", "")).strip_edges().left(800)
+	return result
+
+
+func _set_interact_hint(text: String, fade_after: bool) -> void:
+	if _interact_hint == null:
+		return
+	_interact_hint.text = text
+	var target_alpha := 1.0 if not text.is_empty() else 0.0
+	var tween := create_tween()
+	tween.tween_property(_interact_hint, "modulate:a", target_alpha, 0.16)
+	if fade_after and not text.is_empty():
+		tween.tween_interval(1.2)
+		tween.tween_property(_interact_hint, "modulate:a", 0.0, 0.3)
+
+
+## SLG 交互层:给小玲 3D 本体挂感知组件 —— 准星射线与走近交互都能找到她
+func _attach_ling_perceivable() -> void:
+	if _ling_perceivable != null or not is_instance_valid(_ling_agent):
+		return
+	var perceivable := PERCEIVABLE_SCRIPT.new()
+	perceivable.name = "Perceivable3D"
+	perceivable.entity_id = "ling"
+	perceivable.display_name = "小玲"
+	perceivable.description = "小玲就站在这里，可以和她说话，或者摸摸她的头。"
+	perceivable.available_actions = ["talk", "pat_head", "brew_tea"] as Array[String]
+	_ling_agent.add_child(perceivable)
+	_ling_perceivable = perceivable

@@ -24,6 +24,18 @@ var _zoom := 1.0
 var _pan := Vector2.ZERO
 var _layout_steps := 0
 var _min_strength := 0.55
+# ADR-010:世界日时间游标(客户端调光)。-1 = 实时态(全部点亮);
+# 游标之后诞生的节点/边降为低亮度"幽灵",布局不受影响 —— 拖动全程零重排。
+# 幽灵程度带时间插值(指数趋近),拨动滑杆时亮度平滑过渡。
+var _time_cursor := -1.0
+var _ghost_amounts: Dictionary = {}
+const GHOST_NODE_ALPHA := 0.14
+const GHOST_EDGE_ALPHA := 0.05
+const GHOST_ANIM_SPEED := 9.0
+## 软边渐变带(世界日):游标附近这个宽度内的记忆亮度连续过渡,
+## 消除"成批翻面"的顿挫感。由面板按时间线总量校准。
+const GHOST_FADE_DAYS_DEFAULT := 4.0
+var _time_fade_days := GHOST_FADE_DAYS_DEFAULT
 var _palette := {
 	"background": Color("#100E0D"),
 	"grid": Color(1, 1, 1, 0.045),
@@ -72,6 +84,7 @@ func set_graph(graph: Dictionary) -> void:
 				_edges.append(edge)
 	_initialize_positions()
 	_layout_steps = 180 if _nodes.size() <= 120 else 120
+	_seed_ghost_amounts()
 	reset_view()
 	queue_redraw()
 
@@ -96,10 +109,91 @@ func set_min_strength(value: float) -> void:
 	queue_redraw()
 
 
+func set_time_cursor(world_day: float) -> void:
+	"""ADR-010:客户端时间调光。只改亮度目标,不重置布局;
+	实际亮度经 _process 逐帧趋近 —— 拖动全程节点不动、过渡平滑。"""
+	_time_cursor = world_day
+	queue_redraw()
+
+
+func set_time_fade_days(days: float) -> void:
+	_time_fade_days = clampf(days, 0.5, 120.0)
+	queue_redraw()
+
+
+func _is_ghost_node(node: Dictionary) -> bool:
+	return _ghost_target_for_node(node) >= 0.5
+
+
+func _is_ghost_edge(edge: Dictionary) -> bool:
+	return _ghost_target_for_edge(edge) >= 0.5
+
+
+func _ghost_target_for_node(node: Dictionary) -> float:
+	if _time_cursor < 0.0:
+		return 0.0
+	# 软边:诞生时刻每偏离游标 1 个 fade 宽度,幽灵程度变化 1/2;
+	# 游标正经过的记忆半亮 —— 拖动 1 像素,亮度就连续变化
+	var birth_delta := float(node.get("world_created_at", 0.0)) - _time_cursor
+	return clampf(birth_delta / _time_fade_days + 0.5, 0.0, 1.0)
+
+
+func _ghost_target_for_edge(edge: Dictionary) -> float:
+	if _time_cursor < 0.0:
+		return 0.0
+	var target := 0.0
+	for node_id in [str(edge.get("source", "")), str(edge.get("target", ""))]:
+		var node_variant: Dictionary = _node_by_id.get(node_id, {})
+		if not node_variant.is_empty():
+			target = maxf(target, _ghost_target_for_node(node_variant))
+	var birth_delta := float(edge.get("world_created_at", 0.0)) - _time_cursor
+	target = maxf(target, clampf(birth_delta / _time_fade_days + 0.5, 0.0, 1.0))
+	return target
+
+
+func _seed_ghost_amounts() -> void:
+	"""新图加载时把动画量直接置到目标值(避免每次搜索都全屏闪一遍)。"""
+	_ghost_amounts.clear()
+	for node in _nodes:
+		_ghost_amounts["n:%s" % str(node.id)] = _ghost_target_for_node(node)
+	for edge in _edges:
+		_ghost_amounts["e:%s" % str(edge.get("link_id", ""))] = _ghost_target_for_edge(edge)
+
+
+func _advance_ghost_animation(delta: float) -> bool:
+	var k := clampf(delta * GHOST_ANIM_SPEED, 0.0, 1.0)
+	var animating := false
+	for node in _nodes:
+		var key := "n:%s" % str(node.id)
+		var target := _ghost_target_for_node(node)
+		var current := float(_ghost_amounts.get(key, target))
+		var updated := lerpf(current, target, k)
+		_ghost_amounts[key] = updated
+		if absf(updated - target) > 0.004:
+			animating = true
+	for edge in _edges:
+		var key := "e:%s" % str(edge.get("link_id", ""))
+		var target := _ghost_target_for_edge(edge)
+		var current := float(_ghost_amounts.get(key, target))
+		var updated := lerpf(current, target, k)
+		_ghost_amounts[key] = updated
+		if absf(updated - target) > 0.004:
+			animating = true
+	return animating
+
+
+func _node_ghost_amount(node: Dictionary) -> float:
+	return float(_ghost_amounts.get("n:%s" % str(node.id), _ghost_target_for_node(node)))
+
+
+func _edge_ghost_amount(edge: Dictionary) -> float:
+	return float(_ghost_amounts.get("e:%s" % str(edge.get("link_id", "")), _ghost_target_for_edge(edge)))
+
+
 func get_visible_edge_count() -> int:
 	var count := 0
 	for edge in _edges:
-		if float(edge.get("strength", 0.0)) >= _min_strength:
+		if float(edge.get("strength", 0.0)) >= _min_strength and not _is_ghost_edge(edge):
 			count += 1
 	return count
 
@@ -141,9 +235,16 @@ func _initialize_positions() -> void:
 		_velocities[node_id] = Vector2.ZERO
 
 
-func _process(_delta: float) -> void:
-	if _layout_steps <= 0 or _nodes.size() <= 1:
-		return
+func _process(delta: float) -> void:
+	var animating := _advance_ghost_animation(delta)
+	if _layout_steps > 0 and _nodes.size() > 1:
+		_step_force_layout(delta)
+		animating = true
+	if animating:
+		queue_redraw()
+
+
+func _step_force_layout(_delta: float) -> void:
 	var forces: Dictionary = {}
 	for node in _nodes:
 		forces[str(node.id)] = Vector2.ZERO
@@ -195,7 +296,6 @@ func _process(_delta: float) -> void:
 		next_position.y = clampf(next_position.y, -world_half.y, world_half.y)
 		_positions[node_id] = next_position
 	_layout_steps -= 1
-	queue_redraw()
 
 
 func _draw() -> void:
@@ -209,15 +309,23 @@ func _draw() -> void:
 		if not _positions.has(source) or not _positions.has(target):
 			continue
 		var strength := clampf(float(edge.get("strength", 0.3)), 0.0, 1.0)
-		var highlighted := source == _selected_id or target == _selected_id
-		var edge_color: Color = Color(_palette.edge, 0.04 + strength * (0.55 if highlighted else 0.12))
+		var ghost_amount := clampf(_edge_ghost_amount(edge), 0.0, 1.0)
+		var lit_amount := 1.0 - ghost_amount
+		var highlighted := (source == _selected_id or target == _selected_id) and lit_amount > 0.5
+		var edge_color: Color
+		var edge_width: float
+		# ADR-010:亮度经动画量平滑过渡 —— 游标拨过时边"渐亮"
 		if highlighted:
-			edge_color = Color("#F2D58A", 0.52 + strength * 0.38)
+			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + strength * 0.38, lit_amount))
+			edge_width = lerpf(0.4, 1.0 + strength * 2.2, lit_amount)
+		else:
+			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.04 + strength * 0.12, lit_amount))
+			edge_width = lerpf(0.4, 0.45 + strength * 0.72, lit_amount)
 		draw_line(
 			_world_to_screen(_positions[source]),
 			_world_to_screen(_positions[target]),
 			edge_color,
-			(1.0 + strength * 2.2) if highlighted else (0.45 + strength * 0.72),
+			edge_width,
 			true
 		)
 	var font := get_theme_default_font()
@@ -229,20 +337,32 @@ func _draw() -> void:
 			continue
 		var radius := _node_radius(node) * sqrt(_zoom)
 		var color := _node_color(node)
-		var selected := node_id == _selected_id
-		var hovered := node_id == _hovered_id
+		var ghost_amount := clampf(_node_ghost_amount(node), 0.0, 1.0)
+		var lit_amount := 1.0 - ghost_amount
+		var selected := node_id == _selected_id and lit_amount > 0.5
+		var hovered := node_id == _hovered_id and lit_amount > 0.5
 		if selected:
-			draw_circle(screen_position, radius + 7.0, Color(color, 0.16))
-			draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color("#FFF2C5"), 2.2, true)
+			draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount))
+			draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 2.2, true)
 		elif hovered:
-			draw_circle(screen_position, radius + 5.0, Color(color, 0.18))
-		draw_circle(screen_position, radius, Color(color, 0.88 if bool(node.get("enabled", true)) else 0.38))
-		draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34))
-		if bool(node.get("always_active", false)):
-			draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color("#FFF0A8", 0.88), 1.5, true)
-		var should_label := selected or hovered or (
+			draw_circle(screen_position, radius + 5.0, Color(color, 0.18 * lit_amount))
+		# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
+		var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
+		draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount)))
+		if lit_amount > 0.02:
+			draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
+		if bool(node.get("always_active", false)) and lit_amount > 0.02:
+			draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
+		# ADR-013 D4:夜织/季织节点上方的细线弦月 glyph(自绘,非 emoji)
+		if _is_weave_node(node) and lit_amount > 0.02:
+			var moon_center := screen_position + Vector2(0.0, -radius - 8.0)
+			var moon_radius := maxf(3.5, radius * 0.38)
+			var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount)
+			draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
+			draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount), 1.1, true)
+		var should_label := (selected or hovered or (
 			_zoom >= 0.72 and float(node.get("importance", 0.5)) >= 0.66
-		)
+		)) and lit_amount > 0.5
 		if should_label:
 			var label := _short_title(str(node.get("display_title", node.get("title", "未命名记忆"))), 12)
 			var label_width := clampf(float(label.length()) * 13.0 + 18.0, 86.0, 190.0)
@@ -355,6 +475,12 @@ func _node_radius(node: Dictionary) -> float:
 
 func _node_color(node: Dictionary) -> Color:
 	return _scope_colors.get(str(node.get("scope_role_id", "*")), Color("#B8AEA4"))
+
+
+func _is_weave_node(node: Dictionary) -> bool:
+	# ADR-013:夜织(consolidation_*)与季织(season_weave)节点画弦月 glyph
+	var source := str(node.get("source", ""))
+	return source.begins_with("consolidation_") or source == "season_weave"
 
 
 func _scope_anchor(scope: String) -> Vector2:

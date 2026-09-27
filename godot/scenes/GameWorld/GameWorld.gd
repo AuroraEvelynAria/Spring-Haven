@@ -1126,7 +1126,9 @@ func _stat_row(key: String) -> HBoxContainer:
 	fx_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fx_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	fx_layer.clip_contents = false
-	fx_layer.z_index = 20
+	# 不要给 fx_layer/粒子设 z_index:任何正值都会浮到记忆网络等遮罩面板之上
+	# (面板靠 move_to_front 的树序压住普通 UI)。装饰粒子留在本控件树序内。
+	fx_layer.z_index = 0
 	bar.add_child(fx_layer)
 	_stat_widgets[key] = {
 		"bar": bar,
@@ -1209,7 +1211,6 @@ func _spawn_stat_particles(key: String, hearts: bool, amount: int) -> void:
 	var stat_color := _stat_color(key, float(_current_stats()[key]))
 	var data := ThemeMgr.get_current_theme_data()
 	var symbols := ["♥", "♡"] if hearts else ["✦", "✧", "•"]
-	var origin := fx_layer.get_global_rect().position - get_global_rect().position
 	for index in amount:
 		var particle := Label.new()
 		particle.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1220,13 +1221,14 @@ func _spawn_stat_particles(key: String, hearts: bool, amount: int) -> void:
 		particle.add_theme_font_size_override("font_size", _rng.randi_range(8, 13))
 		var particle_color := Color("#FF5C91").lerp(stat_color, _rng.randf_range(0.15, 0.55)) if hearts else stat_color.lerp(Color(data.accent), _rng.randf_range(0.15, 0.65))
 		particle.add_theme_color_override("font_color", particle_color)
-		particle.position = origin + Vector2(_rng.randf_range(0.0, width - 12.0), _rng.randf_range(-3.0, 3.0))
+		# 挂在 fx_layer 内、局部坐标,不加 z_index —— 粒子只属于本控件,
+		# 不会越过记忆网络等遮罩面板(修复:原先 z_index=100 挂在世界根上)
+		particle.position = Vector2(_rng.randf_range(0.0, width - 12.0), _rng.randf_range(-3.0, 3.0))
 		particle.pivot_offset = Vector2(8, 8)
 		particle.scale = Vector2(0.45, 0.45)
 		particle.rotation = _rng.randf_range(-0.3, 0.3)
 		particle.modulate.a = 0.0
-		particle.z_index = 100
-		add_child(particle)
+		fx_layer.add_child(particle)
 		var lifetime := _rng.randf_range(0.68, 1.0) * float(
 			Settings.get_runtime_tuning_value("particle_lifetime_scale", 1.0)
 		)

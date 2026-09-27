@@ -941,6 +941,31 @@ func _finish_daily_plan_action(
 	_apply_chore_cleanliness(str(intent.get("action", "")))
 	_advance_goal(role, str(intent.get("action", "")), now)
 
+func queue_player_action_event(action: String, description: String, role_id: String = "ling") -> bool:
+	"""3D 探索模式的玩家动作上报入口(探索阶段①)。
+
+	复用既有 /life/sync recent_events 通道进入 Heartloom(record_life_events →
+	organizer digest → 记忆/主张)。幂等粒度 = 角色+动词+自然分钟:同一分钟内
+	重复互动折叠为一条,连点不会刷屏;下一分钟可再次上报。
+	"""
+	var verb := action.strip_edges().left(64)
+	var detail := description.strip_edges().left(500)
+	if verb.is_empty() or detail.is_empty():
+		return false
+	var now := int(Time.get_unix_time_from_system())
+	var bucket := int(floor(float(now) / 60.0))
+	var fingerprint := str(absi(hash("%s|%s|%d" % [role_id, verb, bucket])))
+	_queue_reported_life_event({
+		"event_id": "explore3d-%s-%s" % [verb.replace(" ", "_").left(24), fingerprint],
+		"role_id": role_id,
+		"target_role": "",
+		"action": verb,
+		"description": detail,
+		"occurred_at_unix": now,
+		"stat_changes": {},
+	})
+	return true
+
 func _queue_reported_life_event(event: Dictionary) -> void:
 	var event_id := str(event.get("event_id", "")).strip_edges()
 	if event_id.is_empty():

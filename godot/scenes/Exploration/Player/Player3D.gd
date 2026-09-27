@@ -1,6 +1,8 @@
 extends CharacterBody3D
 
 signal mouse_capture_changed(captured: bool)
+signal interact_target_changed(target: Dictionary)
+signal interact_requested(target: Dictionary)
 
 @export_category("Movement")
 @export var input_enabled: bool = true
@@ -10,6 +12,10 @@ signal mouse_capture_changed(captured: bool)
 @export_range(0.1, 80.0, 0.1) var air_acceleration: float = 7.0
 @export_range(0.1, 20.0, 0.1) var jump_velocity: float = 5.6
 @export_range(0.1, 30.0, 0.1) var turn_speed: float = 12.0
+
+@export_category("Interaction")
+@export_range(0.5, 8.0, 0.1) var interact_range: float = 2.8
+@export_flags_3d_physics var interact_collision_mask: int = 1
 
 @export_category("Camera")
 @export var capture_mouse_on_ready: bool = true
@@ -35,6 +41,7 @@ var _gravity: float = 9.8
 var _camera_pitch: float = 0.0
 var _jump_requested: bool = false
 var _stride_phase: float = 0.0
+var _interact_target: Dictionary = {}
 
 
 func _ready() -> void:
@@ -57,12 +64,12 @@ func _input(event: InputEvent) -> void:
 			if _event_matches_key(key_event, KEY_ESCAPE):
 				set_mouse_captured(Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 				return
-			if (
-				input_enabled
-				and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-				and _event_matches_key(key_event, KEY_SPACE)
-			):
-				_jump_requested = true
+			if input_enabled and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+				if _event_matches_key(key_event, KEY_SPACE):
+					_jump_requested = true
+					return
+				if _event_matches_key(key_event, KEY_E) and not _interact_target.is_empty():
+					interact_requested.emit(_interact_target.duplicate(true))
 
 	if not input_enabled:
 		return
@@ -110,6 +117,65 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_animate_block_character(delta)
+	_update_interact_target()
+
+
+func get_interact_target() -> Dictionary:
+	return _interact_target.duplicate(true)
+
+
+func _update_interact_target() -> void:
+	var gameplay_active := input_enabled and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var target: Dictionary = {}
+	if gameplay_active:
+		target = _scan_interact_target()
+	var previous_id := str(_interact_target.get("entity_id", ""))
+	var next_id := str(target.get("entity_id", ""))
+	_interact_target = target
+	if next_id != previous_id:
+		interact_target_changed.emit(_interact_target.duplicate(true))
+
+
+func _scan_interact_target() -> Dictionary:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null or get_world_3d() == null:
+		return {}
+	# 从身体胸口沿视线方向射出(第三人称相机在身后,从相机出射线会误中玩家与背后物件)
+	var origin := global_position + Vector3.UP * 1.3
+	var direction := -camera.global_transform.basis.z.normalized()
+	var query := PhysicsRayQueryParameters3D.create(
+		origin,
+		origin + direction * interact_range,
+		interact_collision_mask,
+		[get_rid()]
+	)
+	query.collide_with_areas = true
+	query.collide_with_bodies = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return {}
+	var perceivable := _find_perceivable(hit.get("collider") as Node)
+	if perceivable == null:
+		return {}
+	var snapshot: Dictionary = perceivable.call("get_perception_snapshot", self)
+	if snapshot.is_empty():
+		return {}
+	return {"perceivable": perceivable, "snapshot": snapshot, "entity_id": str(snapshot.get("entity_id", ""))}
+
+
+func _find_perceivable(node: Node) -> Node:
+	# 与 PerceptionRay3D._find_perceivable 同约定:向上/向下 6 层找感知组件
+	var current := node
+	for _depth in 6:
+		if not is_instance_valid(current):
+			return null
+		if current.has_method("get_perception_snapshot"):
+			return current
+		for child in current.get_children():
+			if child.has_method("get_perception_snapshot"):
+				return child
+		current = current.get_parent()
+	return null
 
 
 func set_input_enabled(enabled: bool) -> void:

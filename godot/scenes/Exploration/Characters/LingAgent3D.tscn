@@ -24,19 +24,19 @@ roughness = 0.8
 
 [sub_resource type="BoxMesh" id="BoxMesh_torso"]
 material = SubResource("Material_orange")
-size = Vector3(0.72, 0.78, 0.4)
+size = Vector3(0.4, 0.56, 0.22)
 
 [sub_resource type="BoxMesh" id="BoxMesh_head"]
 material = SubResource("Material_pink")
-size = Vector3(0.58, 0.58, 0.58)
+size = Vector3(0.3, 0.3, 0.3)
 
 [sub_resource type="BoxMesh" id="BoxMesh_arm"]
 material = SubResource("Material_pink")
-size = Vector3(0.2, 0.72, 0.24)
+size = Vector3(0.1, 0.48, 0.12)
 
 [sub_resource type="BoxMesh" id="BoxMesh_leg"]
 material = SubResource("Material_cream")
-size = Vector3(0.26, 0.72, 0.3)
+size = Vector3(0.15, 0.8, 0.17)
 
 [sub_resource type="StandardMaterial3D" id="Material_face"]
 albedo_color = Color(0.278431, 0.105882, 0.12549, 1)
@@ -44,7 +44,7 @@ roughness = 0.65
 
 [sub_resource type="BoxMesh" id="BoxMesh_eye"]
 material = SubResource("Material_face")
-size = Vector3(0.065, 0.075, 0.025)
+size = Vector3(0.05, 0.06, 0.02)
 
 [node name="LingAgent3D" type="CharacterBody3D"]
 collision_layer = 2
@@ -82,46 +82,45 @@ exclude_parent = true
 enabled = true
 
 [node name="VisualPivot" type="Node3D" parent="."]
-scale = Vector3(0.75, 0.75, 0.75)
 
 [node name="PerceptionRay3D" type="Node3D" parent="VisualPivot"]
-position = Vector3(0, 2.05, -0.38)
+position = Vector3(0, 1.5, -0.25)
 script = ExtResource("2_perception")
 
 [node name="Torso" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(0, 1.16, 0)
+position = Vector3(0, 1.12, 0)
 mesh = SubResource("BoxMesh_torso")
 
 [node name="Head" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(0, 1.86, 0)
+position = Vector3(0, 1.55, 0)
 mesh = SubResource("BoxMesh_head")
 
 [node name="LeftEye" type="MeshInstance3D" parent="VisualPivot/Head"]
-position = Vector3(-0.13, 0.04, -0.297)
+position = Vector3(-0.075, 0.03, -0.155)
 mesh = SubResource("BoxMesh_eye")
 
 [node name="RightEye" type="MeshInstance3D" parent="VisualPivot/Head"]
-position = Vector3(0.13, 0.04, -0.297)
+position = Vector3(0.075, 0.03, -0.155)
 mesh = SubResource("BoxMesh_eye")
 
 [node name="LeftArm" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(-0.48, 1.17, 0)
+position = Vector3(-0.25, 1.1, 0)
 mesh = SubResource("BoxMesh_arm")
 
 [node name="RightArm" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(0.48, 1.17, 0)
+position = Vector3(0.25, 1.1, 0)
 mesh = SubResource("BoxMesh_arm")
 
 [node name="LeftLeg" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(-0.18, 0.37, 0)
+position = Vector3(-0.11, 0.42, 0)
 mesh = SubResource("BoxMesh_leg")
 
 [node name="RightLeg" type="MeshInstance3D" parent="VisualPivot"]
-position = Vector3(0.18, 0.37, 0)
+position = Vector3(0.11, 0.42, 0)
 mesh = SubResource("BoxMesh_leg")
 
 [node name="NameLabel" type="Label3D" parent="."]
-position = Vector3(0, 1.9, 0)
+position = Vector3(0, 1.85, 0)
 text = "小玲"
 font_size = 28
 outline_size = 6
