@@ -9,6 +9,9 @@ from typing import Any
 
 ROLE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
+# ADR-012:PAD 稳态锚点缺省值(平静、微低唤醒、略安定)
+DEFAULT_MOOD_HOME: tuple[float, float, float] = (0.0, -0.1, 0.05)
+
 
 class RoleConfigurationError(ValueError):
     """Raised when a role registry cannot safely be loaded."""
@@ -23,6 +26,7 @@ class RoleDefinition:
     persona_prompt: str
     memory_prompt: str = ""
     age: int | None = None
+    mood_home: tuple[float, float, float] = DEFAULT_MOOD_HOME
 
 
 class RoleRegistry:
@@ -127,6 +131,23 @@ def _parse_role(raw: Any, root: Path) -> RoleDefinition:
             raise RoleConfigurationError(f"age is out of range for {role_id}")
         age = raw_age
 
+    # ADR-012:PAD 稳态锚点(情绪的家),roles.json 可配 mood_home
+    mood_home = DEFAULT_MOOD_HOME
+    raw_mood_home = raw.get("mood_home")
+    if raw_mood_home is not None:
+        if not isinstance(raw_mood_home, list) or len(raw_mood_home) != 3:
+            raise RoleConfigurationError(
+                f"mood_home must be a [pleasure, arousal, dominance] array for {role_id}"
+            )
+        mood_components: list[float] = []
+        for component in raw_mood_home:
+            if isinstance(component, bool) or not isinstance(component, (int, float)):
+                raise RoleConfigurationError(
+                    f"mood_home components must be numbers for {role_id}"
+                )
+            mood_components.append(max(-1.0, min(1.0, float(component))))
+        mood_home = (mood_components[0], mood_components[1], mood_components[2])
+
     return RoleDefinition(
         role_id=role_id,
         display_name=display_name,
@@ -135,4 +156,5 @@ def _parse_role(raw: Any, root: Path) -> RoleDefinition:
         persona_prompt=inline_prompt,
         memory_prompt=memory_prompt,
         age=age,
+        mood_home=mood_home,
     )

@@ -11,8 +11,22 @@ RUNTIME_OPEN = '<spring_haven_runtime_context version="1">'
 RUNTIME_CLOSE = "</spring_haven_runtime_context>"
 HEARTLOOM_OPEN = '<heartloom_memory_context version="1">'
 HEARTLOOM_CLOSE = "</heartloom_memory_context>"
+HEARTLOOM_FACTS_OPEN = '<heartloom_current_facts version="1">'
+HEARTLOOM_FACTS_CLOSE = "</heartloom_current_facts>"
 RAG_OPEN = '<spring_haven_knowledge_context version="1">'
 RAG_CLOSE = "</spring_haven_knowledge_context>"
+
+# ADR-009 D4:current_facts 块的转义清单与其它上下文块一致
+_CONTEXT_MARKERS = (
+    RUNTIME_OPEN,
+    RUNTIME_CLOSE,
+    HEARTLOOM_OPEN,
+    HEARTLOOM_CLOSE,
+    HEARTLOOM_FACTS_OPEN,
+    HEARTLOOM_FACTS_CLOSE,
+    RAG_OPEN,
+    RAG_CLOSE,
+)
 
 # #29 硬性约束:生理数值只以定性分桶进入 prompt(很高/偏高/普通/偏低/很低)。
 # 有状态路径(state_summary)走 _BucketHysteresis 做边界滞回;无状态路径
@@ -23,6 +37,55 @@ _STATE_BUCKETS = (
     (35.0, "普通"),
     (15.0, "偏低"),
 )
+
+# ADR-012:PAD → 定性词带(数字永不出现在 prompt,与 #29 同纪律)。
+_MOOD_PLEASURE_BANDS = (
+    (0.5, "明亮"),
+    (0.15, "平静偏亮"),
+    (-0.15, "平静"),
+    (-0.5, "低落"),
+)
+_MOOD_AROUSAL_BANDS = (
+    (0.5, "躁动"),
+    (0.15, "有精神"),
+    (-0.15, "安静"),
+    (-0.5, "恹恹的"),
+)
+_MOOD_DOMINANCE_BANDS = (
+    (0.5, "从容"),
+    (0.15, "稳定"),
+    (-0.15, "平和"),
+    (-0.5, "局促"),
+)
+_MOOD_FLAT_THRESHOLD = 0.15  # 三维绝对值全低于此 → 中性,不输出
+
+
+def mood_words(mood: dict[str, Any] | None) -> str:
+    """PAD 心境 → 一句定性词(ADR-012 D3);平坦/缺失/非法一律空串。"""
+    if not isinstance(mood, dict):
+        return ""
+    try:
+        pleasure = float(mood.get("pleasure", 0.0))
+        arousal = float(mood.get("arousal", 0.0))
+        dominance = float(mood.get("dominance", 0.0))
+    except (TypeError, ValueError):
+        return ""
+    if not all(math.isfinite(value) for value in (pleasure, arousal, dominance)):
+        return ""
+    if max(abs(pleasure), abs(arousal), abs(dominance)) < _MOOD_FLAT_THRESHOLD:
+        return ""
+
+    def _band(value: float, bands: tuple[tuple[float, str], ...], tail: str) -> str:
+        for threshold, label in bands:
+            if value >= threshold:
+                return label
+        return tail
+
+    return (
+        f"心境{_band(pleasure, _MOOD_PLEASURE_BANDS, '阴郁')}、"
+        f"{_band(arousal, _MOOD_AROUSAL_BANDS, '疲惫')}、"
+        f"掌控感{_band(dominance, _MOOD_DOMINANCE_BANDS, '惶惑')}"
+    )
 
 
 def _qualitative_bucket(value: float) -> str:
@@ -155,6 +218,8 @@ class PromptComposer:
         state: dict[str, Any],
         memories: list[dict[str, Any]] | None = None,
         rag_chunks: list[dict[str, Any]] | None = None,
+        current_facts: list[dict[str, Any]] | None = None,
+        mood: dict[str, float] | None = None,
     ) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
         transcript = self._quoted_history(history)
@@ -183,6 +248,22 @@ class PromptComposer:
                     ),
                 }
             )
+        facts_context = self._facts_context(current_facts or [])
+        if facts_context:
+            result.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "[以下是相关实体当前有效的事实（经过信念修订，旧值已被顶替）。"
+                        "只读参考，不要逐条复述；与上面的回忆冲突时，以这里的当前事实为准。]\n"
+                        + HEARTLOOM_FACTS_OPEN
+                        + "\n"
+                        + json.dumps(facts_context, ensure_ascii=False, separators=(",", ":"))
+                        + "\n"
+                        + HEARTLOOM_FACTS_CLOSE
+                    ),
+                }
+            )
         knowledge_context = self._knowledge_context(rag_chunks or [])
         if knowledge_context:
             result.append(
@@ -202,16 +283,9 @@ class PromptComposer:
                     ),
                 }
             )
-        runtime = self._runtime_state(role, state)
+        runtime = self._runtime_state(role, state, mood=mood)
         escaped = text
-        for marker in [
-            RUNTIME_OPEN,
-            RUNTIME_CLOSE,
-            HEARTLOOM_OPEN,
-            HEARTLOOM_CLOSE,
-            RAG_OPEN,
-            RAG_CLOSE,
-        ]:
+        for marker in _CONTEXT_MARKERS:
             escaped = escaped.replace(marker, "[escaped internal marker]")
         result.append(
             {
@@ -237,14 +311,7 @@ class PromptComposer:
             if not isinstance(raw, dict):
                 continue
             content = str(raw.get("content", "")).replace("\x00", " ").strip()[:4_000]
-            for marker in [
-                RUNTIME_OPEN,
-                RUNTIME_CLOSE,
-                HEARTLOOM_OPEN,
-                HEARTLOOM_CLOSE,
-                RAG_OPEN,
-                RAG_CLOSE,
-            ]:
+            for marker in _CONTEXT_MARKERS:
                 content = content.replace(marker, "[escaped internal marker]")
             if not content:
                 continue
@@ -270,14 +337,7 @@ class PromptComposer:
             if not isinstance(raw, dict):
                 continue
             content = str(raw.get("content", "")).replace("\x00", " ").strip()[:4_000]
-            for marker in [
-                RUNTIME_OPEN,
-                RUNTIME_CLOSE,
-                HEARTLOOM_OPEN,
-                HEARTLOOM_CLOSE,
-                RAG_OPEN,
-                RAG_CLOSE,
-            ]:
+            for marker in _CONTEXT_MARKERS:
                 content = content.replace(marker, "[escaped internal marker]")
             if not content:
                 continue
@@ -291,6 +351,31 @@ class PromptComposer:
             if used_characters + serialized_size > 12_000:
                 break
             used_characters += serialized_size
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _facts_context(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """ADR-009 D4:当前事实表的有界渲染(≤12 条,字段转义,截断限长)。"""
+        result: list[dict[str, Any]] = []
+        for raw in facts[:12]:
+            if not isinstance(raw, dict):
+                continue
+            item: dict[str, Any] = {}
+            ok = True
+            for key in ("subject", "predicate", "object"):
+                value = str(raw.get(key, "")).replace("\x00", " ").strip()[:200]
+                for marker in _CONTEXT_MARKERS:
+                    value = value.replace(marker, "[escaped internal marker]")
+                if not value:
+                    ok = False
+                    break
+                item[key] = value
+            if not ok:
+                continue
+            world_from = raw.get("world_from")
+            if isinstance(world_from, (int, float)) and math.isfinite(float(world_from)):
+                item["since_world_day"] = int(float(world_from))
             result.append(item)
         return result
 
@@ -319,11 +404,20 @@ class PromptComposer:
             total += len(line)
         return "\n".join(lines)
 
-    def _runtime_state(self, role: RoleDefinition, state: dict[str, Any]) -> dict[str, Any]:
+    def _runtime_state(
+        self,
+        role: RoleDefinition,
+        state: dict[str, Any],
+        mood: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         result: dict[str, Any] = {
             "role_id": role.role_id,
             "role_name": role.display_name,
         }
+        # ADR-012 D3:心境只以定性词进 prompt(数字不出域);中性时不占位
+        mood_text = mood_words(mood)
+        if mood_text:
+            result["mood"] = mood_text
         if not isinstance(state, dict):
             return result
         raw_body = state.get("body_state")

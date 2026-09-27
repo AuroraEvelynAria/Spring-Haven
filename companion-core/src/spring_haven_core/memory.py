@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -15,12 +16,21 @@ from typing import Any, Iterable
 
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
 # 离线投递 TTL:7 世界天(#23 迁移后按 world_time 计算,不再使用现实时间)。
 LIFE_OUTBOX_TTL_WORLD_DAYS = 7.0
 # 三态生命周期阈值(ADR-001 D5,后端常量,不开放 UI 配置;Phase 3 启用)。
 DORMANT_AFTER_WORLD_DAYS = 14.0
 ARCHIVE_CONFIDENCE_THRESHOLD = 0.15
+# ADR-012:PAD 心境基线动力学。delta 单轮限幅、EWMA 融合率、稳态衰减速率
+# (每世界日向 mood_home 收敛 10%,连续化,无翻日定时器)。
+MOOD_DELTA_LIMIT = 0.3
+MOOD_EWMA_ALPHA = 0.12
+MOOD_DECAY_PER_WORLD_DAY = 0.9
+MOOD_WRITE_MIN_WORLD_DELTA = 0.05
+# 纯语义入池门槛(ADR-001):查询词面与记忆零交集时,余弦 ≥ 0.55 的同义改写
+# 仍应参评;实测 BGE-M3 中文改写对 ≈0.61-0.65,无关中段 ≈0.49-0.50,取中值。
+SEMANTIC_ONLY_ADMISSION = 0.775  # 即 cosine ≥ 0.55(semantic = (cos+1)/2)
 # ADR-001 D1:双参数衰减 + 唤醒奖励(每次召回 intrinsic 增加,上限 1.0)。
 WAKE_REWARD_PER_RECALL = 0.05
 # 同一用户动作原文在该窗口内重复出现时,强化既有记忆而不是再插一条逐字副本
@@ -49,6 +59,9 @@ MEMORY_KINDS = {
     "routine",
     "worldbook",
 }
+
+# ADR-009:实体类型
+ENTITY_KINDS = {"person", "object", "place", "event", "concept"}
 SOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$")
 TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 ASCII_TERM_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{1,63}")
@@ -384,6 +397,7 @@ class HeartloomStore:
             action           TEXT NOT NULL,
             description      TEXT NOT NULL DEFAULT '',
             occurred_at_unix INTEGER NOT NULL,
+            world_occurred_at REAL NOT NULL DEFAULT 0,
             stat_changes_json TEXT NOT NULL DEFAULT '{}',
             created_at       INTEGER NOT NULL,
             PRIMARY KEY (event_id, save_id)
@@ -450,6 +464,44 @@ class HeartloomStore:
         CREATE INDEX IF NOT EXISTS idx_role_ms_save
             ON role_milestones(save_id, role_id, unlocked_world_at DESC);
 
+        -- ADR-009(schema v8):实体-主张层。纯新增表,旧库由 executescript
+        -- 直接建表,无数据回填;当前事实 = claims.world_to IS NULL。
+        CREATE TABLE IF NOT EXISTS entities (
+            entity_id    TEXT PRIMARY KEY,
+            save_id      TEXT NOT NULL,
+            kind         TEXT NOT NULL DEFAULT 'concept',
+            name         TEXT NOT NULL,
+            name_norm    TEXT NOT NULL,
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            world_created_at REAL NOT NULL DEFAULT 0,
+            world_updated_at REAL NOT NULL DEFAULT 0,
+            UNIQUE (save_id, name_norm)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entities_save_norm
+            ON entities(save_id, name_norm);
+
+        CREATE TABLE IF NOT EXISTS claims (
+            claim_id    TEXT PRIMARY KEY,
+            save_id     TEXT NOT NULL,
+            subject_entity_id TEXT NOT NULL,
+            predicate   TEXT NOT NULL,
+            object_entity_id  TEXT,
+            object_text TEXT NOT NULL DEFAULT '',
+            source_memory_id  TEXT NOT NULL DEFAULT '',
+            confidence  REAL NOT NULL DEFAULT 0.8,
+            world_from  REAL NOT NULL DEFAULT 0,
+            world_to    REAL,
+            superseded_by_claim_id TEXT,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_claims_subject
+            ON claims(save_id, subject_entity_id, predicate);
+        CREATE INDEX IF NOT EXISTS idx_claims_current
+            ON claims(save_id, subject_entity_id) WHERE world_to IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_claims_source
+            ON claims(save_id, source_memory_id);
+
         CREATE TABLE IF NOT EXISTS state_events (
             event_id     TEXT PRIMARY KEY,
             save_id      TEXT NOT NULL,
@@ -462,11 +514,31 @@ class HeartloomStore:
         );
         CREATE INDEX IF NOT EXISTS idx_state_events_save_world
             ON state_events(save_id, role_id, world_time);
+
+        CREATE TABLE IF NOT EXISTS mood_baseline (
+            save_id          TEXT NOT NULL,
+            role_id          TEXT NOT NULL,
+            pleasure         REAL NOT NULL DEFAULT 0,
+            arousal          REAL NOT NULL DEFAULT 0,
+            dominance        REAL NOT NULL DEFAULT 0,
+            world_updated_at REAL NOT NULL DEFAULT 0,
+            updated_at       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (save_id, role_id)
+        );
         """
         # ADR-001 Phase 1:升级到 v6 前强制备份(文件库;可重复执行,已是 v6 不重复备份)
         stored_version = self._read_schema_version()
         if stored_version is not None and stored_version < 6 and self.path != ":memory:":
             self.backup_to(str(self.path) + ".pre-v6.backup")
+        # v7(#23 收尾):digest/weekly 切世界时间,升级前同样强制备份
+        if stored_version is not None and stored_version < 7 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v7.backup")
+        # v8(ADR-009):实体-主张层,纯新增表零回填,备份惯例照旧
+        if stored_version is not None and stored_version < 8 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v8.backup")
+        # v9(ADR-012):PAD 心境基线,纯新增表零回填,备份惯例照旧
+        if stored_version is not None and stored_version < 9 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v9.backup")
         with self._lock, self._connection:
             self._connection.executescript(schema)
             stored_version = self._read_schema_version()
@@ -517,6 +589,70 @@ class HeartloomStore:
                 self._connection.execute(
                     "ALTER TABLE life_outbox ADD COLUMN world_created_at REAL NOT NULL DEFAULT 0"
                 )
+            # ===== v7(#23 收尾):life_events 世界日列 + 旧数据回填(幂等) =====
+            life_columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(life_events)"
+                ).fetchall()
+            }
+            if "world_occurred_at" not in life_columns:
+                self._connection.execute(
+                    "ALTER TABLE life_events ADD COLUMN world_occurred_at REAL NOT NULL DEFAULT 0"
+                )
+            # 索引在守卫 ALTER 之后建(旧库先补列;新库 CREATE TABLE 已含该列)
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_life_events_save_world "
+                "ON life_events(save_id, world_occurred_at)"
+            )
+            if stored_version is not None and stored_version < 7:
+                # 既有 life_events 按当前时钟线性映射到世界日(rate 变更史导致
+                # 的偏差与 v6 记忆回填同口径,属已接受近似)。
+                event_saves = [
+                    str(row["save_id"])
+                    for row in self._connection.execute(
+                        "SELECT DISTINCT save_id FROM life_events"
+                    ).fetchall()
+                ]
+                for event_save in event_saves:
+                    anchor, world_value, rate = self._journey_clock(event_save)
+                    self._connection.execute(
+                        """
+                        UPDATE life_events
+                        SET world_occurred_at = MAX(0.0, ? + (occurred_at_unix - ?) / 86400.0 * ?)
+                        WHERE save_id = ?
+                        """,
+                        (world_value, anchor, rate, event_save),
+                    )
+                # 既有 digest_state 的现实日期键映射为世界日键(幂等映射回填,
+                # ADR-001:否则升级后同一天可能被二次 digest)。
+                for row in self._connection.execute(
+                    "SELECT save_id, role_id, day_key, memory_id, created_at FROM digest_state"
+                ).fetchall():
+                    old_key = str(row["day_key"])
+                    parts = old_key.split("-")
+                    if len(parts) != 3:
+                        continue
+                    year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                    try:
+                        noon = int(time.mktime((year, month, day, 12, 0, 0, -1, -1, -1)))
+                    except (OverflowError, ValueError):
+                        continue
+                    world_day = int(self.world_from_real(str(row["save_id"]), noon))
+                    self._connection.execute(
+                        """
+                        INSERT INTO digest_state(save_id, role_id, day_key, memory_id, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(save_id, role_id, day_key) DO NOTHING
+                        """,
+                        (
+                            str(row["save_id"]),
+                            str(row["role_id"]),
+                            f"w{world_day:04d}",
+                            str(row["memory_id"]),
+                            int(row["created_at"]),
+                        ),
+                    )
             # 既有旅程的时钟锚点初始化(新旅程在首次 world_now 时惰性创建)
             if stored_version is None or stored_version < 6:
                 # 二手传闻标记:传播链记忆(heard_from_*)回填(ADR-001 D5)
@@ -1055,17 +1191,22 @@ class HeartloomStore:
             source="conversation_exchange",
         )
 
-    def recall(
+    def recall_pool(
         self,
         *,
         save_id: str,
         role_id: str,
         query: str,
-        limit: int = 8,
-        record_access: bool = True,
+        limit: int = 24,
         query_vector: list[float] | None = None,
         embedding_model: str = "",
     ) -> list[dict[str, Any]]:
+        """混合召回完整候选池(ADR-011 D1):打分/排序/去重,零副作用。
+
+        返回整池(不截断到 limit);不唤醒 dormant、不记访问、不发唤醒奖励
+        ——定稿副作用一律由 commit_recall_access 承担。recall() 与服务层
+        rerank 前置池共同复用本方法。
+        """
         if role_id not in self.role_ids:
             raise MemoryStoreError("role_id is invalid")
         requested = max(1, min(24, int(limit)))
@@ -1096,6 +1237,36 @@ class HeartloomStore:
         """
         with self._lock:
             rows = self._connection.execute(sql, params).fetchall()
+            # 语义救援扫描(ADR-001;实弹 q6 两轮实证):词法候选池过薄且查询
+            # 向量可用时,对池外带向量的活跃记忆补一次余弦扫描——改写式提问
+            # (「下雨」vs「雨天」)零词法交集,SQL 阶段即被过滤,打分阶段的
+            # 语义入池门槛根本轮不到执行。只在薄池时触发,扫描上限 200 条。
+            if (
+                query_vector is not None
+                and embedding_model
+                and len(rows) < max(requested, 8)
+            ):
+                pool_ids = [str(row["memory_id"]) for row in rows]
+                exclude_clause = ""
+                rescue_params: list[Any] = [save_id, SHARED_SCOPE, role_id, embedding_model]
+                if pool_ids:
+                    exclude_clause = (
+                        f" AND memory_id NOT IN ({','.join('?' for _ in pool_ids)})"
+                    )
+                    rescue_params.extend(pool_ids)
+                rescue = self._connection.execute(
+                    f"""
+                    SELECT * FROM memory_entries
+                    WHERE save_id = ? AND scope_role_id IN (?, ?) AND enabled = 1
+                      AND lifecycle = 'active' AND embedding_json IS NOT NULL
+                      AND embedding_json != '' AND embedding_model = ?
+                      {exclude_clause}
+                    ORDER BY world_updated_at DESC LIMIT 200
+                    """,
+                    rescue_params,
+                ).fetchall()
+                if rescue:
+                    rows = list(rows) + list(rescue)
             term_weights: dict[str, dict[str, float]] = {}
             if rows:
                 memory_ids = [str(row["memory_id"]) for row in rows]
@@ -1109,6 +1280,17 @@ class HeartloomStore:
                     )
 
         world_now_value = self.world_now(save_id)
+        # 池内局部 IDF(ADR-001 D2):候选池内出现越频繁的词,词法贡献越低
+        # ——「主人」这类全库高频词不再靠刷屏词抬分,稀有词(具体事物名)
+        # 获得更高话语权。只在候选池(≤400)上统计,免维护全库词频表。
+        term_df: dict[str, int] = {}
+        for weights in term_weights.values():
+            for term in weights:
+                term_df[term] = term_df.get(term, 0) + 1
+        pool_size = max(1, len(term_weights))
+
+        def _term_idf(term: str) -> float:
+            return math.log(1.0 + pool_size / (1.0 + term_df.get(term, 0)))
         # graph_boost(ADR-001 D1):候选记忆与 always_active 常驻记忆之间的
         # 一级静态边最大强度;只读预存边,不实时计算,无邻接则为 0。
         graph_boost: dict[str, float] = {}
@@ -1138,12 +1320,13 @@ class HeartloomStore:
         for row in rows:
             terms = term_weights.get(str(row["memory_id"]), {})
             intersection = query_terms.intersection(terms)
-            lexical = sum(min(3.0, terms[item]) for item in intersection)
+            lexical = sum(min(3.0, terms[item]) * _term_idf(item) for item in intersection)
             lexical /= max(1.0, min(8.0, float(len(query_terms))))
             triggers = _json_list(row["trigger_terms_json"])
             trigger_hit = any(_normalize_text(item) in normalized_query for item in triggers if item)
-            if trigger_hit:
-                lexical = max(lexical, 1.0)
+            # 触发词不再平面削平到 1.0:策展触发词已带 3.0 权重,与普通 gram
+            # 一同经 IDF 加权后归一排序。旧 max(·,1.0) 会把「主人」类高频触发
+            # 与稀有触发拉成同分,词法通道失去区分度(ADR-001 D2)。
             lexical = min(1.0, lexical)  # 归一化到 0-1,保证各通道量纲一致(ADR-001 D1)
             # 衰减/recency 全部基于 world_time(世界天),不再读取现实时间(#23)
             # 双参数衰减(ADR-001 D1):intrinsic 越高衰减越慢;half_life=0 → 永不衰减
@@ -1173,9 +1356,16 @@ class HeartloomStore:
             else:
                 score = (0.25 * lexical + 0.20 * importance + 0.10 * recency + 0.05 * priority) / 0.60
             score = min(1.0, score) + 0.05 * graph_boost.get(str(row["memory_id"]), 0.0)
-            if bool(row["always_active"]):
+            # 里程碑保底分只在记忆本身与查询有词法关联时生效:always_active
+            # 仍永驻候选池、永不休眠(「永远记得」),但不再无条件霸占每次
+            # 召回的头部槽位,把位置让给当下相关的内容(ADR-001 D1)。
+            if bool(row["always_active"]) and lexical > 0.0:
                 score = max(score, 0.82 + priority * 0.12)
-            if bool(row["always_active"]) or lexical > 0.0:
+            if bool(row["always_active"]) or lexical > 0.0 or (
+                # 语义兜底入池:零词法交集的同义改写(「下雨」vs「下起大雨」)
+                # 曾被词法门槛起掉,导致改写式提问召回为空(实弹 livetest1 q6)
+                query_vector is not None and semantic >= SEMANTIC_ONLY_ADMISSION
+            ):
                 scored.append((score, row))
         scored.sort(key=lambda item: (item[0], int(item[1]["updated_at"])), reverse=True)
         # 仅对自动入库的对话用户记忆按内容去重:唤醒奖励会让重复互动的记忆
@@ -1190,38 +1380,88 @@ class HeartloomStore:
                     continue
                 seen_user_turn_contents.add(content_key)
             deduped.append((score, row))
-        selected = deduped[:requested]
-        # dormant 命中自动唤醒(ADR-001 D5)
-        dormant_hits = [str(row["memory_id"]) for _, row in selected if str(row["lifecycle"]) == "dormant"]
-        if dormant_hits:
-            with self._lock, self._connection:
-                self._connection.executemany(
-                    "UPDATE memory_entries SET lifecycle = 'active', lifecycle_changed_world = ? WHERE memory_id = ?",
-                    [(world_now_value, mid) for mid in dormant_hits],
-                )
-        result = [self._memory_row(row, score=score) for score, row in selected]
+        return [self._memory_row(row, score=score) for score, row in deduped]
 
-        if record_access:
-            now = int(time.time())  # 现实时间仅作日志;模拟维度写 last_recalled_world
-            with self._lock, self._connection:
-                if selected:
+    def recall(
+        self,
+        *,
+        save_id: str,
+        role_id: str,
+        query: str,
+        limit: int = 8,
+        record_access: bool = True,
+        query_vector: list[float] | None = None,
+        embedding_model: str = "",
+    ) -> list[dict[str, Any]]:
+        """混合召回 limit 条(ADR-011 拆分后的兼容入口)。
+
+        候选池 → 截断 limit → 定稿副作用,与拆分前行为逐位一致。
+        """
+        requested = max(1, min(24, int(limit)))
+        pool = self.recall_pool(
+            save_id=save_id,
+            role_id=role_id,
+            query=query,
+            limit=requested,
+            query_vector=query_vector,
+            embedding_model=embedding_model,
+        )
+        selected = pool[:requested]
+        self.commit_recall_access(
+            save_id=save_id,
+            role_id=role_id,
+            memory_ids=[str(item["memory_id"]) for item in selected],
+            record_access=record_access,
+        )
+        return selected
+
+    def commit_recall_access(
+        self,
+        *,
+        save_id: str,
+        role_id: str,
+        memory_ids: list[str],
+        record_access: bool = True,
+    ) -> None:
+        """召回定稿副作用(ADR-011 D1):dormant 命中唤醒(ADR-001 D5)+
+        访问记录与唤醒奖励(封顶 WAKE_REWARD_CAP)。空入选仍写 last_recall_* 哨兵。"""
+        ids = [str(item) for item in dict.fromkeys(memory_ids) if item]
+        world_now_value = self.world_now(save_id)
+        placeholders = ",".join("?" for _ in ids) if ids else ""
+        with self._lock, self._connection:
+            if ids:
+                dormant_hits = [
+                    str(row["memory_id"])
+                    for row in self._connection.execute(
+                        f"""
+                        SELECT memory_id FROM memory_entries
+                        WHERE save_id = ? AND memory_id IN ({placeholders})
+                          AND lifecycle = 'dormant'
+                        """,
+                        (save_id, *ids),
+                    ).fetchall()
+                ]
+                if dormant_hits:
                     self._connection.executemany(
-                        """
+                        "UPDATE memory_entries SET lifecycle = 'active', lifecycle_changed_world = ? WHERE memory_id = ?",
+                        [(world_now_value, mid) for mid in dormant_hits],
+                    )
+            if record_access:
+                now = int(time.time())  # 现实时间仅作日志;模拟维度写 last_recalled_world
+                if ids:
+                    self._connection.execute(
+                        f"""
                         UPDATE memory_entries
                         SET last_recalled_at = ?, last_recalled_world = ?, recall_count = recall_count + 1,
                             intrinsic = MIN(?, intrinsic + ?)
-                        WHERE memory_id = ?
+                        WHERE save_id = ? AND memory_id IN ({placeholders})
                         """,
-                        [
-                            (now, world_now_value, WAKE_REWARD_CAP, WAKE_REWARD_PER_RECALL, str(row["memory_id"]))
-                            for _, row in selected
-                        ],
+                        (now, world_now_value, WAKE_REWARD_CAP, WAKE_REWARD_PER_RECALL, save_id, *ids),
                     )
                 self._set_meta("last_recall_at", str(now))
-                self._set_meta("last_recall_count", str(len(selected)))
+                self._set_meta("last_recall_count", str(len(ids)))
                 self._set_meta("last_recall_role", role_id)
                 self._set_meta("last_recall_save", save_id)
-        return result
 
     # ===== ADR-001 Phase 3:记忆网络与混合召回 =====
 
@@ -1292,19 +1532,40 @@ class HeartloomStore:
                 (_json([round(float(item), 6) for item in vector]), _clean_text(model, 80), memory_id),
             )
 
-    def memories_without_embedding(self, save_id: str, limit: int = 16) -> list[dict[str, Any]]:
+    def memories_without_embedding(
+        self, save_id: str, limit: int = 16, model: str | None = None
+    ) -> list[dict[str, Any]]:
+        """待回填向量清单。
+
+        传入 model 时把向量模型不匹配的存量一并纳入:换 embedding 模型后
+        旧向量与查询向量不可比(cosine 被静默跳过),必须整批重嵌才能让
+        语义通道自愈,否则不匹配存量会永远留在语义召回之外。
+        """
+        stale_clause = ""
+        params: list[Any] = [save_id]
+        if model:
+            stale_clause = " OR embedding_model IS NULL OR embedding_model != ?"
+            params.append(str(model))
         with self._lock:
             rows = self._connection.execute(
-                """
-                SELECT memory_id, content FROM memory_entries
-                WHERE save_id = ? AND embedding_json IS NULL AND enabled = 1
+                f"""
+                SELECT memory_id, content, embedding_model FROM memory_entries
+                WHERE save_id = ? AND enabled = 1
                   AND lifecycle = 'active'
+                  AND (embedding_json IS NULL{stale_clause})
                 ORDER BY importance DESC, world_updated_at DESC
                 LIMIT ?
                 """,
-                (save_id, max(1, min(64, int(limit)))),
+                [*params, max(1, min(64, int(limit)))],
             ).fetchall()
-        return [{"memory_id": str(row["memory_id"]), "content": str(row["content"])} for row in rows]
+        return [
+            {
+                "memory_id": str(row["memory_id"]),
+                "content": str(row["content"]),
+                "embedding_model": row["embedding_model"],
+            }
+            for row in rows
+        ]
 
     @staticmethod
     def _memory_cosine(a: list[float], b: list[float]) -> float | None:
@@ -1551,12 +1812,19 @@ class HeartloomStore:
         query: str = "",
         limit: int = 120,
         offset: int = 0,
+        as_of_world: float | None = None,
     ) -> dict[str, Any]:
-        """分页节点 + 集合内部边(默认仅 Active,上限 300)。"""
+        """分页节点 + 集合内部边(默认仅 Active,上限 300)。
+
+        ADR-010:as_of_world(世界天)给定时光标回溯——只渲染该时刻之前
+        创建的节点与之前建立的 memory_links 边;同时返回 world_range
+        (全库最早/最晚世界日,不受 as_of 影响)供客户端滑杆取值。
+        """
         node_limit = max(1, min(300, int(limit)))
         offset = max(0, int(offset))
         role_clause = "" if not role_id else "AND (scope_role_id = ? OR scope_role_id = '*')"
         query_clause = ""
+        asof_clause = ""
         params: list[Any] = [save_id]
         if role_id:
             params.extend([role_id])
@@ -1565,36 +1833,57 @@ class HeartloomStore:
             escaped = normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query_clause = "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')"
             params.extend([f"%{escaped}%", f"%{escaped}%"])
+        as_of_value: float | None = None
+        if as_of_world is not None:
+            as_of_value = float(as_of_world)
+            if not math.isfinite(as_of_value) or as_of_value < 0.0:
+                raise MemoryStoreError("graph as_of_world must be a non-negative number")
+            asof_clause = "AND world_created_at <= ?"
+            params.append(as_of_value)
         params.extend([node_limit + 1, offset])
         with self._lock:
             rows = self._connection.execute(
                 f"""
                 SELECT memory_id, kind, title, content, scope_role_id, lifecycle,
-                       is_second_hand, importance, world_created_at, world_updated_at
+                       is_second_hand, importance, world_created_at, world_updated_at,
+                       source
                 FROM memory_entries
-                WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause} {query_clause}
+                WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause} {query_clause} {asof_clause}
                 ORDER BY world_updated_at DESC, memory_id
                 LIMIT ? OFFSET ?
                 """,
                 params,
             ).fetchall()
+            world_bounds = self._connection.execute(
+                """
+                SELECT MIN(world_created_at) AS earliest, MAX(world_updated_at) AS latest
+                FROM memory_entries WHERE save_id = ? AND enabled = 1
+                """,
+                (save_id,),
+            ).fetchone()
             truncated = len(rows) > node_limit
             nodes = rows[:node_limit]
             node_ids = [str(row["memory_id"]) for row in nodes]
             edges: list[dict[str, Any]] = []
             if node_ids:
                 placeholders = ",".join("?" for _ in node_ids)
+                edge_asof = ""
+                edge_params: list[Any] = [save_id, *node_ids, *node_ids]
+                if as_of_value is not None:
+                    edge_asof = "AND world_created_at <= ?"
+                    edge_params.append(as_of_value)
                 for row in self._connection.execute(
                     f"""
                     SELECT link_id, src_memory_id, dst_memory_id, link_type,
-                           link_strength, reason
+                           link_strength, reason, world_created_at
                     FROM memory_links
                     WHERE save_id = ?
                       AND src_memory_id IN ({placeholders})
                       AND dst_memory_id IN ({placeholders})
+                      {edge_asof}
                     ORDER BY link_strength DESC
                     """,
-                    (save_id, *node_ids, *node_ids),
+                    edge_params,
                 ).fetchall():
                     edges.append(
                         {
@@ -1604,6 +1893,8 @@ class HeartloomStore:
                             "link_type": str(row["link_type"]),
                             "link_strength": float(row["link_strength"]),
                             "reason": str(row["reason"]),
+                            # ADR-010(修订):边自带诞生时刻,客户端时间调光用
+                            "world_created_at": float(row["world_created_at"]),
                         }
                     )
         importance_bucket = lambda value: "high" if value >= 0.8 else "normal" if value >= 0.5 else "low"
@@ -1617,6 +1908,8 @@ class HeartloomStore:
                 "scope_role_id": str(row["scope_role_id"]),
                 "lifecycle": str(row["lifecycle"]),
                 "is_second_hand": bool(row["is_second_hand"]),
+                # ADR-013 D4:来源家族供画布绘制织结节月相 glyph
+                "source": str(row["source"]),
                 "importance_bucket": importance_bucket(float(row["importance"])),
                 "world_created_at": float(row["world_created_at"]),
                 "world_updated_at": float(row["world_updated_at"]),
@@ -1629,6 +1922,12 @@ class HeartloomStore:
             "cursor": str(offset + len(node_payload)) if truncated else "",
             "truncated": truncated,
             "node_count": len(node_payload),
+            "as_of_world": round(as_of_value, 4) if as_of_value is not None else None,
+            "world_now": round(self.world_now(save_id), 4),
+            "world_range": {
+                "earliest": round(float(world_bounds["earliest"] or 0.0), 4),
+                "latest": round(float(world_bounds["latest"] or 0.0), 4),
+            },
         }
 
     def record_state_event(
@@ -1653,6 +1952,311 @@ class HeartloomStore:
                     _clean_text(note, 200),
                 ),
             )
+
+    # ===== ADR-012:PAD 心境基线 =====
+
+    def current_mood(
+        self,
+        save_id: str,
+        role_id: str,
+        home: tuple[float, float, float] = (0.0, -0.1, 0.05),
+    ) -> dict[str, float]:
+        """PAD 心境基线(ADR-012 D2):读取时先按世界日连续衰减向稳态锚点。
+
+        无行 → 稳态锚点本身;Δ<MOOD_WRITE_MIN_WORLD_DAY 不回写(读多写少)。
+        """
+        clamped_home = tuple(max(-1.0, min(1.0, float(v))) for v in home)
+        world_now_value = self.world_now(save_id)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT pleasure, arousal, dominance, world_updated_at
+                FROM mood_baseline WHERE save_id = ? AND role_id = ?
+                """,
+                (save_id, role_id),
+            ).fetchone()
+        if row is None:
+            return {
+                "pleasure": clamped_home[0],
+                "arousal": clamped_home[1],
+                "dominance": clamped_home[2],
+            }
+        elapsed = max(0.0, world_now_value - float(row["world_updated_at"]))
+        factor = math.pow(MOOD_DECAY_PER_WORLD_DAY, elapsed)
+        values = {
+            "pleasure": clamped_home[0]
+            + (float(row["pleasure"]) - clamped_home[0]) * factor,
+            "arousal": clamped_home[1]
+            + (float(row["arousal"]) - clamped_home[1]) * factor,
+            "dominance": clamped_home[2]
+            + (float(row["dominance"]) - clamped_home[2]) * factor,
+        }
+        if elapsed >= MOOD_WRITE_MIN_WORLD_DELTA:
+            self._write_mood(save_id, role_id, values, world_now_value)
+        return values
+
+    def apply_mood_delta(
+        self,
+        save_id: str,
+        role_id: str,
+        delta: dict[str, Any],
+        home: tuple[float, float, float] = (0.0, -0.1, 0.05),
+    ) -> dict[str, float]:
+        """本轮情绪冲击 EWMA 汇入基线(ADR-012 D2);先折叠衰减再融合。
+
+        delta 形如 {"p":..,"a":..,"d":..},逐维 clamp ±MOOD_DELTA_LIMIT;
+        审计走 state_events(kind="mood")。
+        """
+        base = self.current_mood(save_id, role_id, home=home)
+        raw = {
+            "pleasure": _bounded_mood_component(delta.get("p")),
+            "arousal": _bounded_mood_component(delta.get("a")),
+            "dominance": _bounded_mood_component(delta.get("d")),
+        }
+        merged = {
+            key: max(
+                -1.0,
+                min(
+                    1.0,
+                    base[key] * (1.0 - MOOD_EWMA_ALPHA) + raw[key] * MOOD_EWMA_ALPHA,
+                ),
+            )
+            for key in ("pleasure", "arousal", "dominance")
+        }
+        self._write_mood(save_id, role_id, merged, self.world_now(save_id))
+        try:
+            self.record_state_event(
+                save_id=save_id,
+                role_id=role_id,
+                kind="mood",
+                delta_json={key: round(value, 4) for key, value in merged.items()},
+                note="organizer mood_delta",
+            )
+        except MemoryStoreError:
+            pass  # 审计失败不阻塞心境主路径
+        return merged
+
+    def _write_mood(
+        self,
+        save_id: str,
+        role_id: str,
+        values: dict[str, float],
+        world_now_value: float,
+    ) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO mood_baseline (
+                    save_id, role_id, pleasure, arousal, dominance,
+                    world_updated_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(save_id, role_id) DO UPDATE SET
+                    pleasure = excluded.pleasure,
+                    arousal = excluded.arousal,
+                    dominance = excluded.dominance,
+                    world_updated_at = excluded.world_updated_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    save_id,
+                    role_id,
+                    float(values["pleasure"]),
+                    float(values["arousal"]),
+                    float(values["dominance"]),
+                    world_now_value,
+                    int(time.time()),
+                ),
+            )
+
+    # ===== ADR-013:夜织——世界时间驱动的巩固蒸馏(零迁移,骑现有结构) =====
+
+    CONSOLIDATION_EXCLUDED_SOURCES = ("weekly_insight", "season_weave")
+
+    def unconsolidated_world_days(
+        self,
+        save_id: str,
+        *,
+        min_memories: int = 3,
+        max_days: int = 2,
+    ) -> list[dict[str, Any]]:
+        """待织世界日列表(ADR-013 D1):该日已关闭 + 当日 ≥min_memories 条
+        可织记忆 + 该日尚无织结节。最旧优先,至多 max_days 个(防洪)。"""
+        due: list[dict[str, Any]] = []
+        world_now_value = self.world_now(save_id)
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT scope_role_id,
+                       CAST(world_created_at AS INTEGER) AS world_day,
+                       COUNT(*) AS n
+                FROM memory_entries
+                WHERE save_id = ? AND enabled = 1
+                  AND source NOT LIKE 'consolidation%'
+                  AND source NOT IN ('weekly_insight', 'season_weave')
+                GROUP BY scope_role_id, world_day
+                HAVING n >= ?
+                ORDER BY world_day
+                LIMIT 16
+                """,
+                (save_id, max(1, int(min_memories))),
+            ).fetchall()
+            for row in rows:
+                world_day = int(row["world_day"])
+                if float(world_day) + 1.0 > world_now_value:
+                    continue  # 该世界日尚未结束
+                scope = str(row["scope_role_id"])
+                woven = self.get_memory_by_source_event(
+                    save_id=save_id,
+                    source=f"consolidation_{scope}",
+                    source_event_id=f"nightly-world-d{world_day:04d}",
+                    scope_role_id=scope,
+                )
+                if woven is not None:
+                    continue
+                due.append({"scope_role_id": scope, "world_day": world_day})
+                if len(due) >= max(1, int(max_days)):
+                    break
+        return due
+
+    def world_day_memories(
+        self,
+        save_id: str,
+        scope_role_id: str,
+        world_day: int,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """某个世界日某视角下的可织记忆(ADR-013 D1 的 LLM 输入)。"""
+        rows = self._connection.execute(
+            """
+            SELECT memory_id, title, content, kind, importance, valence
+            FROM memory_entries
+            WHERE save_id = ? AND scope_role_id IN (?, ?) AND enabled = 1
+              AND CAST(world_created_at AS INTEGER) = ?
+              AND source NOT LIKE 'consolidation%'
+              AND source NOT IN ('weekly_insight', 'season_weave')
+            ORDER BY importance DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (save_id, scope_role_id, SHARED_SCOPE, int(world_day), max(1, min(24, int(limit)))),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_memory_links(
+        self,
+        save_id: str,
+        src_memory_id: str,
+        dst_memory_ids: list[str],
+        *,
+        link_type: str,
+        strength: float,
+        reason: str,
+    ) -> int:
+        """批量有向边(ADR-013):夜织/归档清扫/季织共用。
+
+        同 (src,dst,type) 已有边(如 put_memory 的共享词条边)时升级为本次
+        语义(reason 覆盖、强度取大)——织结节边必须以 consolidated 身份可见。
+        """
+        src = _clean_text(src_memory_id, 80)
+        if not src:
+            return 0
+        link_type_clean = _clean_text(link_type, 16)
+        if link_type_clean not in ("causal", "association", "spread", "milestone", "conflict"):
+            link_type_clean = "association"
+        world_now_value = self.world_now(save_id)
+        created = 0
+        with self._lock, self._connection:
+            for dst in dst_memory_ids:
+                dst_clean = _clean_text(dst, 80)
+                if not dst_clean or dst_clean == src:
+                    continue
+                cursor = self._connection.execute(
+                    """
+                    INSERT INTO memory_links (
+                        link_id, save_id, src_memory_id, dst_memory_id,
+                        link_type, link_strength, reason, world_created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(src_memory_id, dst_memory_id, link_type) DO UPDATE SET
+                        reason = excluded.reason,
+                        link_strength = MAX(memory_links.link_strength, excluded.link_strength)
+                    """,
+                    (
+                        "lk-" + uuid.uuid4().hex,
+                        save_id,
+                        src,
+                        dst_clean,
+                        link_type_clean,
+                        max(0.0, min(1.0, float(strength))),
+                        _clean_text(reason, 120),
+                        world_now_value,
+                    ),
+                )
+                created += 1
+        return created
+
+    def archived_memories_in_world_week(
+        self,
+        save_id: str,
+        week_start_world: float,
+        week_end_world: float,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """该世界周内被归档的记忆(ADR-013 D2 归档清扫)。"""
+        rows = self._connection.execute(
+            """
+            SELECT memory_id, title, content
+            FROM memory_entries
+            WHERE save_id = ? AND lifecycle = 'archived'
+              AND lifecycle_changed_world >= ? AND lifecycle_changed_world < ?
+            ORDER BY lifecycle_changed_world
+            LIMIT ?
+            """,
+            (
+                save_id,
+                float(week_start_world),
+                float(week_end_world),
+                max(1, min(24, int(limit))),
+            ),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def memories_by_source_world_range(
+        self,
+        save_id: str,
+        source: str,
+        start_world: float,
+        end_world: float,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """世界日区间内某来源的记忆(ADR-013 D3 季织取当季周织)。"""
+        rows = self._connection.execute(
+            """
+            SELECT memory_id, title, content, world_created_at
+            FROM memory_entries
+            WHERE save_id = ? AND source = ? AND enabled = 1
+              AND world_created_at >= ? AND world_created_at < ?
+            ORDER BY world_created_at
+            LIMIT ?
+            """,
+            (
+                save_id,
+                _clean_text(source, 64),
+                float(start_world),
+                float(end_world),
+                max(1, min(24, int(limit))),
+            ),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def season_weave_done(self, save_id: str, season_index: int) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT value FROM heartloom_meta WHERE key = ?",
+                (f"season_weave:{save_id}:s{int(season_index):03d}",),
+            ).fetchone()
+        return row is not None
+
+    def mark_season_weave(self, save_id: str, season_index: int) -> None:
+        self._set_meta(f"season_weave:{save_id}:s{int(season_index):03d}", str(int(time.time())))
 
     def unlock_role_milestone(
         self,
@@ -2640,6 +3244,9 @@ class HeartloomStore:
                 action = _clean_text(raw.get("action", ""), 64) or "life_activity"
                 description = _clean_text(raw.get("description", ""), 500)
                 occurred = max(1, int(raw.get("occurred_at_unix") or timestamp))
+                # 钳到 0:补报的早于旅程锚点的事件不该落到负世界日
+                # (负日会被日分桶与 12h 时代的旧逻辑永久漏掉)。
+                world_occurred = max(0.0, self.world_from_real(save_id, occurred))
                 stat_changes = raw.get("stat_changes", {})
                 if not isinstance(stat_changes, (dict, list)):
                     stat_changes = {}
@@ -2650,8 +3257,8 @@ class HeartloomStore:
                     """
                     INSERT INTO life_events (
                         event_id, save_id, role_id, target_role, action, description,
-                        occurred_at_unix, stat_changes_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        occurred_at_unix, world_occurred_at, stat_changes_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(event_id, save_id) DO NOTHING
                     """,
                     (
@@ -2662,6 +3269,7 @@ class HeartloomStore:
                         action,
                         description,
                         occurred,
+                        world_occurred,
                         encoded_stats,
                         timestamp,
                     ),
@@ -2738,61 +3346,76 @@ class HeartloomStore:
         *,
         save_id: str,
         role_id: str,
-        day_start_unix: int,
-        day_end_unix: int,
+        world_day: int,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Life events for one role within a local-calendar-day window (oldest first)."""
+        """Life events for one role within one world day [world_day, world_day+1).
+
+        #23 收尾:分桶与窗口全部按 world_time(rate≠1 下与现实日历不再恒等)。
+        """
         requested = max(1, min(100, int(limit)))
+        day_start = float(int(world_day))
+        day_end = day_start + 1.0
         with self._lock:
             rows = self._connection.execute(
                 """
                 SELECT * FROM life_events
                 WHERE save_id = ? AND role_id = ?
-                  AND occurred_at_unix >= ? AND occurred_at_unix < ?
+                  AND world_occurred_at >= ? AND world_occurred_at < ?
                 ORDER BY occurred_at_unix ASC
                 LIMIT ?
                 """,
-                (save_id, role_id, int(day_start_unix), int(day_end_unix), requested),
+                (save_id, role_id, day_start, day_end, requested),
             ).fetchall()
         return [self._life_event_row(row) for row in rows]
 
     def digest_pending_saves(self, now: int | None = None) -> list[dict[str, str]]:
-        """Saves that have life events older than 12h not yet digested (per role/day).
+        """Saves with life events whose world day has ended and not yet digested.
 
-        #23 交界待定桩(#22/#23 联合评审):day_key 暂为现实日期,12h 冷却暂按
-        现实时间(rate=1.0 下与 world_time 恒等);world_time 倍率启用(rate≠1)
-        时需迁移为世界日键并回填 digest_state,详见 ADR-001。
+        #23 收尾:day_key 为世界日键 `w{day:04d}`(原为现实日期)。「这一天结束」
+        的判定 = 最新事件的整数世界日 < 当前整数世界日,倍率天然正确;
+        原 12h 现实冷却只是「天还没结束」的代理,已被该判定取代。
         """
-        timestamp = max(1, int(now or time.time()))
-        cutoff = timestamp - 12 * 3600
+        del now  # 兼容旧签名;分桶与冷却全部按世界日,不再读现实时间
         with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT le.save_id, le.role_id,
-                       date(le.occurred_at_unix, 'unixepoch', 'localtime') AS day_key
-                FROM life_events AS le
-                GROUP BY le.save_id, le.role_id, day_key
-                HAVING MAX(le.occurred_at_unix) < ?
-                   AND NOT EXISTS (
-                      SELECT 1 FROM digest_state AS ds
-                      WHERE ds.save_id = le.save_id
-                        AND ds.role_id = le.role_id
-                        AND ds.day_key = date(le.occurred_at_unix, 'unixepoch', 'localtime')
-                  )
-                ORDER BY le.save_id, le.role_id, day_key
-                LIMIT 16
-                """,
-                (cutoff,),
-            ).fetchall()
-        return [
-            {
-                "save_id": str(row["save_id"]),
-                "role_id": str(row["role_id"]),
-                "day_key": str(row["day_key"]),
-            }
-            for row in rows
-        ]
+            saves = [
+                str(row["save_id"])
+                for row in self._connection.execute(
+                    "SELECT DISTINCT save_id FROM life_events ORDER BY save_id"
+                ).fetchall()
+            ]
+            pending: list[dict[str, str]] = []
+            for save_id in saves:
+                world_now_value = self.world_now(save_id)
+                rows = self._connection.execute(
+                    """
+                    SELECT role_id,
+                           CAST(MAX(world_occurred_at) AS INTEGER) AS world_day
+                    FROM life_events
+                    WHERE save_id = ?
+                    GROUP BY role_id, CAST(world_occurred_at AS INTEGER)
+                    """,
+                    (save_id,),
+                ).fetchall()
+                for row in rows:
+                    world_day = int(row["world_day"])
+                    if world_day >= int(world_now_value):
+                        continue  # 这一天还没过完
+                    day_key = f"w{world_day:04d}"
+                    done = self._connection.execute(
+                        "SELECT 1 FROM digest_state WHERE save_id = ? AND role_id = ? AND day_key = ?",
+                        (save_id, str(row["role_id"]), day_key),
+                    ).fetchone()
+                    if done is None:
+                        pending.append(
+                            {
+                                "save_id": save_id,
+                                "role_id": str(row["role_id"]),
+                                "day_key": day_key,
+                            }
+                        )
+        pending.sort(key=lambda item: (item["save_id"], item["role_id"], item["day_key"]))
+        return pending[:16]
 
     def life_save_ids(self) -> list[str]:
         """Distinct save ids that ever synced life state (milestone/weekly scope)."""
@@ -2801,6 +3424,10 @@ class HeartloomStore:
                 "SELECT DISTINCT save_id FROM life_state ORDER BY save_id"
             ).fetchall()
         return [str(row["save_id"]) for row in rows]
+
+    def journey_save_ids(self) -> list[str]:
+        """有任意记忆/生活数据的旅程(夜织/季织枚举,ADR-013)。"""
+        return self._existing_journey_ids()
 
     def memory_count(self, save_id: str) -> int:
         """Total enabled memory entries for a save (milestone counting)."""
@@ -2836,21 +3463,347 @@ class HeartloomStore:
             return int(cursor.rowcount or 0) > 0
 
     def recent_digest_memories(
-        self, *, save_id: str, since_unix: int, limit: int = 40
+        self, *, save_id: str, since_world: float, limit: int = 40
     ) -> list[dict[str, Any]]:
-        """Daily-digest memories newer than since_unix (weekly insight input)."""
+        """Daily-digest memories whose world day is >= since_world(weekly insight input)。
+
+        #23 收尾:窗口从现实 created_at 切到 world_created_at(世界天)。
+        """
         requested = max(1, min(100, int(limit)))
         with self._lock:
             rows = self._connection.execute(
                 """
                 SELECT * FROM memory_entries
-                WHERE save_id = ? AND source = 'daily_digest' AND created_at >= ?
-                ORDER BY created_at DESC
+                WHERE save_id = ? AND source = 'daily_digest' AND world_created_at >= ?
+                ORDER BY world_created_at DESC
                 LIMIT ?
                 """,
-                (save_id, int(since_unix), requested),
+                (save_id, float(since_world), requested),
             ).fetchall()
         return [self._memory_row(row) for row in rows]
+
+    def weekly_insight_exists_in_world_week(
+        self, *, save_id: str, week_start_world: float
+    ) -> bool:
+        """当前世界周桶内是否已有周反思记忆(含旧现实周键的存量)。
+
+        #23 收尾的幂等映射不靠改写旧 weekly-* source_event_id:旧键与现实
+        ISO 周绑定,而其 world_created_at 已被 v6/v7 映射到世界日;只要
+        当前世界周桶里存在任意 weekly_insight 记忆就跳过本周期,旧档升级
+        便不会对同一时段重复生成周反思。
+        """
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT 1 FROM memory_entries
+                WHERE save_id = ? AND source = 'weekly_insight' AND enabled = 1
+                  AND world_created_at >= ? AND world_created_at < ?
+                LIMIT 1
+                """,
+                (save_id, float(week_start_world), float(week_start_world) + 7.0),
+            ).fetchone()
+        return row is not None
+
+    # ===== ADR-009:实体-主张层 =====
+
+    @staticmethod
+    def _entity_norm(name: str) -> str:
+        return re.sub(r"\s+", "", _normalize_text(name))[:80]
+
+    def upsert_entity(
+        self,
+        *,
+        save_id: str,
+        name: str,
+        kind: str = "concept",
+        aliases: list[str] | None = None,
+    ) -> str:
+        """按 (save_id, name_norm) 幂等 upsert 实体;返回 entity_id(ADR-009 D2)。"""
+        clean_name = _clean_text(name, 80)
+        norm = self._entity_norm(name)
+        if not clean_name or not norm:
+            raise MemoryStoreError("entity name is empty")
+        if kind not in ENTITY_KINDS:
+            kind = "concept"
+        merged_aliases: list[str] = []
+        for raw in aliases or []:
+            alias = _clean_text(str(raw), 80)
+            if alias and alias not in merged_aliases:
+                merged_aliases.append(alias)
+        world_now_value = self.world_now(save_id)
+        now = int(time.time())
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT entity_id, aliases_json FROM entities WHERE save_id = ? AND name_norm = ?",
+                (save_id, norm),
+            ).fetchone()
+            if row is None:
+                entity_id = uuid.uuid4().hex
+                self._connection.execute(
+                    """
+                    INSERT INTO entities (entity_id, save_id, kind, name, name_norm,
+                        aliases_json, world_created_at, world_updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity_id,
+                        save_id,
+                        kind,
+                        clean_name,
+                        norm,
+                        _json(merged_aliases),
+                        world_now_value,
+                        world_now_value,
+                    ),
+                )
+                return entity_id
+            entity_id = str(row["entity_id"])
+            try:
+                existing_aliases = [str(item) for item in json.loads(row["aliases_json"])]
+            except (TypeError, ValueError):
+                existing_aliases = []
+            for alias in merged_aliases:
+                if alias not in existing_aliases:
+                    existing_aliases.append(alias)
+            self._connection.execute(
+                "UPDATE entities SET world_updated_at = ?, aliases_json = ? WHERE entity_id = ?",
+                (world_now_value, _json(existing_aliases[:16]), entity_id),
+            )
+            return entity_id
+
+    def recent_entity_names(self, save_id: str, limit: int = 40) -> list[str]:
+        """组织器实体锚定用:该存档最近活跃的实体名(ADR-009 D2)。
+
+        注入 organizer 提示词,让同一人物/事物每轮复用同一名字——
+        「林澈/主人」「神经内科/急诊科」各自为政会让修订链接不上。
+        """
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT name FROM entities WHERE save_id = ?
+                ORDER BY world_updated_at DESC, name_norm LIMIT ?
+                """,
+                (save_id, max(1, min(64, int(limit)))),
+            ).fetchall()
+        return [str(row["name"]) for row in rows]
+
+    def put_claims(
+        self,
+        *,
+        save_id: str,
+        claims: list[dict[str, Any]],
+        source_memory_id: str = "",
+    ) -> dict[str, int]:
+        """写入一批主张(ADR-009 D3):同 (subject, predicate) 下
+
+        无当前主张 → 新建;宾语相同 → 强化(confidence 取大);
+        宾语不同 → 顶替(旧主张 world_to=现在 + superseded_by 回链,
+        新旧来源记忆之间补 conflict 边留审计)。
+        """
+        stats = {"created": 0, "reinforced": 0, "superseded": 0, "skipped": 0}
+
+        def _safe_confidence(raw: dict[str, Any]) -> float:
+            try:
+                return _bounded_float(raw.get("confidence"), 0.0, 1.0, "confidence")
+            except MemoryStoreError:
+                return 0.8
+
+        for raw in claims[:12]:
+            if not isinstance(raw, dict):
+                stats["skipped"] += 1
+                continue
+            subject_name = _clean_text(raw.get("subject", ""), 80)
+            predicate = _clean_text(raw.get("predicate", ""), 32)
+            object_text = _clean_text(raw.get("object", ""), 200)
+            if not subject_name or not predicate or not object_text:
+                stats["skipped"] += 1
+                continue
+            if self._entity_norm(subject_name) == self._entity_norm(object_text):
+                stats["skipped"] += 1
+                continue
+            now = int(time.time())
+            world_now_value = self.world_now(save_id)
+            superseded_claim_id = ""
+            try:
+                with self._lock, self._connection:
+                    subject_id = self.upsert_entity(
+                        save_id=save_id, name=subject_name,
+                        kind=str(raw.get("subject_kind", "") or "concept"),
+                    )
+                    object_id = self.upsert_entity(
+                        save_id=save_id, name=object_text,
+                        kind=str(raw.get("object_kind", "") or "concept"),
+                    )
+                    current = self._connection.execute(
+                        """
+                        SELECT claim_id, object_entity_id, confidence, source_memory_id
+                        FROM claims
+                        WHERE save_id = ? AND subject_entity_id = ? AND predicate = ?
+                          AND world_to IS NULL
+                        ORDER BY updated_at DESC LIMIT 1
+                        """,
+                        (save_id, subject_id, predicate),
+                    ).fetchone()
+                    if current is not None and str(current["object_entity_id"]) == object_id:
+                        self._connection.execute(
+                            """
+                            UPDATE claims SET confidence = MAX(confidence, ?), updated_at = ?
+                            WHERE claim_id = ?
+                            """,
+                            (
+                                _safe_confidence(raw),
+                                now,
+                                str(current["claim_id"]),
+                            ),
+                        )
+                        stats["reinforced"] += 1
+                        continue
+                    # 主键用 uuid:旧实现把秒级时间戳掺进内容哈希,同秒重放同一
+                    # 事实会主键碰撞(实弹 23:46 IntegrityError 且日志只有类名);
+                    # 幂等由上方 current SELECT 保证,不靠 claim_id 哈希。
+                    claim_id = "cl-" + uuid.uuid4().hex
+                    self._connection.execute(
+                        """
+                        INSERT INTO claims (claim_id, save_id, subject_entity_id, predicate,
+                            object_entity_id, object_text, source_memory_id, confidence,
+                            world_from, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            claim_id,
+                            save_id,
+                            subject_id,
+                            predicate,
+                            object_id,
+                            object_text,
+                            _clean_text(source_memory_id, 80),
+                            _safe_confidence(raw),
+                            world_now_value,
+                            now,
+                            now,
+                        ),
+                    )
+                    if current is not None:
+                        self._connection.execute(
+                            """
+                            UPDATE claims SET world_to = ?, superseded_by_claim_id = ?, updated_at = ?
+                            WHERE claim_id = ?
+                            """,
+                            (world_now_value, claim_id, now, str(current["claim_id"])),
+                        )
+                        superseded_claim_id = str(current["claim_id"])
+                        old_source = str(current["source_memory_id"] or "")
+                        if source_memory_id and old_source and source_memory_id != old_source:
+                            self._connection.execute(
+                                """
+                                INSERT INTO memory_links (
+                                    link_id, save_id, src_memory_id, dst_memory_id,
+                                    link_type, link_strength, reason, world_created_at
+                                ) VALUES (?, ?, ?, ?, 'conflict', 0.9, ?, ?)
+                                ON CONFLICT(src_memory_id, dst_memory_id, link_type) DO NOTHING
+                                """,
+                                (
+                                    "lk-" + uuid.uuid4().hex,
+                                    save_id,
+                                    _clean_text(source_memory_id, 80),
+                                    _clean_text(old_source, 80),
+                                    _clean_text(f"事实更新:{subject_name} {predicate}", 120),
+                                    world_now_value,
+                                ),
+                            )
+            except sqlite3.Error as exc:
+                # 单条主张落库失败只弃一条、不拖垮整批:整批回滚曾让可写入的
+                # 主张也一起蒸发,且类型名日志无法定位根因(ADR-009 尽力而为)。
+                stats["skipped"] += 1
+                logging.getLogger(__name__).warning(
+                    "claim write skipped: %s: %s", type(exc).__name__, exc
+                )
+                continue
+            if superseded_claim_id:
+                stats["superseded"] += 1
+            else:
+                stats["created"] += 1
+        return stats
+
+    def current_claims(
+        self, *, save_id: str, entity_ids: list[str], limit: int = 12
+    ) -> list[dict[str, Any]]:
+        """给定实体的当前有效主张(world_to IS NULL;ADR-009 D4)。"""
+        ids = [str(item) for item in dict.fromkeys(entity_ids) if item][:32]
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT c.claim_id, c.predicate, c.object_text, c.confidence,
+                       c.world_from, c.source_memory_id,
+                       s.name AS subject_name, s.kind AS subject_kind,
+                       o.name AS object_name
+                FROM claims AS c
+                JOIN entities AS s ON s.entity_id = c.subject_entity_id
+                LEFT JOIN entities AS o ON o.entity_id = c.object_entity_id
+                WHERE c.save_id = ? AND c.subject_entity_id IN ({placeholders})
+                  AND c.world_to IS NULL
+                ORDER BY c.confidence DESC, c.updated_at DESC
+                LIMIT ?
+                """,
+                (save_id, *ids, max(1, min(32, int(limit)))),
+            ).fetchall()
+        return [self._claim_row(row) for row in rows]
+
+    @staticmethod
+    def _claim_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "claim_id": str(row["claim_id"]),
+            "subject": str(row["subject_name"]),
+            "subject_kind": str(row["subject_kind"]),
+            "predicate": str(row["predicate"]),
+            "object": str(row["object_name"] or row["object_text"] or ""),
+            "confidence": float(row["confidence"]),
+            "world_from": float(row["world_from"]),
+            "source_memory_id": str(row["source_memory_id"] or ""),
+        }
+
+    def entities_for_context(
+        self, *, save_id: str, query: str, memory_ids: list[str]
+    ) -> list[str]:
+        """查询子串命中 + 召回记忆挂靠的实体 id 并集(ADR-009 D4)。"""
+        matched: list[str] = []
+        compact_query = re.sub(r"\s+", "", _normalize_text(query))
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT entity_id, name_norm, aliases_json FROM entities "
+                "WHERE save_id = ? LIMIT 500",
+                (save_id,),
+            ).fetchall()
+        for row in rows:
+            names = [str(row["name_norm"])]
+            try:
+                names.extend(
+                    self._entity_norm(item) for item in json.loads(row["aliases_json"])
+                )
+            except (TypeError, ValueError):
+                pass
+            if any(name and name in compact_query for name in names):
+                matched.append(str(row["entity_id"]))
+        source_ids = [str(item) for item in dict.fromkeys(memory_ids) if item][:24]
+        if source_ids:
+            placeholders = ",".join("?" * len(source_ids))
+            with self._lock:
+                linked = self._connection.execute(
+                    f"""
+                    SELECT DISTINCT subject_entity_id AS eid FROM claims
+                    WHERE save_id = ? AND source_memory_id IN ({placeholders})
+                    UNION
+                    SELECT DISTINCT object_entity_id AS eid FROM claims
+                    WHERE save_id = ? AND object_entity_id IS NOT NULL
+                      AND source_memory_id IN ({placeholders})
+                    """,
+                    (save_id, *source_ids, save_id, *source_ids),
+                ).fetchall()
+            matched.extend(str(row["eid"]) for row in linked)
+        return list(dict.fromkeys(matched))[:32]
 
     @staticmethod
     def _life_event_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -3089,6 +4042,17 @@ def _clean_text(value: Any, limit: int) -> str:
     return _normalize_text(value)[:limit] if not isinstance(value, str) else unicodedata.normalize(
         "NFKC", value
     ).replace("\x00", " ").strip()[:limit]
+
+
+def _bounded_mood_component(value: Any) -> float:
+    """ADR-012:organizer mood_delta 单维分量,清洗并 clamp ±MOOD_DELTA_LIMIT。"""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(parsed):
+        return 0.0
+    return max(-MOOD_DELTA_LIMIT, min(MOOD_DELTA_LIMIT, parsed))
 
 
 def _graph_term_is_useful(value: str) -> bool:

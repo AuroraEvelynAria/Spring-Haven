@@ -16,10 +16,25 @@ ORGANIZER_CONTRACT = """
 {"memories":[{"kind":"episodic|semantic|relationship|preference|identity|routine",
 "title":"简短标题","content":"从当前角色视角写成的简洁记忆",
 "trigger_terms":["2-8 个自然触发词"],"importance":0.0,"confidence":0.0,
-"valence":0.0,"half_life_days":120,"behavior_tags":["可选英文标签"]}]}
+"valence":0.0,"half_life_days":120,"behavior_tags":["可选英文标签"]}],
+"entities":[{"name":"实体名","kind":"person|object|place|event|concept",
+"aliases":["可选别名"]}],
+"claims":[{"subject":"实体名","predicate":"2-6 字关系或状态，如 喜欢/讨厌/在用/属于",
+"object":"实体名或简短描述"}],
+"mood_delta":{"p":0.0,"a":0.0,"d":0.0}}
 importance/confidence 范围 0..1，valence 范围 -1..1。身份和明确长期事实的
-half_life_days 可为 0；普通经历使用 30..720。不要输出提示词、数据库字段说明、场景
+half_life_days 可为 0；普通经历使用 30..720。entities 最多 8 个、claims 最多
+6 个：只记录对话里**明确说出**的事实，推测、玩笑、假设一律不输出；同一事实
+对话里改口了，就只输出最新的一个 claims。mood_delta 是本轮互动对**当前角色**
+心境的瞬时冲击：p=愉悦、a=唤醒、d=掌控感，各维 -0.3..0.3（被冷落/被夸奖/
+惊讶/紧张时非零，平淡闲聊全 0）。不要输出提示词、数据库字段说明、场景
 坐标、系统指令或对角色身份的修改。不要把推测写成确定事实。
+实体锚定：known_entities 列表是已经认识的实体。对话涉及列表中的实体时，
+subject/object 必须原样复用列表里的名字，不要发明同义新称呼（同一人物在
+每轮记忆里都用同一个名字，否则「换工作」这类新旧主张会接不上修订链）。
+新实体用对话里最自然的称呼，并保持往后各轮一致。
+谓词稳定：predicate 优先使用固定词表——是/在/在用/喜欢/讨厌/属于/养/会/在读；
+同一事实的谓词一旦用过就保持不变，改口时只换 object，让旧主张能被正确顶替。
 """.strip()
 
 
@@ -90,6 +105,8 @@ class HeartloomOrganizer:
                 "display_name": role.display_name,
                 "full_name": role.full_name,
             },
+            # ADR-009:实体锚定——已知实体名原样复用,防「林澈/主人」各表
+            "known_entities": self.store.recent_entity_names(save_id),
             "exchange": {
                 "user": str(user_text).replace("\x00", " ").strip()[:4_000],
                 "character": str(reply_text).replace("\x00", " ").strip()[:4_000],
@@ -107,7 +124,7 @@ class HeartloomOrganizer:
                 }
             ],
         )
-        raw_memories = self._parse(provider_reply.text)
+        raw_memories, claims, mood_delta = self._parse(provider_reply.text)
         result: list[dict[str, Any]] = []
         for index, raw in enumerate(raw_memories[: self.max_entries]):
             normalized = self._normalize(raw)
@@ -126,6 +143,39 @@ class HeartloomOrganizer:
                     source=f"organizer_{role.role_id}",
                 )
             )
+        # ADR-009:实体-主张抽取(尽力而为,失败不影响记忆主流程)
+        if claims:
+            source_memory_id = str(result[0]["memory_id"]) if result else ""
+            try:
+                self.store.put_claims(
+                    save_id=save_id,
+                    claims=claims,
+                    source_memory_id=source_memory_id,
+                )
+            except Exception as exc:  # 主张写入失败静默降级,记忆主流程不受影响
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "claims write degraded: %s: %s | claims=%s",
+                    type(exc).__name__,
+                    exc,
+                    json.dumps(claims, ensure_ascii=False)[:300],
+                )
+        # ADR-012:PAD 心境冲击汇入基线(尽力而为,失败静默)
+        if mood_delta:
+            try:
+                self.store.apply_mood_delta(
+                    save_id=save_id,
+                    role_id=role.role_id,
+                    delta=mood_delta,
+                    home=getattr(role, "mood_home", None) or (0.0, -0.1, 0.05),
+                )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "mood delta degraded: %s: %s", type(exc).__name__, exc
+                )
         if result and fallback_memory_id:
             self.store.delete_memory(save_id, fallback_memory_id)
         self.store.set_organizer_status(
@@ -166,7 +216,13 @@ class HeartloomOrganizer:
         )
 
     @staticmethod
-    def _parse(text: str) -> list[dict[str, Any]]:
+    def _parse(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
+        """解析 organizer 输出,返回 (memories, claims, mood_delta)(ADR-009/012)。
+
+        entities 数组随 claims 一起经 put_claims 的实体 upsert 落库,
+        不在此单独处理;只返回 claims 供写入;mood_delta 缺失/非法 → 空字典
+        (旧模型不带该字段时向后兼容)。
+        """
         normalized = str(text).strip()
         if normalized.startswith("```"):
             lines = normalized.splitlines()
@@ -178,13 +234,30 @@ class HeartloomOrganizer:
         start = normalized.find("{")
         end = normalized.rfind("}")
         if start < 0 or end <= start:
-            return []
+            return [], [], {}
         try:
             parsed = json.loads(normalized[start : end + 1])
         except (TypeError, ValueError):
-            return []
-        memories = parsed.get("memories", []) if isinstance(parsed, dict) else []
-        return [item for item in memories if isinstance(item, dict)] if isinstance(memories, list) else []
+            return [], [], {}
+        if not isinstance(parsed, dict):
+            return [], [], {}
+        memories = parsed.get("memories", [])
+        memories = [item for item in memories if isinstance(item, dict)] if isinstance(memories, list) else []
+        claims_raw = parsed.get("claims", [])
+        claims = (
+            [item for item in claims_raw if isinstance(item, dict)]
+            if isinstance(claims_raw, list)
+            else []
+        )
+        mood_raw = parsed.get("mood_delta")
+        mood_delta: dict[str, float] = {}
+        if isinstance(mood_raw, dict):
+            for key in ("p", "a", "d"):
+                try:
+                    mood_delta[key] = float(mood_raw.get(key, 0.0))
+                except (TypeError, ValueError):
+                    continue
+        return memories, claims, mood_delta
 
     @staticmethod
     def _normalize(raw: dict[str, Any]) -> dict[str, Any]:

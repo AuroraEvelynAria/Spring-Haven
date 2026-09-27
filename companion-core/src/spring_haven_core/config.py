@@ -30,6 +30,7 @@ class CoreConfig:
     memory_recent_messages: int = 24
     memory_organizer_enabled: bool = True
     memory_organizer_max_entries: int = 3
+    memory_rerank_enabled: bool = True  # ADR-011:BGE 跨编码器重排(失败静默降级)
     weather_location: str = ""  # 城市名或 "lat,lon"；空则不用真实天气
     rag_import_allow_private: bool = False  # 允许 web 导入指向私网/环回地址
     state_truth_source: str = "client"  # "client"=现状 | "backend"=#22 后端真相源+世界时间衰减
@@ -112,6 +113,13 @@ class CoreConfig:
                 1,
                 5,
                 "memory organizer max entries",
+            ),
+            memory_rerank_enabled=_as_bool(
+                os.getenv(
+                    "SPRING_HAVEN_MEMORY_RERANK",
+                    raw.get("memory_rerank_enabled", True),
+                ),
+                "memory rerank enabled",
             ),
             weather_location=str(raw.get("weather_location", "")).strip()[:120],
             rag_import_allow_private=bool(

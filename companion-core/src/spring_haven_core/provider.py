@@ -920,7 +920,7 @@ class OpenAICompatibleProvider:
                             hint = "; check whether the Base URL needs a /v1 suffix"
                         failover_allowed = (
                             200 <= response.status < 300
-                            or response.status == 429
+                            or response.status in {402, 429}
                             or response.status >= 500
                         )
                         raise ProviderError(
@@ -932,7 +932,19 @@ class OpenAICompatibleProvider:
                         ) from exc
                     if response.status < 200 or response.status >= 300:
                         detail = _provider_error_detail(data)
-                        failover_allowed = response.status == 429 or response.status >= 500
+                        # 可 failover 的 4xx:429 限流、402 欠费(容量类问题,
+                        # 备用通道正是为此存在)、DeepSeek 过载伪装的
+                        # 400+inference request is invalid(同一请求秒级重放即
+                        # 200,实弹 livetest1)。401/403 是配置错误,必须原地
+                        # 暴露,不许静默换道(test_authentication_failure_*)。
+                        failover_allowed = (
+                            response.status in {402, 429}
+                            or response.status >= 500
+                            or (
+                                response.status == 400
+                                and "inference request is invalid" in str(detail)
+                            )
+                        )
                         raise ProviderError(
                             f"provider HTTP {response.status}: {detail}",
                             failover_allowed=failover_allowed,
@@ -942,6 +954,8 @@ class OpenAICompatibleProvider:
                                 if response.status == 429
                                 else "server_error"
                                 if response.status >= 500
+                                else "invalid_response"
+                                if response.status == 400
                                 else "client_error"
                             ),
                         )

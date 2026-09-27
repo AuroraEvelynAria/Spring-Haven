@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from collections import OrderedDict
@@ -12,7 +13,7 @@ from typing import Any
 from .memory import HeartloomStore, MemoryStoreError
 from .maintenance import StorageMaintenance
 from .organizer import HeartloomOrganizer
-from .prompting import PromptComposer
+from .prompting import PromptComposer, mood_words
 from .provider import ChatProvider, ProviderReply
 from .rag import KnowledgeRagStore, RagStoreError
 from .roles import RoleRegistry
@@ -43,6 +44,7 @@ class CompanionService:
         memory_organizer_max_entries: int = 3,
         weather_location: str = "",
         state_truth_source: str = "client",
+        memory_rerank_enabled: bool = True,
     ):
         self.roles = roles
         self.provider = provider
@@ -54,6 +56,9 @@ class CompanionService:
         self.prompts = PromptComposer(roles)
         self._capacity = max(16, idempotency_capacity)
         self._recall_limit = max(1, min(24, memory_recall_limit))
+        # ADR-011:rerank 短名单上限(≤24,每轮至多一次跨编码器调用)
+        self.memory_rerank_enabled = bool(memory_rerank_enabled)
+        self._rerank_shortlist = min(12, max(2, self._recall_limit * 2))
         self._recent_messages = max(4, min(128, memory_recent_messages))
         self._replies: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._save_locks: dict[str, asyncio.Lock] = {}
@@ -105,6 +110,88 @@ class CompanionService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def _recall_with_rerank(
+        self,
+        *,
+        save_id: str,
+        role_id: str,
+        query: str,
+        query_vector: list[float] | None,
+        embedding_model: str,
+    ) -> list[dict[str, Any]]:
+        """ADR-011:混合召回候选池 + BGE 跨编码器重排;失败静默回落纯混合序。
+
+        唤醒/访问/奖励只在最终入选集上落定(commit_recall_access),
+        重排绝不放大唤醒奖励。
+        """
+        pool = self.memory.recall_pool(
+            save_id=save_id,
+            role_id=role_id,
+            query=query,
+            limit=self._recall_limit,
+            query_vector=query_vector,
+            embedding_model=embedding_model,
+        )
+        shortlist = pool[: self._rerank_shortlist]
+        selected: list[dict[str, Any]] | None = None
+        if self.memory_rerank_enabled and len(shortlist) >= 2:
+            try:
+                settings = getattr(self.provider, "settings", None)
+                profile = (
+                    settings.profile_snapshot("rerank") if settings else None
+                )
+                if profile is not None and profile.enabled:
+                    scores = await self.provider.rerank(
+                        query,
+                        [
+                            str(item.get("content", ""))[:2_000]
+                            for item in shortlist
+                        ],
+                        top_n=len(shortlist),
+                    )
+                    rerank_scores = {
+                        int(item["index"]): float(item["score"])
+                        for item in scores
+                        if isinstance(item, dict)
+                    }
+
+                    def _blend(index: int) -> float:
+                        hybrid = float(
+                            shortlist[index].get("recall_score", 0.0)
+                        )
+                        raw = rerank_scores.get(index, 0.0)
+                        # 网关口径不一:落在 [0,1] 直接用,越界按 logits 过 sigmoid
+                        if raw < 0.0 or raw > 1.0:
+                            raw = 1.0 / (
+                                1.0 + math.exp(-max(-30.0, min(30.0, raw)))
+                            )
+                        return 0.55 * raw + 0.45 * hybrid
+
+                    order = sorted(
+                        range(len(shortlist)),
+                        key=lambda i: (_blend(i), float(shortlist[i].get("recall_score", 0.0))),
+                        reverse=True,
+                    )
+                    selected = [
+                        shortlist[i] for i in order[: self._recall_limit]
+                    ]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "memory rerank degraded: %s", type(exc).__name__
+                )
+                selected = None
+        if selected is None:
+            selected = pool[: self._recall_limit]
+        self.memory.commit_recall_access(
+            save_id=save_id,
+            role_id=role_id,
+            memory_ids=[str(item["memory_id"]) for item in selected],
+            record_access=True,
+        )
+        return selected
+
     async def chat(self, raw: Any) -> dict[str, Any]:
         payload = self._validate_chat(raw)
         save_id = payload["save_id"]
@@ -148,11 +235,10 @@ class CompanionService:
         shared_history = self._merge_history(durable_history, payload["history"])
         # ADR-001 混合召回:embedding 启用时注入查询向量(失败静默降级为纯词法)
         query_vector, embedding_model = await self._query_embedding(payload["text"])
-        memories = self.memory.recall(
+        memories = await self._recall_with_rerank(
             save_id=save_id,
             role_id=role.role_id,
             query=payload["text"],
-            limit=self._recall_limit,
             query_vector=query_vector,
             embedding_model=embedding_model,
         )
@@ -187,6 +273,17 @@ class CompanionService:
                 )
             except (MemoryStoreError, TypeError, ValueError) as exc:
                 LOGGER.warning("state event logging failed: %s", exc)
+        # ADR-009 D4:召回后水合实体当前事实(信念修订后的"现在相信什么")
+        current_facts = self._current_facts(save_id, payload["text"], memories)
+        # ADR-012:PAD 心境(读取即连续稳态衰减),只以定性词进 prompt
+        mood_values: dict[str, float] | None = None
+        try:
+            mood_values = self.memory.current_mood(
+                save_id, role.role_id, home=role.mood_home
+            )
+        except Exception as exc:  # 心境水合失败不阻塞对话主流程
+            LOGGER.warning("mood hydration degraded: %s", type(exc).__name__)
+            mood_values = None
         messages = self.prompts.messages(
             role,
             payload["text"],
@@ -194,6 +291,8 @@ class CompanionService:
             state,
             memories,
             rag_results,
+            current_facts=current_facts,
+            mood=mood_values,
         )
         provider_reply: ProviderReply = await self.provider.complete(
             self.prompts.system_prompt(role), messages
@@ -275,6 +374,18 @@ class CompanionService:
                 "organizer_state": organizer_state,
                 "organizer_role_id": role.role_id,
             },
+            # ADR-012:心境定性词 + 原始 PAD(浮点给可信本地客户端做场景化表达)
+            "mood": (
+                {
+                    "words": mood_words(mood_values),
+                    **{
+                        key: round(float(mood_values[key]), 4)
+                        for key in ("pleasure", "arousal", "dominance")
+                    },
+                }
+                if mood_values
+                else None
+            ),
             "rag": {
                 "backend": "spring_haven_rag",
                 "state": rag_state,
@@ -421,45 +532,72 @@ class CompanionService:
         return self.memory.life_status(normalized)
 
     async def run_due_weekly_insights(self, *, now: int | None = None) -> dict[str, Any]:
-        """Phase 4a: condense the last 7 days of daily-digest memories into one
+        """Phase 4a: condense the last world-week of daily-digest memories into one
         weekly insight memory per save (source='weekly_insight').
 
-        Idempotency: source_event_id is a deterministic ISO week key, so
-        put_memory updates the same memory instead of duplicating.
+        #23 收尾:周键与窗口全部按各存档自己的世界时钟。
+        - 周键 = `world-w{世界周序号:04d}`,世界周 = [7n, 7n+1..) 世界日;
+        - 幂等:source_event_id 确定性;另查当前世界周桶内是否已有任何
+          weekly_insight 记忆(含旧现实周键存量),有则跳过 —— 旧档升级
+          不会对同一时段重复生成周反思。
         """
-        timestamp = max(1, int(now or time.time()))
-        week_key = self._iso_week_key(timestamp)
-        since = timestamp - 7 * 86_400
+        del now  # 周键与窗口按各存档世界时钟计算,不再读现实时间
         saves = self._life_save_ids()
         created = 0
         skipped = 0
         failed = 0
         for save_id in saves:
             try:
-                source_event_id = f"weekly-{week_key}"
+                world_now_value = self.memory.world_now(save_id)
+                week_index = int(world_now_value // 7)
+                week_key = f"world-w{week_index:04d}"
+                week_start = float(week_index * 7)
+                week_label = f"世界第 {week_index + 1} 周"
                 if self.memory.get_memory_by_source_event(
                     save_id=save_id,
                     source="weekly_insight",
-                    source_event_id=source_event_id,
+                    source_event_id=f"weekly-{week_key}",
+                ) or self.memory.weekly_insight_exists_in_world_week(
+                    save_id=save_id, week_start_world=week_start
                 ):
                     skipped += 1
                     continue
                 digests = self.memory.recent_digest_memories(
-                    save_id=save_id, since_unix=since, limit=40
+                    save_id=save_id, since_world=week_start, limit=40
                 )
                 if not digests:
                     skipped += 1
                     continue
+                # ADR-013 D2:归档清扫——本周被收走的记忆并入洞察上下文
+                archived = self.memory.archived_memories_in_world_week(
+                    save_id=save_id,
+                    week_start_world=week_start,
+                    week_end_world=week_start + 7.0,
+                )
                 memory = await self._weekly_insight_memory(
-                    save_id=save_id, week_key=week_key, digests=digests
+                    save_id=save_id,
+                    week_key=week_key,
+                    week_label=week_label,
+                    digests=digests,
+                    archived=archived,
                 )
                 if memory is None:
                     skipped += 1
                     continue
-                self.memory.put_memory(
+                record = self.memory.put_memory(
                     {**memory, "save_id": save_id},
                     source="weekly_insight",
                 )
+                if archived:
+                    # 淡出者留审计线(ADR-013 D2)
+                    self.memory.add_memory_links(
+                        save_id,
+                        str(record["memory_id"]),
+                        [str(item["memory_id"]) for item in archived],
+                        link_type="association",
+                        strength=0.6,
+                        reason="archived_sweep",
+                    )
                 created += 1
             except asyncio.CancelledError:
                 raise
@@ -468,15 +606,23 @@ class CompanionService:
                     "weekly insight failed for save %s: %s", save_id, type(exc).__name__
                 )
                 failed += 1
-        return {"week": week_key, "saves": len(saves), "created": created, "skipped": skipped, "failed": failed}
+        return {"saves": len(saves), "created": created, "skipped": skipped, "failed": failed}
 
     async def _weekly_insight_memory(
-        self, *, save_id: str, week_key: str, digests: list[dict[str, Any]]
+        self,
+        *,
+        save_id: str,
+        week_key: str,
+        week_label: str,
+        digests: list[dict[str, Any]],
+        archived: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         fallback = self._weekly_fallback_content(digests)
         memory: dict[str, Any] | None = None
         try:
-            memory = await self._weekly_with_provider(digests, week_key)
+            memory = await self._weekly_with_provider(
+                digests, week_key, week_label, archived=archived or []
+            )
         except Exception as exc:
             LOGGER.warning(
                 "weekly insight provider failed for save %s: %s; using fallback",
@@ -485,7 +631,7 @@ class CompanionService:
         if memory is None:
             memory = {
                 "kind": "identity",
-                "title": f"{week_key}的生活主题",
+                "title": f"{week_label}的生活主题",
                 "content": fallback,
                 "importance": 0.55,
                 "confidence": 0.85,
@@ -495,7 +641,11 @@ class CompanionService:
         return memory
 
     async def _weekly_with_provider(
-        self, digests: list[dict[str, Any]], week_key: str
+        self,
+        digests: list[dict[str, Any]],
+        week_key: str,
+        week_label: str,
+        archived: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         if not self.provider:
             return None
@@ -503,6 +653,13 @@ class CompanionService:
             f"- {str(item.get('title', '')).strip() or str(item.get('content', ''))[:60]}"
             for item in digests[:20]
         )
+        # ADR-013 D2:归档清扫——淡忘记忆标题并入上下文,让周反思承认它们
+        archived_text = ""
+        if archived:
+            archived_text = "\n本周淡忘(已归档)的记忆:\n" + "\n".join(
+                f"- {str(item.get('title', '')).strip() or str(item.get('content', ''))[:50]}"
+                for item in archived[:12]
+            )
         system_prompt = (
             "你是后台生活反思整理器。下面是一周内角色每天的生活记忆摘要。"
             "请从这些日子里提炼这一周生活的主题与角色自身的变化（心态、习惯、关系），"
@@ -513,7 +670,15 @@ class CompanionService:
         )
         reply = await self.provider.complete(
             system_prompt,
-            [{"role": "user", "content": f"周次：{week_key}\n一周记忆摘要：\n{digest_text}"}],
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        f"周次：{week_label}（{week_key}）\n一周记忆摘要：\n{digest_text}"
+                        f"{archived_text}"
+                    ),
+                }
+            ],
         )
         parsed = self._parse_digest_json(reply.text)
         if not parsed:
@@ -521,7 +686,7 @@ class CompanionService:
         first = parsed[0]
         return {
             "kind": "identity",
-            "title": str(first.get("title", "")).strip()[:120] or f"{week_key}的生活主题",
+            "title": str(first.get("title", "")).strip()[:120] or f"{week_label}的生活主题",
             "content": str(first.get("content", "")).strip()[:4_000],
             "importance": self._bounded_float(first.get("importance"), 0.55, 0.0, 1.0),
             "confidence": 0.85,
@@ -536,15 +701,252 @@ class CompanionService:
             return "这一周的生活平淡而安稳"
         return "这一周：\n- " + "\n- ".join(titles)
 
-    @staticmethod
-    def _iso_week_key(unix: int) -> str:
-        # #23 交界待定桩:rate=1.0 下 ISO 周与世界周恒等;倍率启用(rate≠1)时
-        # 需迁移为世界周键并处理既有 weekly source_event_id 的幂等映射(ADR-001)。
-        import datetime as _dt
+    # ===== ADR-013:夜织(世界时间驱动的巩固蒸馏) =====
 
-        d = _dt.datetime.fromtimestamp(unix, tz=_dt.timezone.utc)
-        iso = d.isocalendar()
-        return f"{iso[0]}-W{iso[1]:02d}"
+    async def run_due_nightly_consolidation(self) -> dict[str, Any]:
+        """夜织(ADR-013 D1):每个已关闭的世界日至多织出 1 条主题级记忆。
+
+        防洪:每存档每轮最多 2 个最旧的未织日;LLM 失败跳过重试,不用模板兜底。
+        """
+        woven = 0
+        skipped = 0
+        failed = 0
+        for save_id in self.memory.journey_save_ids():
+            try:
+                for due in self.memory.unconsolidated_world_days(save_id):
+                    scope = str(due["scope_role_id"])
+                    world_day = int(due["world_day"])
+                    memories = self.memory.world_day_memories(
+                        save_id, scope, world_day
+                    )
+                    if len(memories) < 3:
+                        skipped += 1
+                        continue
+                    memory = await self._nightweave_memory(
+                        save_id, world_day, memories
+                    )
+                    if memory is None:
+                        skipped += 1
+                        continue
+                    record = self.memory.put_memory(
+                        {**memory, "save_id": save_id, "scope_role_id": scope},
+                        source=f"consolidation_{scope}",
+                    )
+                    self.memory.add_memory_links(
+                        save_id,
+                        str(record["memory_id"]),
+                        [str(item["memory_id"]) for item in memories[:12]],
+                        link_type="association",
+                        strength=0.7,
+                        reason="consolidated",
+                    )
+                    woven += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "nightly weave failed for save %s: %s",
+                    save_id,
+                    type(exc).__name__,
+                )
+                failed += 1
+        return {"woven": woven, "skipped": skipped, "failed": failed}
+
+    async def _nightweave_memory(
+        self,
+        save_id: str,
+        world_day: int,
+        memories: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """单日夜织蒸馏(ADR-013 D1):只重组已有事实,禁止新增。"""
+        if not self.provider:
+            return None
+        items_text = "\n".join(
+            f"- {str(item.get('title', '')).strip() or str(item.get('content', ''))[:40]}"
+            f"：{str(item.get('content', ''))[:160]}"
+            for item in memories[:10]
+        )
+        system_prompt = (
+            "你是后台记忆织整器（夜织）。输入是角色某个世界日里的记忆条目。"
+            "请把这天的经历织成一条主题级长期记忆（当天经历的主题、变化、遗留的悬念），"
+            "从角色第一人称写。硬性约束：只能重组输入里已有的事实，禁止出现输入没有的"
+            "新人物、新事件、新数字。严格输出一个 JSON 对象："
+            '{"memories":[{"title":"简短标题","content":"80-160字",'
+            '"trigger_terms":["2-6个"],"importance":0.0,"valence":0.0}]}'
+            "importance 0..1 且 ≤0.65（织结节是提纯，不是新事件）；memories 数组至多 1 条。"
+        )
+        try:
+            reply = await self.provider.complete(
+                system_prompt,
+                [
+                    {
+                        "role": "user",
+                        "content": f"世界日第 {world_day + 1} 天的记忆条目：\n{items_text}",
+                    }
+                ],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning(
+                "nightweave provider failed for save %s: %s",
+                save_id,
+                type(exc).__name__,
+            )
+            return None
+        raw_memories, _claims, _mood = HeartloomOrganizer._parse(reply.text)
+        if not raw_memories:
+            return None
+        raw = raw_memories[0]
+        content = str(raw.get("content", "")).replace("\x00", " ").strip()[:600]
+        if not content:
+            return None
+        try:
+            importance = min(0.65, max(0.0, float(raw.get("importance", 0.55))))
+        except (TypeError, ValueError):
+            importance = 0.55
+        try:
+            valence = max(-1.0, min(1.0, float(raw.get("valence", 0.0))))
+        except (TypeError, ValueError):
+            valence = 0.0
+        terms = [
+            str(term).replace("\x00", " ").strip()[:40]
+            for term in (raw.get("trigger_terms") or [])[:6]
+            if str(term).strip()
+        ]
+        title = str(raw.get("title", "")).replace("\x00", " ").strip()[:120]
+        return {
+            "kind": "semantic",
+            "title": title or f"世界日 {world_day + 1} 的主题",
+            "content": content,
+            "trigger_terms": terms,
+            "importance": importance,
+            "confidence": 0.75,
+            "valence": valence,
+            "half_life_days": 180.0,
+            "source_event_id": f"nightly-world-d{world_day:04d}",
+        }
+
+    async def run_due_season_weave(self) -> dict[str, Any]:
+        """季织(ADR-013 D3):每 90 世界日,当季周织蒸馏成一条「这一季的我」。"""
+        woven = 0
+        skipped = 0
+        failed = 0
+        for save_id in self.memory.journey_save_ids():
+            try:
+                world_now_value = self.memory.world_now(save_id)
+                # 织「刚完整结束的那一季」:world_now=91 → 第 0 季 [0,90) 已完结
+                season_index = int(world_now_value // 90) - 1
+                if season_index < 0 or self.memory.season_weave_done(
+                    save_id, season_index
+                ):
+                    skipped += 1
+                    continue
+                season_start = float(season_index * 90)
+                insights = self.memory.memories_by_source_world_range(
+                    save_id, "weekly_insight", season_start, season_start + 90.0
+                )
+                if len(insights) < 2:
+                    skipped += 1
+                    continue
+                memory = await self._season_weave_memory(
+                    save_id, season_index, insights
+                )
+                if memory is None:
+                    skipped += 1
+                    continue
+                record = self.memory.put_memory(
+                    {
+                        **memory,
+                        "save_id": save_id,
+                        "source_event_id": f"season-s{season_index:03d}",
+                    },
+                    source="season_weave",
+                )
+                self.memory.add_memory_links(
+                    save_id,
+                    str(record["memory_id"]),
+                    [str(item["memory_id"]) for item in insights[:12]],
+                    link_type="milestone",
+                    strength=0.9,
+                    reason="season_weave",
+                )
+                self.memory.mark_season_weave(save_id, season_index)
+                woven += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning(
+                    "season weave failed for save %s: %s",
+                    save_id,
+                    type(exc).__name__,
+                )
+                failed += 1
+        return {"woven": woven, "skipped": skipped, "failed": failed}
+
+    async def _season_weave_memory(
+        self,
+        save_id: str,
+        season_index: int,
+        insights: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """季织蒸馏(ADR-013 D3):identity 记忆,常驻,只重组已有事实。"""
+        if not self.provider:
+            return None
+        items_text = "\n".join(
+            f"- {str(item.get('title', '')).strip()}: {str(item.get('content', ''))[:200]}"
+            for item in insights[:12]
+        )
+        system_prompt = (
+            "你是后台人生整理器（季织）。输入是角色某季度（90 世界日）的周反思列表。"
+            "请提炼「这一季的我」：这一季的基调、最重要的变化、最值得记住的几件事、"
+            "留下的约定或悬念，角色第一人称，80-200 字。硬性约束：只能重组输入里"
+            "已有的事实，不得新增人物、事件或数字。严格输出一个 JSON 对象："
+            '{"memories":[{"title":"简短标题","content":"...","valence":0.0}]}'
+            "memories 数组至多 1 条。"
+        )
+        try:
+            reply = await self.provider.complete(
+                system_prompt,
+                [
+                    {
+                        "role": "user",
+                        "content": f"第 {season_index} 季的周反思：\n{items_text}",
+                    }
+                ],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning(
+                "season weave provider failed for save %s: %s",
+                save_id,
+                type(exc).__name__,
+            )
+            return None
+        raw_memories, _claims, _mood = HeartloomOrganizer._parse(reply.text)
+        if not raw_memories:
+            return None
+        raw = raw_memories[0]
+        content = str(raw.get("content", "")).replace("\x00", " ").strip()[:800]
+        if not content:
+            return None
+        try:
+            valence = max(-1.0, min(1.0, float(raw.get("valence", 0.0))))
+        except (TypeError, ValueError):
+            valence = 0.0
+        title = str(raw.get("title", "")).replace("\x00", " ").strip()[:120]
+        return {
+            "kind": "identity",
+            "always_active": 1,
+            "title": title or f"第 {season_index} 季的我",
+            "content": content,
+            "trigger_terms": [f"第{season_index}季"],
+            "importance": 0.75,
+            "confidence": 0.85,
+            "valence": valence,
+            "half_life_days": 0.0,
+        }
 
     async def run_due_milestones(self, *, now: int | None = None) -> dict[str, Any]:
         """Phase 4b: deterministic milestone rules checked after digests.
@@ -573,7 +975,9 @@ class CompanionService:
         unlocked_now = 0
         existing = self.memory.unlocked_milestones(save_id)
         count = self.memory.memory_count(save_id)
-        digest_exists = bool(self.memory.recent_digest_memories(save_id=save_id, since_unix=0, limit=1))
+        digest_exists = bool(
+            self.memory.recent_digest_memories(save_id=save_id, since_world=-1.0, limit=1)
+        )
         rules: list[tuple[str, bool, str, float]] = [
             ("first_digest", digest_exists, "共同生活的第一页日记", 0.85),
             ("memories_10", count >= 10, "第十个心织回忆", 0.8),
@@ -648,12 +1052,11 @@ class CompanionService:
                 skipped += 1
                 continue
             try:
-                day_start, day_end = self._day_window_unix(day_key)
+                world_day = int(day_key.lstrip("w"))
                 events = self.memory.digest_day_events(
                     save_id=save_id,
                     role_id=role_id,
-                    day_start_unix=day_start,
-                    day_end_unix=day_end,
+                    world_day=world_day,
                 )
                 if not events:
                     self.memory.mark_digest_completed(
@@ -897,25 +1300,16 @@ class CompanionService:
 
     @staticmethod
     def _day_label(day_key: str) -> str:
+        # #23 收尾:day_key 为世界日键 `w{day:04d}`;旧现实日期键仅存留在历史文案里。
         parts = str(day_key).split("-")
         if len(parts) == 3:
             return f"{int(parts[1])}月{int(parts[2])}日"
+        if str(day_key).startswith("w"):
+            try:
+                return f"第 {int(str(day_key).lstrip('w')) + 1} 天"
+            except ValueError:
+                return str(day_key)
         return str(day_key)
-
-    @staticmethod
-    def _day_window_unix(day_key: str) -> tuple[int, int]:
-        import datetime as _datetime
-        import time as _time
-
-        parts = str(day_key).split("-")
-        if len(parts) != 3:
-            raise ValueError(f"invalid day_key: {day_key}")
-        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
-        start_date = _datetime.date(year, month, day)
-        next_date = start_date + _datetime.timedelta(days=1)
-        start = int(_time.mktime((start_date.year, start_date.month, start_date.day, 0, 0, 0, -1, -1, -1)))
-        end = int(_time.mktime((next_date.year, next_date.month, next_date.day, 0, 0, 0, -1, -1, -1)))
-        return start, end
 
     @staticmethod
     def _fmt_event_time(unix: int) -> str:
@@ -1012,6 +1406,7 @@ class CompanionService:
         )
         body_state = dict(role_state)
         body_state["role_id"] = role_id
+        offline_facts = self._current_facts(save_id, str(event["memory_query"]), memories)
         messages = self.prompts.messages(
             role,
             prompt,
@@ -1022,6 +1417,7 @@ class CompanionService:
             },
             memories,
             [],
+            current_facts=offline_facts,
         )
         provider_reply: ProviderReply = await self.provider.complete(
             self.prompts.system_prompt(role), messages
@@ -1207,7 +1603,11 @@ class CompanionService:
     async def backfill_memory_embeddings(
         self, *, save_id: str | None = None, batch: int = 16
     ) -> int:
-        """离线批量记忆的 embedding 限速回填(ADR-001:写入允许 NULL)。"""
+        """离线批量记忆的 embedding 限速回填。
+
+        ADR-001:写入允许 NULL;模型指纹不匹配的存量也纳入回填
+        (换 embedding 模型后自动整批重嵌,语义通道自愈)。
+        """
         settings = getattr(self.provider, "settings", None) if self.provider is not None else None
         if settings is None:
             return 0
@@ -1217,7 +1617,9 @@ class CompanionService:
         target_saves = [save_id] if save_id else self.memory.life_save_ids()
         total = 0
         for sid in target_saves:
-            rows = self.memory.memories_without_embedding(sid, limit=batch)
+            rows = self.memory.memories_without_embedding(
+                sid, limit=batch, model=str(profile.model)
+            )
             if not rows:
                 continue
             try:
@@ -1256,12 +1658,21 @@ class CompanionService:
             offset = int(str(raw.get("cursor", "")).strip() or "0")
         except (TypeError, ValueError) as exc:
             raise RequestValidationError("graph paging parameters are invalid") from exc
+        # ADR-010:时间游标(世界天);缺省为实时态
+        raw_as_of = str(raw.get("as_of_world", "")).strip()
+        as_of_world: float | None = None
+        if raw_as_of:
+            try:
+                as_of_world = float(raw_as_of)
+            except (TypeError, ValueError) as exc:
+                raise RequestValidationError("as_of_world must be a number") from exc
         return self.memory.graph_page(
             save_id=save_id,
             role_id=role_id,
             query=str(raw.get("query", "")),
             limit=limit,
             offset=offset,
+            as_of_world=as_of_world,
         )
 
     async def _polish_milestone_copy(
@@ -1343,6 +1754,29 @@ class CompanionService:
             )
         except (MemoryStoreError, TypeError, ValueError) as exc:
             raise RequestValidationError(str(exc)) from exc
+
+    def _current_facts(
+        self, save_id: str, query: str, memories: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """ADR-009 D4:按查询与召回记忆水合实体当前事实(失败静默为空)。"""
+        try:
+            entity_ids = self.memory.entities_for_context(
+                save_id=save_id,
+                query=str(query or ""),
+                memory_ids=[
+                    str(item.get("memory_id", ""))
+                    for item in (memories or [])
+                    if isinstance(item, dict)
+                ],
+            )
+            if not entity_ids:
+                return []
+            return self.memory.current_claims(
+                save_id=save_id, entity_ids=entity_ids, limit=12
+            )
+        except Exception as exc:  # 事实水合失败不阻塞对话主流程
+            LOGGER.warning("current facts hydration degraded: %s", type(exc).__name__)
+            return []
 
     def memory_graph(
         self,

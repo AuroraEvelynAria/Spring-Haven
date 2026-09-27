@@ -60,6 +60,7 @@ def build_app(
             memory_recent_messages=config.memory_recent_messages,
             memory_organizer_enabled=config.memory_organizer_enabled,
             memory_organizer_max_entries=config.memory_organizer_max_entries,
+            memory_rerank_enabled=config.memory_rerank_enabled,
             weather_location=config.weather_location,
             state_truth_source=config.state_truth_source,
         )
@@ -940,6 +941,28 @@ async def _life_scheduler_loop(app: web.Application) -> None:
                 raise
             except Exception:
                 LOGGER.exception("unexpected weekly insight scheduler failure")
+            try:
+                # ADR-013:夜织(世界日关闭后的巩固蒸馏)
+                nightly_result = await app[SERVICE_KEY].run_due_nightly_consolidation()
+                if int(nightly_result.get("woven", 0)) > 0:
+                    LOGGER.info("nightly weave woven: %s", nightly_result)
+                if int(nightly_result.get("failed", 0)) > 0:
+                    LOGGER.warning("nightly weave failures: %s", nightly_result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected nightly weave scheduler failure")
+            try:
+                # ADR-013:季织(每 90 世界日的「这一季的我」)
+                season_result = await app[SERVICE_KEY].run_due_season_weave()
+                if int(season_result.get("woven", 0)) > 0:
+                    LOGGER.info("season weave woven: %s", season_result)
+                if int(season_result.get("failed", 0)) > 0:
+                    LOGGER.warning("season weave failures: %s", season_result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("unexpected season weave scheduler failure")
             try:
                 milestone_result = await app[SERVICE_KEY].run_due_milestones()
                 if int(milestone_result.get("unlocked", 0)) > 0:
