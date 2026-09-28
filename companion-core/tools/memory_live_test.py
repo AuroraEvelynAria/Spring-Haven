@@ -315,6 +315,23 @@ async def main_async(keep: bool) -> int:
             + (f"(首条: {weave_nodes[0]['title']})" if weave_nodes else "")
         )
 
+        # ADR-015:实体星座契约(实体节点 + claim 边 + claim_source 缝合边)
+        constellation = store.graph_page(
+            save_id=SAVE_ID, role_id="", limit=200, include_entities=True
+        )
+        c_entities = [
+            n for n in constellation["nodes"] if n.get("node_type") == "entity"
+        ]
+        c_claims = [e for e in constellation["edges"] if e.get("link_type") == "claim"]
+        c_sources = [
+            e for e in constellation["edges"] if e.get("link_type") == "claim_source"
+        ]
+        c_dead = [e for e in c_claims if e.get("world_to")]
+        log(
+            f"  ✨ 星座: 实体节点 {len(c_entities)} / claim 边 {len(c_claims)}"
+            f"(失效 {len(c_dead)}) / claim_source 边 {len(c_sources)}"
+        )
+
         # ADR-012:心境基线(organizer mood_delta 汇入后的当前值)
         role_home = roles.get(ROLE_ID).mood_home
         mood = store.current_mood(SAVE_ID, ROLE_ID, home=role_home)

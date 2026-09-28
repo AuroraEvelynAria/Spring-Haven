@@ -1666,6 +1666,13 @@ class CompanionService:
                 as_of_world = float(raw_as_of)
             except (TypeError, ValueError) as exc:
                 raise RequestValidationError("as_of_world must be a number") from exc
+        # ADR-015:实体星座(实体节点 + claim 边);缺省关闭保持旧契约
+        include_entities = str(raw.get("include_entities", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         return self.memory.graph_page(
             save_id=save_id,
             role_id=role_id,
@@ -1673,6 +1680,7 @@ class CompanionService:
             limit=limit,
             offset=offset,
             as_of_world=as_of_world,
+            include_entities=include_entities,
         )
 
     async def _polish_milestone_copy(

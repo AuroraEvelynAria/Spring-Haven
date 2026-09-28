@@ -312,10 +312,27 @@ func _draw() -> void:
 		var ghost_amount := clampf(_edge_ghost_amount(edge), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
 		var highlighted := (source == _selected_id or target == _selected_id) and lit_amount > 0.5
+		# ADR-015:claim 边(实体↔实体)/claim_source 边(记忆→实体);
+		# 游标越过 world_to 的失效主张压暗 —— 「过去相信过」仍可见
+		var link_type := str(edge.get("link_type", ""))
+		var is_claim_edge := link_type == "claim" or link_type == "claim_source"
+		var dead_damp := 1.0
+		if is_claim_edge:
+			var world_to_variant = edge.get("world_to")
+			if world_to_variant != null and _time_cursor >= 0.0 and _time_cursor >= float(world_to_variant):
+				dead_damp = 0.32
+		var hovered_endpoint := (source == _hovered_id or target == _hovered_id) and lit_amount > 0.5
 		var edge_color: Color
 		var edge_width: float
 		# ADR-010:亮度经动画量平滑过渡 —— 游标拨过时边"渐亮"
-		if highlighted:
+		if is_claim_edge:
+			var claim_base := Color("#8A8078") if link_type == "claim_source" else Color("#D8B26A")
+			var claim_alpha := 0.16 if link_type == "claim_source" else 0.26 + strength * 0.40
+			if highlighted or hovered_endpoint:
+				claim_alpha += 0.22
+			edge_color = Color(claim_base, lerpf(GHOST_EDGE_ALPHA, claim_alpha, lit_amount) * dead_damp)
+			edge_width = lerpf(0.4, 0.5 if link_type == "claim_source" else 0.6 + strength * 0.8, lit_amount)
+		elif highlighted:
 			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + strength * 0.38, lit_amount))
 			edge_width = lerpf(0.4, 1.0 + strength * 2.2, lit_amount)
 		else:
@@ -328,6 +345,23 @@ func _draw() -> void:
 			edge_width,
 			true
 		)
+		# ADR-015:谓词标签只在端点选中/悬停时绘制(避免刷屏)
+		if is_claim_edge and lit_amount > 0.5 and (highlighted or hovered_endpoint):
+			var predicate := str(edge.get("predicate", ""))
+			if not predicate.is_empty():
+				var midpoint := (
+					_world_to_screen(_positions[source])
+					+ _world_to_screen(_positions[target])
+				) * 0.5
+				draw_string(
+					get_theme_default_font(),
+					midpoint + Vector2(-30.0, -3.0),
+					predicate,
+					HORIZONTAL_ALIGNMENT_CENTER,
+					60.0,
+					11,
+					Color(Color("#F2D58A"), 0.9 * lit_amount * dead_damp)
+				)
 	var font := get_theme_default_font()
 	var occupied_label_rects: Array[Rect2] = []
 	for node in _nodes:
@@ -335,36 +369,60 @@ func _draw() -> void:
 		var screen_position := _world_to_screen(_positions[node_id])
 		if screen_position.x < -80.0 or screen_position.y < -60.0 or screen_position.x > size.x + 80.0 or screen_position.y > size.y + 60.0:
 			continue
-		var radius := _node_radius(node) * sqrt(_zoom)
-		var color := _node_color(node)
+		var is_entity := _is_entity_node(node)
+		var radius := (9.0 if is_entity else _node_radius(node)) * sqrt(_zoom)
+		var color := _entity_color(node) if is_entity else _node_color(node)
 		var ghost_amount := clampf(_node_ghost_amount(node), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
 		var selected := node_id == _selected_id and lit_amount > 0.5
 		var hovered := node_id == _hovered_id and lit_amount > 0.5
-		if selected:
-			draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount))
-			draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 2.2, true)
-		elif hovered:
-			draw_circle(screen_position, radius + 5.0, Color(color, 0.18 * lit_amount))
-		# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
-		var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
-		draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount)))
-		if lit_amount > 0.02:
-			draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
-		if bool(node.get("always_active", false)) and lit_amount > 0.02:
-			draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
-		# ADR-013 D4:夜织/季织节点上方的细线弦月 glyph(自绘,非 emoji)
-		if _is_weave_node(node) and lit_amount > 0.02:
-			var moon_center := screen_position + Vector2(0.0, -radius - 8.0)
-			var moon_radius := maxf(3.5, radius * 0.38)
-			var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount)
-			draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
-			draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount), 1.1, true)
-		var should_label := (selected or hovered or (
-			_zoom >= 0.72 and float(node.get("importance", 0.5)) >= 0.66
-		)) and lit_amount > 0.5
+		if is_entity:
+			# ADR-015:实体 = 细环 + 中心点(空心),与记忆实心圆一眼区分
+			var ring_alpha := lerpf(0.92, GHOST_NODE_ALPHA, ghost_amount)
+			if selected:
+				draw_circle(screen_position, radius + 6.0, Color(color, 0.14 * lit_amount))
+				draw_arc(screen_position, radius + 4.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
+			elif hovered:
+				draw_arc(screen_position, radius + 3.0, 0.0, TAU, 32, Color(color, 0.6 * lit_amount), 1.4, true)
+			draw_arc(screen_position, radius, 0.0, TAU, 32, Color(color, ring_alpha), 1.6, true)
+			if lit_amount > 0.02:
+				draw_circle(screen_position, maxf(1.5, radius * 0.28), Color(color, ring_alpha))
+		else:
+			if selected:
+				draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount))
+				draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 2.2, true)
+			elif hovered:
+				draw_circle(screen_position, radius + 5.0, Color(color, 0.18 * lit_amount))
+			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
+			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
+			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount)))
+			if lit_amount > 0.02:
+				draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
+			if bool(node.get("always_active", false)) and lit_amount > 0.02:
+				draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
+			# ADR-013 D4:夜织/季织节点上方的细线弦月 glyph(自绘,非 emoji)
+			if _is_weave_node(node) and lit_amount > 0.02:
+				var moon_center := screen_position + Vector2(0.0, -radius - 8.0)
+				var moon_radius := maxf(3.5, radius * 0.38)
+				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount)
+				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
+				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount), 1.1, true)
+		var should_label := false
+		if is_entity:
+			# 实体标签:选中/悬停必显;普通态需放大且有一定主张量
+			should_label = selected or hovered or (
+				_zoom >= 0.85 and int(node.get("claim_count", 0)) >= 2
+			)
+		else:
+			should_label = selected or hovered or (
+				_zoom >= 0.72 and float(node.get("importance", 0.5)) >= 0.66
+			)
+		should_label = should_label and lit_amount > 0.5
 		if should_label:
-			var label := _short_title(str(node.get("display_title", node.get("title", "未命名记忆"))), 12)
+			var label := _short_title(
+				str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
+				12
+			)
 			var label_width := clampf(float(label.length()) * 13.0 + 18.0, 86.0, 190.0)
 			var label_position := screen_position + Vector2(-label_width * 0.5, radius + 17.0)
 			var label_rect := Rect2(label_position - Vector2(2.0, 14.0), Vector2(label_width + 4.0, 20.0))
@@ -481,6 +539,26 @@ func _is_weave_node(node: Dictionary) -> bool:
 	# ADR-013:夜织(consolidation_*)与季织(season_weave)节点画弦月 glyph
 	var source := str(node.get("source", ""))
 	return source.begins_with("consolidation_") or source == "season_weave"
+
+
+func _is_entity_node(node: Dictionary) -> bool:
+	# ADR-015:实体星座节点(细环 + 中心点)
+	return str(node.get("node_type", "")) == "entity"
+
+
+func _entity_color(node: Dictionary) -> Color:
+	# ADR-015:实体按种类取色(人物/器物/地点/事件/概念)
+	match str(node.get("kind", "concept")):
+		"person":
+			return Color("#E8C87A")
+		"object":
+			return Color("#8FBF9F")
+		"place":
+			return Color("#7FA8C9")
+		"event":
+			return Color("#C99AA8")
+		_:
+			return Color("#B9A9D0")
 
 
 func _scope_anchor(scope: String) -> Vector2:

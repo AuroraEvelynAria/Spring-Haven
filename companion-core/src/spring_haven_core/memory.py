@@ -1851,12 +1851,16 @@ class HeartloomStore:
         limit: int = 120,
         offset: int = 0,
         as_of_world: float | None = None,
+        include_entities: bool = False,
     ) -> dict[str, Any]:
         """分页节点 + 集合内部边(默认仅 Active,上限 300)。
 
         ADR-010:as_of_world(世界天)给定时光标回溯——只渲染该时刻之前
         创建的节点与之前建立的 memory_links 边;同时返回 world_range
         (全库最早/最晚世界日,不受 as_of 影响)供客户端滑杆取值。
+        ADR-015:include_entities=True 时追加实体节点(细环)与 claim 边
+        (实体↔实体,谓词标签)+ claim_source 边(记忆→实体,两图缝合);
+        claim 的 world_to 随载荷下发,由客户端调光表达「过去相信过」。
         """
         node_limit = max(1, min(300, int(limit)))
         offset = max(0, int(offset))
@@ -1954,6 +1958,121 @@ class HeartloomStore:
             }
             for row in nodes
         ]
+        # ADR-015:实体星座——实体节点 + claim 边(实体↔实体) + claim_source
+        # 边(记忆→实体)。开启时记忆节点补 node_id/node_type;缺省关闭保持
+        # 与旧版响应逐字段等价(旧消费者零影响)。
+        if include_entities:
+            for item in node_payload:
+                item["node_id"] = item["memory_id"]
+                item["node_type"] = "memory"
+            entity_asof = ""
+            entity_params: list[Any] = [save_id]
+            if as_of_value is not None:
+                entity_asof = "AND world_created_at <= ?"
+                entity_params.append(as_of_value)
+            with self._lock:
+                entity_rows = self._connection.execute(
+                    f"""
+                    SELECT entity_id, name, kind, aliases_json,
+                           world_created_at, world_updated_at
+                    FROM entities
+                    WHERE save_id = ? {entity_asof}
+                    ORDER BY world_updated_at DESC, name_norm
+                    LIMIT 150
+                    """,
+                    entity_params,
+                ).fetchall()
+                entity_ids = [str(row["entity_id"]) for row in entity_rows]
+                current_counts: dict[str, int] = {}
+                claim_rows: list[sqlite3.Row] = []
+                if entity_ids:
+                    placeholders = ",".join("?" for _ in entity_ids)
+                    for row in self._connection.execute(
+                        f"""
+                        SELECT subject_entity_id, COUNT(*) AS n
+                        FROM claims
+                        WHERE save_id = ? AND world_to IS NULL
+                          AND subject_entity_id IN ({placeholders})
+                        GROUP BY subject_entity_id
+                        """,
+                        [save_id, *entity_ids],
+                    ).fetchall():
+                        current_counts[str(row["subject_entity_id"])] = int(row["n"])
+                    claim_asof = ""
+                    claim_params: list[Any] = [save_id, *entity_ids, *entity_ids]
+                    if as_of_value is not None:
+                        claim_asof = "AND world_from <= ?"
+                        claim_params.append(as_of_value)
+                    claim_rows = self._connection.execute(
+                        f"""
+                        SELECT claim_id, subject_entity_id, predicate, object_entity_id,
+                               object_text, source_memory_id, confidence,
+                               world_from, world_to, superseded_by_claim_id
+                        FROM claims
+                        WHERE save_id = ?
+                          AND subject_entity_id IN ({placeholders})
+                          AND object_entity_id IN ({placeholders})
+                          {claim_asof}
+                        ORDER BY (world_to IS NULL) DESC, world_from DESC
+                        LIMIT 300
+                        """,
+                        claim_params,
+                    ).fetchall()
+            entity_nodes = [
+                {
+                    "node_id": str(row["entity_id"]),
+                    "node_type": "entity",
+                    "name": str(row["name"])[:80],
+                    "kind": str(row["kind"]),
+                    "aliases": _json_list(row["aliases_json"])[:8],
+                    "claim_count": current_counts.get(str(row["entity_id"]), 0),
+                    "world_created_at": float(row["world_created_at"]),
+                    "world_updated_at": float(row["world_updated_at"]),
+                }
+                for row in entity_rows
+            ]
+            memory_id_set = set(node_ids)
+            for row in claim_rows:
+                edges.append(
+                    {
+                        "link_id": str(row["claim_id"]),
+                        "src": str(row["subject_entity_id"]),
+                        "dst": str(row["object_entity_id"]),
+                        "link_type": "claim",
+                        "predicate": str(row["predicate"])[:40],
+                        "object_text": str(row["object_text"])[:120],
+                        "link_strength": float(row["confidence"]),
+                        "reason": "",
+                        "world_created_at": float(row["world_from"]),
+                        # None = 现行主张;数值 = 该时刻被顶替(信念修订可视化)
+                        "world_to": (
+                            float(row["world_to"])
+                            if row["world_to"] is not None
+                            else None
+                        ),
+                    }
+                )
+                source_memory = str(row["source_memory_id"] or "")
+                if source_memory and source_memory in memory_id_set:
+                    edges.append(
+                        {
+                            "link_id": "cs-" + str(row["claim_id"]),
+                            "src": source_memory,
+                            "dst": str(row["subject_entity_id"]),
+                            "link_type": "claim_source",
+                            "predicate": str(row["predicate"])[:40],
+                            "object_text": "",
+                            "link_strength": float(row["confidence"]),
+                            "reason": "",
+                            "world_created_at": float(row["world_from"]),
+                            "world_to": (
+                                float(row["world_to"])
+                                if row["world_to"] is not None
+                                else None
+                            ),
+                        }
+                    )
+            node_payload = node_payload + entity_nodes
         return {
             "nodes": node_payload,
             "edges": edges,

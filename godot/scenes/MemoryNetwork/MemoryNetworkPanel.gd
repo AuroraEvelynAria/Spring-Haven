@@ -301,10 +301,14 @@ func _load_graph() -> void:
 	_empty_state.show()
 	# ADR-010(修订):时间滑杆纯客户端调光 —— 始终加载全量图谱,
 	# 拖动滑杆只改画布亮度,不发请求、不重排布局
+	# ADR-015:并载实体星座(实体节点细环 + claim 边)
 	var result: Dictionary = await CompanionCore.get_heartloom_graph(
 		_selected_scope(),
 		_search_input.text,
-		200
+		200,
+		"",
+		-1.0,
+		true
 	)
 	if generation != _load_generation or not is_inside_tree():
 		return
@@ -330,7 +334,8 @@ func _load_graph() -> void:
 			if not node_variant is Dictionary:
 				continue
 			var node: Dictionary = (node_variant as Dictionary).duplicate(true)
-			node["id"] = str(node.get("memory_id", ""))
+			# ADR-015:实体节点用 node_id(entity_id);记忆节点回退 memory_id
+			node["id"] = str(node.get("node_id", node.get("memory_id", "")))
 			node["content"] = str(node.get("summary", ""))
 			mapped_nodes.append(node)
 	var mapped_edges: Array = []

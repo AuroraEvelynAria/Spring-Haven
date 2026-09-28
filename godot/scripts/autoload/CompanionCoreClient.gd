@@ -641,7 +641,7 @@ func get_life_status() -> Dictionary:
 
 func get_heartloom_graph(
 	role_id: String = "", query: String = "", limit: int = 120, cursor: String = "",
-	as_of_world: float = -1.0
+	as_of_world: float = -1.0, include_entities: bool = false
 ) -> Dictionary:
 	if not has_credentials():
 		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
@@ -657,6 +657,9 @@ func get_heartloom_graph(
 	# ADR-010:时间游标(世界天);负值 = 实时态,不携带参数
 	if as_of_world >= 0.0:
 		url += "&as_of_world=" + str(snappedf(as_of_world, 0.01))
+	# ADR-015:实体星座(实体节点 + claim 边)
+	if include_entities:
+		url += "&include_entities=1"
 	return await _request_json(
 		HTTPClient.METHOD_GET,
 		url,
