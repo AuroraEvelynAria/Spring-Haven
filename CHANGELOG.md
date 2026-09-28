@@ -12,6 +12,14 @@
 
 ### 新增
 
+- **rerank 短名单宽度 A/B 定案(维持 12)** —— 新工具
+  `companion-core/tools/rerank_ab.py`:冻结评测快照上两臂独立副本、判定口径与
+  recall_eval 一致的全量 A/B 驱动。实测:短名单 12 = 14/15(0.9333),20 = 13/15
+  ——宽窗口修复 q006 但把 q001/q002 挤出 top-5(近重复簇内重排),结论维持 12;
+  数据与定案记入 ADR-011 D5 修订注记
+- **Godot 无头编译预检脚本** —— `tools/godot_headless_check.ps1`:
+  `--headless --editor --quit` 以完整 autoload 上下文扫描全部 .gd(实测 118 个
+  零编译错误),把「GDScript 盲改必错」教训固化为可重复的一键检查
 - **UI v3 设计 token 落地** —— 预览稿官方色板接入主题表:`haru`(明昼·
   奶油木 #F6F1E7/#C96B2E)与 `haru_night`(夜话 #171521/#E8935C)两个新主题,
   设置面板即可切换;base_theme.tres 注明 token 真身位置
