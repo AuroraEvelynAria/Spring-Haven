@@ -40,6 +40,7 @@ var _graph: Dictionary = {}
 var _selected_node_id := ""
 var _load_generation := 0
 var _world_now := 0.0
+var _time_range_initialized := false
 
 
 func _ready() -> void:
@@ -367,7 +368,6 @@ func _load_graph() -> void:
 	_graph = {"nodes": mapped_nodes, "edges": mapped_edges}
 	_canvas.set_graph(_graph)
 	_canvas.set_min_strength(float(_strength_slider.value))
-	_canvas.set_time_cursor(_current_cursor_value())
 	# ADR-010:用响应里的世界时间量程校准滑杆(earliest→world_now,恒定量程)
 	var world_now := float(data.get("world_now", 0.0))
 	_world_now = world_now
@@ -383,13 +383,19 @@ func _load_graph() -> void:
 		_time_slider.step = 0.1
 		# 软边渐变带宽度 ≈ 时间线总量的 3%(限制在 1~45 世界日)
 		_canvas.set_time_fade_days(clampf((latest - earliest) * 0.03, 1.0, 45.0))
-		if _time_slider.value >= latest - 0.01:
+		if not _time_range_initialized or _time_slider.value >= latest - 0.01:
+			# 首次加载:滑杆初值 1.0 并无意义,直接落在「现在」;
+			# 之后仅在已处于「现在」时跟随量程右移(用户拨到某天则保持)
 			_time_slider.set_value_no_signal(latest)
+			_time_range_initialized = true
 		_update_time_label(_time_slider.value)
 	# 章节钉:织结节/周反思/里程碑 → 时间轴书签(纯客户端,随图重建)
 	_time_pins.set_range(earliest, latest)
 	_time_pins.set_pins(_collect_chapter_pins())
+	# 游标必须在滑杆量程校准/首开吸附之后再取值——否则画布停在滑杆初值上
+	# (实测首开会停在"世界第 2 天"的幽灵态)
 	_time_pins.set_cursor(_current_cursor_value())
+	_canvas.set_time_cursor(_current_cursor_value())
 	var node_count := int(data.get("node_count", 0))
 	_empty_state.visible = node_count == 0
 	_empty_state.text = "没有匹配的长期记忆" if node_count == 0 else ""
