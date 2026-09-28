@@ -52,7 +52,8 @@ func _draw() -> void:
 		# 游标之前诞生的钉才「已发生」;游标之后的钉随图谱一起变幽灵
 		var future := _cursor >= 0.0 and float(pin.day) > _cursor
 		var alpha := 0.22 if future else 0.9
-		var mark_size := 4.6 if index == _hover_index else 3.2
+		var count := int(pin.get("count", 1))
+		var mark_size := (4.6 if index == _hover_index else 3.2) + minf(2.4, float(count - 1) * 0.55)
 		if index == _hover_index:
 			draw_circle(center, mark_size + 3.0, Color(base, 0.16))
 		var points := PackedVector2Array([
@@ -88,7 +89,14 @@ func _get_tooltip(at_position: Vector2) -> String:
 		kind_label = "周织"
 	elif str(pin.kind) == "weave":
 		kind_label = "心织"
-	return "%s · 世界第 %d 天\n%s" % [kind_label, int(float(pin.day)) + 1, str(pin.title)]
+	var count := int(pin.get("count", 1))
+	var count_label := " · %d 个事件" % count if count > 1 else ""
+	return "%s%s · 世界第 %d 天\n%s" % [
+		kind_label,
+		count_label,
+		int(float(pin.day)) + 1,
+		str(pin.title),
+	]
 
 func _nearest_pin(position: Vector2) -> int:
 	var best := -1

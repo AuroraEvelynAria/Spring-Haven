@@ -124,14 +124,27 @@ func set_graph(graph: Dictionary) -> void:
 			_node_by_id[node_id] = node
 	var raw_edges = graph.get("edges", [])
 	if raw_edges is Array:
-		for edge_variant in raw_edges:
+		for index in raw_edges.size():
+			var edge_variant = raw_edges[index]
 			if not edge_variant is Dictionary:
 				continue
 			var edge: Dictionary = (edge_variant as Dictionary).duplicate(true)
-			if _node_by_id.has(str(edge.get("source", ""))) and _node_by_id.has(str(edge.get("target", ""))):
-				_edges.append(edge)
-	_compute_degrees()
+			var source := str(edge.get("source", ""))
+			var target := str(edge.get("target", ""))
+			if not _node_by_id.has(source) or not _node_by_id.has(target):
+				continue
+			# 生产 API 会提供 link_id；诊断/mock 省略时也必须按边独立计数、
+			# 幽灵化和 Top-K 筛选，不能把所有空 id 折成同一条边。
+			if str(edge.get("link_id", "")).is_empty():
+				edge["link_id"] = "fallback:%s:%s:%s:%d" % [
+					source,
+					target,
+					str(edge.get("link_type", "association")),
+					index,
+				]
+			_edges.append(edge)
 	_compute_primary_edges()
+	_compute_degrees()
 	var reused := _apply_cached_layout()
 	if not reused:
 		_initialize_positions()
@@ -174,10 +187,19 @@ func _compute_primary_edges() -> void:
 func _compute_degrees() -> void:
 	_degrees.clear()
 	for edge in _edges:
+		if not _is_primary_layout_edge(edge):
+			continue
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
 		_degrees[source] = int(_degrees.get(source, 0)) + 1
 		_degrees[target] = int(_degrees.get(target, 0)) + 1
+
+
+func _is_primary_layout_edge(edge: Dictionary) -> bool:
+	return (
+		float(edge.get("strength", 0.0)) >= _min_strength
+		and _primary_edge_ids.has(str(edge.get("link_id", "")))
+	)
 
 
 func _apply_cached_layout() -> bool:
@@ -216,6 +238,7 @@ func set_palette(theme_data: Dictionary) -> void:
 
 func set_min_strength(value: float) -> void:
 	_min_strength = clampf(value, 0.0, 1.0)
+	_compute_degrees()
 	_wake_physics()
 	queue_redraw()
 
@@ -224,7 +247,16 @@ func set_time_cursor(world_day: float) -> void:
 	"""ADR-010:客户端时间调光。只改亮度目标,不重置布局;
 	实际亮度经 _process 逐帧趋近 —— 拖动全程节点不动、过渡平滑。"""
 	_time_cursor = world_day
+	if _selected_id != "" and not is_node_selectable(_selected_id):
+		_selected_id = ""
+		_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
 	queue_redraw()
+
+
+func is_node_selectable(node_id: String) -> bool:
+	if not _node_by_id.has(node_id):
+		return false
+	return not _is_ghost_node(_node_by_id[node_id] as Dictionary)
 
 
 func set_time_fade_days(days: float) -> void:
@@ -324,7 +356,7 @@ func reset_view() -> void:
 
 
 func select_node_by_id(node_id: String, center_node := true) -> void:
-	if not _node_by_id.has(node_id):
+	if not is_node_selectable(node_id):
 		return
 	_selected_id = node_id
 	if center_node and _positions.has(node_id):
@@ -401,10 +433,13 @@ func _simulate(delta: float) -> void:
 				push += overlap * 0.55
 			forces[left_id] = (forces[left_id] as Vector2) - direction * push
 			forces[right_id] = (forces[right_id] as Vector2) + direction * push
-	# 2) 弹簧(可见边):偏软,允许受力振荡 —— 甩动回弹的手感来源
+	# 2) 弹簧只使用默认可见的主边。否则不可见关系仍会暗中把节点
+	# 拉成团，用户看见的结构与实际布局原因就会脱节。
 	for edge in _edges:
-		if float(edge.get("strength", 0.0)) < _min_strength:
+
+		if not _is_primary_layout_edge(edge):
 			continue
+
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
 		if not _positions.has(source) or not _positions.has(target):
@@ -617,47 +652,48 @@ func _draw() -> void:
 				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount * focus_mul)
 				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
 				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount * focus_mul), 1.1, true)
-		# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
-		# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
-		var should_label := false
-		if focus_active:
-			should_label = in_focus
-		else:
-			should_label = selected or hovered or _zoom >= 0.55
-		should_label = should_label and lit_amount > 0.5
-		if should_label:
-			var member_count := int(node.get("member_count", 1))
-			var label := _short_title(
-				str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
-				14
-			)
-			if member_count > 1:
-				label += " ×%d" % member_count
-			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
-			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
-			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
-			var label_rect := Rect2(
-				label_position - Vector2(3.0, 12.0),
-				Vector2(text_size.x + 6.0, 18.0)
-			)
-			var overlaps := false
-			if not selected and not hovered:
-				for occupied in occupied_label_rects:
-					if occupied.intersects(label_rect, true):
-						overlaps = true
-						break
-			if overlaps:
-				continue
-			occupied_label_rects.append(label_rect)
-			draw_string(
-				font,
-				label_position,
-				label,
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
-				11,
-				Color(_palette.text, 0.95 if selected or hovered else 0.72)
-			)
+			# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
+			# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
+			var should_label := false
+			if focus_active:
+				should_label = in_focus
+			else:
+				should_label = selected or hovered or _zoom >= 0.55
+			should_label = should_label and lit_amount > 0.5
+			if should_label:
+				var member_count := _visible_member_count(node)
+				var label := _short_title(
+					str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
+					14
+				)
+				if member_count > 1:
+					label += " ×%d" % member_count
+				# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
+				var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+				var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
+				var label_rect := Rect2(
+					label_position - Vector2(3.0, 12.0),
+					Vector2(text_size.x + 6.0, 18.0)
+				)
+				var overlaps := false
+				if not selected and not hovered:
+					for occupied in occupied_label_rects:
+						if occupied.intersects(label_rect, true):
+							overlaps = true
+							break
+				if overlaps:
+					continue
+				occupied_label_rects.append(label_rect)
+				draw_string(
+					font,
+					label_position,
+					label,
+					HORIZONTAL_ALIGNMENT_LEFT,
+					-1,
+					11,
+					Color(_palette.text, 0.95 if selected or hovered else 0.72)
+				)
+
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -689,8 +725,10 @@ func _gui_input(event: InputEvent) -> void:
 				if _dragged_id != "":
 					_velocities[_dragged_id] = _drag_velocity.limit_length(FLING_MAX)
 					_wake_physics()
-				_dragged_id = ""
-				_panning = false
+					_dragged_id = ""
+					_panning = false
+					_update_focus(_hovered_id)
+
 			accept_event()
 			return
 	if event is InputEventMouseMotion:
@@ -724,6 +762,9 @@ func _gui_input(event: InputEvent) -> void:
 func _hit_test(screen_position: Vector2) -> String:
 	for index in range(_nodes.size() - 1, -1, -1):
 		var node: Dictionary = _nodes[index]
+		# 历史快照中的未来节点只是视觉提示，不应截获点击、被拖动或泄露详情。
+		if _is_ghost_node(node):
+			continue
 		var node_id := str(node.id)
 		if not _positions.has(node_id):
 			continue
@@ -748,6 +789,19 @@ func _base_radius(node: Dictionary) -> float:
 	var importance := clampf(float(node.get("importance", 0.5)), 0.0, 1.0)
 	var recall_boost := minf(1.6, log(1.0 + float(node.get("recall_count", 0))) * 0.4)
 	return 4.5 + importance * 3.5 + recall_boost
+
+
+func _visible_member_count(node: Dictionary) -> int:
+	var members_variant = node.get("member_records", [])
+	if not members_variant is Array:
+		return int(node.get("member_count", 1))
+	if _time_cursor < 0.0:
+		return (members_variant as Array).size()
+	var visible := 0
+	for member_variant in members_variant:
+		if member_variant is Dictionary and float((member_variant as Dictionary).get("world_created_at", 0.0)) <= _time_cursor:
+			visible += 1
+	return visible
 
 
 func _node_radius(node: Dictionary) -> float:
