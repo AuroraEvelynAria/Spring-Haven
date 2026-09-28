@@ -312,23 +312,32 @@ class CompanionService:
             event_type=payload["event_type"],
             audience_roles=audience_roles,
         )
-        self.memory.remember_user_turn(
-            save_id=save_id,
-            source_event_id=source_message_id,
-            text=payload["text"],
-        )
-        fallback_memory = self.memory.remember_exchange(
-            save_id=save_id,
-            role_id=role.role_id,
-            source_event_id=request_id,
-            role_name=role.display_name,
-            user_text=payload["text"],
-            reply_text=visible_reply,
-        )
+        # 自主回合(客户端主动消息/氛围对话)的"用户文本"是系统脚手架提示词,
+        # 不是主人说的话:不落"主人曾说…"用户记忆、不建对话流水、不进整理器
+        # ——否则角色会把提示词本身当成主人说过的事长期记住(实测污染:
+        # "彼此的关系"记忆内容 = "这是你的后台生活主动联系时刻…")
+        autonomous = bool(local_state.get("autonomous_event"))
+        fallback_memory: dict[str, Any] = {}
+        if not autonomous:
+            self.memory.remember_user_turn(
+                save_id=save_id,
+                source_event_id=source_message_id,
+                text=payload["text"],
+            )
+            fallback_memory = self.memory.remember_exchange(
+                save_id=save_id,
+                role_id=role.role_id,
+                source_event_id=request_id,
+                role_name=role.display_name,
+                user_text=payload["text"],
+                reply_text=visible_reply,
+            )
 
         organizer_state = "disabled"
-        if self._organizer is not None and self._organizer.should_organize(
-            payload["text"], payload["event_type"]
+        if (
+            not autonomous
+            and self._organizer is not None
+            and self._organizer.should_organize(payload["text"], payload["event_type"])
         ):
             organizer_state = "queued"
             self._organizer.mark_queued(save_id, role)

@@ -261,6 +261,48 @@ class HeartloomServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("栀子花", serialized)
         self.assertEqual(self.provider.calls[0][0], self.provider.calls[1][0])
 
+    async def test_autonomous_turn_is_not_recorded_as_user_speech(self):
+        """主动消息的提示词是系统脚手架,不是主人发言。
+
+        不落"主人曾说…"用户记忆、不建对话流水、不进整理器。实测污染背景:
+        客户端 proactive 提示词曾被存成 source=conversation_user、通用标题
+        "彼此的关系"的记忆,在图谱里堆成近重复集群。
+        """
+        provider = SequenceProvider(["（主动消息）主人~今天阳光很好呀。"])
+        service = CompanionService(
+            self.roles,
+            provider,
+            HeartloomStore(self.root / "autonomous.sqlite3", self.roles.ids()),
+            memory_organizer_enabled=True,
+        )
+        try:
+            autonomous = payload(
+                "auto-1",
+                "这是你的后台生活主动联系时刻。请以你自己的人格，主动给主人发一条简短自然的中文消息。",
+            )
+            autonomous["state"]["autonomous_event"] = {
+                "kind": "proactive_message",
+                "reason": "missing_player",
+                "occurred_at_unix": 1_800_000_000,
+            }
+            reply = await service.chat(autonomous)
+            self.assertNotEqual(reply["memory"]["organizer_state"], "queued")
+            self.assertEqual(
+                service.memory.list_memories(save_id="heartloom-test"), []
+            )
+
+            # 对照:普通回合照常落用户记忆并排队整理
+            normal = await service.chat(payload("normal-1", "记住，我最喜欢栀子花。"))
+            self.assertEqual(normal["memory"]["organizer_state"], "queued")
+            sources = {
+                str(item["source"])
+                for item in service.memory.list_memories(save_id="heartloom-test")
+            }
+            self.assertIn("conversation_user", sources)
+        finally:
+            await service.wait_for_organizer()
+            service.close()
+
     async def test_idempotency_survives_service_restart(self):
         first = await self.service.chat(payload("persistent-request", "晚安。"))
         self.service.close()
