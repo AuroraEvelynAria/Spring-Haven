@@ -1,6 +1,13 @@
 """Heartloom 召回评测集驱动(ADR-001 D1 / 验收②「评测集上混合召回优于纯词法基线」)。
 
-评测集:tests/fixtures/recall_eval_set.json,期望命中已用真实存档标注。
+评测集(默认):tests/fixtures/recall_eval_set.json —— **全合成语料**,
+由 tools/build_synthetic_eval_store.py 确定性生成,不含任何真实用户数据
+(2026-09-28 安全整改:真实存档标注版已从仓库与全部 git 历史撤出)。
+本机真实存档回归(gitignored,永不入库):
+
+    python tools/recall_eval.py --db user_data/heartloom_eval_snapshot.sqlite3 \
+        --fixture user_data/recall_eval_set.real.json
+
 判定规则(2026-09-28 修正为按记忆归属):每条期望记忆必须出现在其所有者
 角色的 top-N(默认 5)召回结果中;'*' 家庭共享记忆任一角色看到即算。
 （旧口径「任一角色全覆盖」对跨私有作用域的期望结构性不可满足。）
@@ -9,7 +16,8 @@
   - 其余零期望用例(如 q009 二手记忆):标注为 pending,不计入通过率。
 
 用法:
-    python tools/recall_eval.py --db user_data/heartloom_eval_snapshot.sqlite3
+    python tools/recall_eval.py                          # 合成语料(自动构建临时库)
+    python tools/recall_eval.py --db <存档副本> --fixture <夹具>
     python tools/recall_eval.py --json   # 机器可读输出
 
 评测在数据库副本上运行(record_access=False),不会触碰原始存档。
@@ -303,7 +311,10 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
 
-    if not args.db.is_file():
+    # 默认参数 = 合成语料模式(即使本机存在真实快照也忽略它):
+    # 夹具与语料必须同源,真实存档回归必须显式 --db + --fixture 成对给出
+    synthetic_mode = args.db == DEFAULT_DB and args.fixture == DEFAULT_FIXTURE
+    if not synthetic_mode and not args.db.is_file():
         print(f"eval db not found: {args.db}", file=sys.stderr)
         print(
             "先用 sqlite3 backup API 从活档做只读快照,"
@@ -311,7 +322,27 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    result = evaluate(args.db, args.fixture, limit=args.limit, freeze=not args.no_freeze)
+
+    tmp = None
+    if synthetic_mode:
+        try:
+            from build_synthetic_eval_store import build_synthetic_eval_store
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from build_synthetic_eval_store import build_synthetic_eval_store
+        tmp = tempfile.TemporaryDirectory()
+        build_synthetic_eval_store(Path(tmp.name) / "evalsyn.sqlite3")
+        db_path = Path(tmp.name) / "evalsyn.sqlite3"
+    else:
+        db_path = args.db
+
+    try:
+        result = evaluate(
+            db_path, args.fixture, limit=args.limit, freeze=not args.no_freeze
+        )
+    finally:
+        if tmp is not None:
+            tmp.cleanup()
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

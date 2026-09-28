@@ -75,6 +75,14 @@
 
 ### 修复
 
+- **评测夹具脱敏(公开仓库安全整改)** —— 旧 recall_eval_set.json 含真实
+  存档衍生数据(真实记忆 ID + 真实游玩主题查询 + 存档规模注记),已连同
+  全部 git 历史一并抹除(git filter-repo 重写 69 提交)——公开仓库不留给
+  下载者任何真实存档痕迹。评测改为确定性合成语料:
+  tools/build_synthetic_eval_store.py 生成工坊/家务类中性主题语料与配套
+  夹具(CI 棘轮 = 合成语料 14/14 = 1.0,全平台可跑不依赖本地存档);
+  真实存档回归锚移至本机 user_data/(recall_eval_set.real.json + 快照,
+  gitignored),显式 --db --fixture 成对使用
 - **传闻传播 importance 钳制** —— 传播 LLM 会照抄提示词样例里的 importance
   值(实弹 livetest2 实得 0.0),传闻记忆直接沉出听者召回。现按确定性回退的
   同款贬值规则钳制:下限 `max(0.4, 源importance−0.2)`、上限不超过源事件;

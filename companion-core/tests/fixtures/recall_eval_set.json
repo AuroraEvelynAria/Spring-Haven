@@ -1,0 +1,175 @@
+{
+  "_comment": "ADR-001 混合召回评测集 —— 全合成语料版(2026-09-28 安全整改)。\n本夹具由 tools/build_synthetic_eval_store.py 确定性生成:全部记忆为\n工坊/家务类合成内容,记忆 ID 由 source_event_id 派生,不含任何真实\n用户数据。真实存档回归锚保留在本机 user_data/recall_eval_set.real.json\n(gitignored),配合 user_data/heartloom_eval_snapshot.sqlite3 本地使用。\n判定口径见 tests/test_recall_eval.py 与 tools/recall_eval.py。",
+  "_usage": "tests/test_recall_eval.py 加载并驱动:CI 上对合成语料全量回归;\n本机真实存档棘轮见测试文件内的 RecallEvalSnapshotTests(缺本地\n快照/真实夹具时自动跳过)。",
+  "cases": [
+    {
+      "id": "q001",
+      "query": "阳台晨读",
+      "expect_memory_ids": [
+        "hm_1d23fd856004765df9fe6ae9965d310c55d8304e"
+      ],
+      "expect_actor": "ling",
+      "notes": "routine/semantic:合成日常习惯"
+    },
+    {
+      "id": "q002",
+      "query": "乌龙茶的味道",
+      "expect_memory_ids": [
+        "hm_162a15b584d74fb12e28793e3284a0491cf3d1f6"
+      ],
+      "expect_actor": "ling",
+      "notes": "偏好类记忆"
+    },
+    {
+      "id": "q003",
+      "query": "邮票册",
+      "expect_memory_ids": [
+        "hm_1907fa27551aba68ba45bc0b67dfce73021f70bd"
+      ],
+      "expect_actor": "nai",
+      "notes": "偏好类记忆"
+    },
+    {
+      "id": "q004",
+      "query": "那台旧收音机后来怎么样了",
+      "expect_memory_ids": [
+        "hm_2f82b9a49c0c00039b5128d1a982b289257e15f3"
+      ],
+      "expect_actor": "ling",
+      "notes": "episodic:改写式查询,依赖词法锚"
+    },
+    {
+      "id": "q005",
+      "query": "蓝陶壶",
+      "expect_memory_ids": [
+        "hm_3f344a0318250ae0d701a2327a45732c9067da0e"
+      ],
+      "expect_actor": "nai",
+      "notes": "episodic"
+    },
+    {
+      "id": "q006",
+      "query": "铜灯擦干净了吗",
+      "expect_memory_ids": [
+        "hm_5d43421c14a5fb4e3d53740c990c6b3f38de22dd"
+      ],
+      "expect_actor": "",
+      "notes": "'*' 家庭共享:任一角色可见即算"
+    },
+    {
+      "id": "q007",
+      "query": "主人的动手能力怎么样",
+      "expect_memory_ids": [
+        "hm_c50f4144a8b979be199f855f5dd5dfbd124d37a2"
+      ],
+      "expect_actor": "ling",
+      "notes": "identity/always_active"
+    },
+    {
+      "id": "q008",
+      "query": "门垫下的钥匙,还有小奈练的曲子",
+      "expect_memory_ids": [
+        "hm_f85bbd1eb8e35f8233c4293d06ca314c6a8eeab8",
+        "hm_cf1f2193fb3ee6773fc3bed4d128f4bef57e634f"
+      ],
+      "expect_actor": "",
+      "notes": "跨私有作用域:每条期望记忆须在其所有者角色的 top-N"
+    },
+    {
+      "id": "q009",
+      "query": "听说的新鲜事",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "pending:合成语料无 heard_from 记忆,保留传播链用例位"
+    },
+    {
+      "id": "q010",
+      "query": "摇椅",
+      "expect_memory_ids": [
+        "hm_530be42b30217ad82bd5c2d3a584ecfe2557fef4"
+      ],
+      "expect_actor": "ling",
+      "notes": "episodic"
+    },
+    {
+      "id": "q011",
+      "query": "橘子皮干什么用了",
+      "expect_memory_ids": [
+        "hm_76a79e89796381f1cd4596990975e236870ed07d"
+      ],
+      "expect_actor": "nai",
+      "notes": "episodic"
+    },
+    {
+      "id": "q012",
+      "query": "星图",
+      "expect_memory_ids": [
+        "hm_dd9497bfc0c3b2cd28a133a5a3409c4039860ad0"
+      ],
+      "expect_actor": "",
+      "notes": "'*' 家庭共享"
+    },
+    {
+      "id": "q013",
+      "query": "第一百个心织回忆",
+      "expect_memory_ids": [
+        "hm_7c439fade766f24cba49e607150928defd45a189"
+      ],
+      "expect_actor": "",
+      "notes": "里程碑记忆(source=milestone,always_active)"
+    },
+    {
+      "id": "q014",
+      "query": "书房的台灯还闪吗",
+      "expect_memory_ids": [
+        "hm_06e2e6ebf9ddc823feb3f8a8a5f08427011e2857"
+      ],
+      "expect_actor": "ling",
+      "notes": "episodic"
+    },
+    {
+      "id": "q015",
+      "query": "腌萝卜",
+      "expect_memory_ids": [
+        "hm_ffc1a3f55e65fca09974f1351132f9575567042d"
+      ],
+      "expect_actor": "nai",
+      "notes": "episodic"
+    },
+    {
+      "id": "q016",
+      "query": "季度财报",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "负例:无相关记忆,期望无词法泄漏(仅 always_active 可出现)"
+    },
+    {
+      "id": "q017",
+      "query": "",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "保留位"
+    },
+    {
+      "id": "q018",
+      "query": "",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "保留位"
+    },
+    {
+      "id": "q019",
+      "query": "",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "保留位"
+    },
+    {
+      "id": "q020",
+      "query": "",
+      "expect_memory_ids": [],
+      "expect_actor": "",
+      "notes": "保留位"
+    }
+  ]
+}
