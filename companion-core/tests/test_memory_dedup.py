@@ -48,14 +48,14 @@ class UserTurnDedupTests(unittest.TestCase):
         )
         self.assertEqual(first["memory_id"], second["memory_id"], "重复动作应强化同一条记忆")
         self.assertEqual(self._count(first["content"]), 1)
-        # 强化时 intrinsic 按唤醒奖励同幅度增长(默认 0.5 → 至少 0.55)
+        # 强化时 intrinsic 按乘法稳定度增长(ADR-014:默认 1.0 → ×1.5)
         intrinsic = float(
             self.store._connection.execute(
                 "SELECT intrinsic FROM memory_entries WHERE memory_id = ?",
                 (second["memory_id"],),
             ).fetchone()[0]
         )
-        self.assertGreaterEqual(intrinsic, 0.55)
+        self.assertGreaterEqual(intrinsic, 1.5)
 
     def test_repeated_action_outside_window_creates_new_episode(self):
         self.store.remember_user_turn(

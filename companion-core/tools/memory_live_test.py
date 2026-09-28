@@ -397,7 +397,7 @@ async def main_async(keep: bool) -> int:
         dormant_count = sum(1 for m in after_memories if m["lifecycle"] == "dormant")
         archived_count = sum(1 for m in after_memories if m["lifecycle"] == "archived")
         log(f"  生命周期: dormant {dormant_count} 条 / archived {archived_count} 条")
-        log(f"  唤醒奖励(intrinsic +0.05/次): {len(rewards)} 条记忆获得奖励")
+        log(f"  唤醒奖励(ADR-014 乘法稳定度 ×1.5/次): {len(rewards)} 条记忆获得奖励")
 
         # 4) embedding 通道覆盖
         embedded = sum(1 for m in memories if m["embedding_model"])

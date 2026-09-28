@@ -50,7 +50,6 @@ class MoodMigrationTests(unittest.TestCase):
                     "SELECT value FROM heartloom_meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
                 self.assertEqual(str(version), str(SCHEMA_VERSION))
-                self.assertEqual(SCHEMA_VERSION, 9)
                 self.assertTrue(Path(str(path) + ".pre-v9.backup").is_file())
             finally:
                 store.close()

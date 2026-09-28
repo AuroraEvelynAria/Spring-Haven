@@ -204,7 +204,7 @@ class RecallRerankTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(str(row["lifecycle"]), "active")
         self.assertEqual(int(row["recall_count"]), 1)
-        self.assertGreater(float(row["intrinsic"]), 0.5)
+        self.assertGreater(float(row["intrinsic"]), 1.0)  # ADR-014:1.0 → ×1.5
         # 未入选的记忆不受影响
         others = self.store._connection.execute(
             "SELECT COUNT(*) FROM memory_entries WHERE recall_count > 0"

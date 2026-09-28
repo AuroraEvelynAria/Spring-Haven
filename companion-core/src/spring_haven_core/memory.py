@@ -16,7 +16,7 @@ from typing import Any, Iterable
 
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 # 离线投递 TTL:7 世界天(#23 迁移后按 world_time 计算,不再使用现实时间)。
 LIFE_OUTBOX_TTL_WORLD_DAYS = 7.0
 # 三态生命周期阈值(ADR-001 D5,后端常量,不开放 UI 配置;Phase 3 启用)。
@@ -31,12 +31,14 @@ MOOD_WRITE_MIN_WORLD_DELTA = 0.05
 # 纯语义入池门槛(ADR-001):查询词面与记忆零交集时,余弦 ≥ 0.55 的同义改写
 # 仍应参评;实测 BGE-M3 中文改写对 ≈0.61-0.65,无关中段 ≈0.49-0.50,取中值。
 SEMANTIC_ONLY_ADMISSION = 0.775  # 即 cosine ≥ 0.55(semantic = (cos+1)/2)
-# ADR-001 D1:双参数衰减 + 唤醒奖励(每次召回 intrinsic 增加,上限 1.0)。
-WAKE_REWARD_PER_RECALL = 0.05
+# ADR-014(艾宾浩斯正式化):intrinsic 是记忆的稳定度系数——有效半衰期 =
+# half_life × intrinsic(1.0 = 标称半衰期,越高衰减越慢)。每次成功召回/复发
+# 乘以 WAKE_GROWTH_FACTOR(间隔重复的稳定度增长),封顶 WAKE_REWARD_CAP。
+WAKE_GROWTH_FACTOR = 1.5
 # 同一用户动作原文在该窗口内重复出现时,强化既有记忆而不是再插一条逐字副本
 # (#22 复读根因:逐字副本被唤醒奖励越推越强,召回被模板刷屏)
 USER_TURN_REINFORCEMENT_WINDOW_WORLD_DAYS = 2.0
-WAKE_REWARD_CAP = 1.0
+WAKE_REWARD_CAP = 4.0
 # #15 中文语义矛盾词对:冲突检测用(前=正面,后=负面列表)
 CONTRADICTION_PAIRS = [
     ("喜欢", ["不喜欢", "讨厌", "反感", "厌恶", "不再喜欢"]),
@@ -322,7 +324,7 @@ class HeartloomStore:
             last_recalled_at INTEGER NOT NULL DEFAULT 0,
             recall_count INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
-            intrinsic REAL NOT NULL DEFAULT 0.5
+            intrinsic REAL NOT NULL DEFAULT 1.0
         );
         CREATE INDEX IF NOT EXISTS idx_memory_scope
             ON memory_entries(save_id, scope_role_id, enabled, importance DESC);
@@ -539,6 +541,9 @@ class HeartloomStore:
         # v9(ADR-012):PAD 心境基线,纯新增表零回填,备份惯例照旧
         if stored_version is not None and stored_version < 9 and self.path != ":memory:":
             self.backup_to(str(self.path) + ".pre-v9.backup")
+        # v10(ADR-014):艾宾浩斯正式化,存量 intrinsic 按倒数重映射,升级前备份
+        if stored_version is not None and stored_version < 10 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v10.backup")
         with self._lock, self._connection:
             self._connection.executescript(schema)
             stored_version = self._read_schema_version()
@@ -709,6 +714,20 @@ class HeartloomStore:
                             for row in outbox_rows
                         ],
                     )
+            # ===== v10(ADR-014):艾宾浩斯正式化,存量 intrinsic 倒数重映射 =====
+            # 旧实现 effective_half_life = half_life / intrinsic 把"越常回忆
+            # 越慢忘"的护盾写反成了"越快忘";新语义 S = half_life × intrinsic。
+            # 迁移瞬间保持每条记忆的有效半衰期不变:intrinsic' = 1/intrinsic,
+            # clamp [1.0, 4.0](旧值域 [0.5,1.0] 映射到 [1.0,2.0],完全等价;
+            # 罕见的 <0.25 值封顶 4.0,与新的稳定度上限一致)。
+            if stored_version is not None and stored_version < 10:
+                self._connection.execute(
+                    """
+                    UPDATE memory_entries
+                    SET intrinsic = MIN(?, MAX(1.0, 1.0 / MAX(0.05, intrinsic)))
+                    """,
+                    (WAKE_REWARD_CAP,),
+                )
             self._set_meta("schema_version", str(SCHEMA_VERSION))
             self._set_meta("engine", "heartloom")
             self._set_meta("display_name", HEARTLOOM_DISPLAY_NAME)
@@ -852,7 +871,7 @@ class HeartloomStore:
         importance = _bounded_float(raw.get("importance", 0.65), 0.0, 1.0, "importance")
         confidence = _bounded_float(raw.get("confidence", 1.0), 0.0, 1.0, "confidence")
         valence = _bounded_float(raw.get("valence", 0.0), -1.0, 1.0, "valence")
-        intrinsic = _bounded_float(raw.get("intrinsic", 0.5), 0.0, 1.0, "intrinsic")
+        intrinsic = _bounded_float(raw.get("intrinsic", 1.0), 0.0, 4.0, "intrinsic")
         default_half_life = 0.0 if source == "manual" else 120.0
         half_life = _bounded_float(
             raw.get("half_life_days", default_half_life), 0.0, 36_500.0, "half_life_days"
@@ -970,13 +989,13 @@ class HeartloomStore:
                 <= USER_TURN_REINFORCEMENT_WINDOW_WORLD_DAYS
             ):
                 # 短期内同一动作原文重复:强化既有记忆而非插入逐字副本。
-                # 复发是保留价值信号,intrinsic 与唤醒奖励同幅度增长。
+                # 复发是保留价值信号,intrinsic 与唤醒奖励同为乘法稳定度增长。
                 self._connection.execute(
                     """
                     UPDATE memory_entries
                     SET updated_at = ?, world_updated_at = ?, confidence = 1.0,
                         importance = MAX(importance, ?),
-                        intrinsic = MIN(?, intrinsic + ?)
+                        intrinsic = MIN(?, intrinsic * ?)
                     WHERE memory_id = ?
                     """,
                     (
@@ -984,7 +1003,7 @@ class HeartloomStore:
                         world_now_value,
                         importance,
                         WAKE_REWARD_CAP,
-                        WAKE_REWARD_PER_RECALL,
+                        WAKE_GROWTH_FACTOR,
                         str(row["memory_id"]),
                     ),
                 )
@@ -1316,6 +1335,7 @@ class HeartloomStore:
                         graph_boost[side] = max(graph_boost.get(side, 0.0), strength)
 
         scored: list[tuple[float, sqlite3.Row]] = []
+        decays: dict[str, float] = {}
         normalized_query = _normalize_text(query)
         for row in rows:
             terms = term_weights.get(str(row["memory_id"]), {})
@@ -1329,15 +1349,17 @@ class HeartloomStore:
             # 与稀有触发拉成同分,词法通道失去区分度(ADR-001 D2)。
             lexical = min(1.0, lexical)  # 归一化到 0-1,保证各通道量纲一致(ADR-001 D1)
             # 衰减/recency 全部基于 world_time(世界天),不再读取现实时间(#23)
-            # 双参数衰减(ADR-001 D1):intrinsic 越高衰减越慢;half_life=0 → 永不衰减
+            # 双参数衰减(ADR-014):有效半衰期 = half_life × intrinsic,
+            # intrinsic 越高衰减越慢(旧实现的除法把护盾方向写反,已修正)
             age_days = max(0.0, world_now_value - float(row["world_updated_at"]))
             half_life = float(row["half_life_days"])
             entry_intrinsic = max(0.05, float(row["intrinsic"]))
             if half_life <= 0.0:
                 decay = 1.0
             else:
-                effective_half_life = half_life / entry_intrinsic
+                effective_half_life = half_life * entry_intrinsic
                 decay = math.pow(0.5, age_days / effective_half_life)
+            decays[str(row["memory_id"])] = decay
             importance = float(row["importance"]) * decay
             recency = math.pow(0.5, age_days / 30.0)
             priority = (int(row["priority"]) + 10) / 20.0
@@ -1380,7 +1402,16 @@ class HeartloomStore:
                     continue
                 seen_user_turn_contents.add(content_key)
             deduped.append((score, row))
-        return [self._memory_row(row, score=score) for score, row in deduped]
+        # ADR-014:recall_decay = R(t) 可提取性(0.5^(age/有效半衰期)),
+        # 供记忆网络展示衰减曲线;不影响既有排序通道
+        result: list[dict[str, Any]] = []
+        for score, row in deduped:
+            item = self._memory_row(row, score=score)
+            item["recall_decay"] = round(
+                decays.get(str(row["memory_id"]), 1.0), 4
+            )
+            result.append(item)
+        return result
 
     def recall(
         self,
@@ -1453,10 +1484,10 @@ class HeartloomStore:
                         f"""
                         UPDATE memory_entries
                         SET last_recalled_at = ?, last_recalled_world = ?, recall_count = recall_count + 1,
-                            intrinsic = MIN(?, intrinsic + ?)
+                            intrinsic = MIN(?, intrinsic * ?)
                         WHERE save_id = ? AND memory_id IN ({placeholders})
                         """,
-                        (now, world_now_value, WAKE_REWARD_CAP, WAKE_REWARD_PER_RECALL, save_id, *ids),
+                        (now, world_now_value, WAKE_REWARD_CAP, WAKE_GROWTH_FACTOR, save_id, *ids),
                     )
                 self._set_meta("last_recall_at", str(now))
                 self._set_meta("last_recall_count", str(len(ids)))
