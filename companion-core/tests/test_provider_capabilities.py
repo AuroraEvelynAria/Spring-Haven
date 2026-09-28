@@ -42,6 +42,7 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.environment.start()
         self.authorizations = []
         self.failure_calls = 0
+        self.transient_calls = 0
         self.empty_reply_calls = 0
         self.empty_reply_payloads = []
         self.invalid_json_calls = 0
@@ -114,6 +115,15 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.failure_calls += 1
             return web.json_response(
                 {"error": {"message": "Insufficient Balance"}}, status=402
+            )
+        if payload.get("model") == "transient-400-once":
+            self.transient_calls += 1
+            if self.transient_calls == 1:
+                return web.json_response(
+                    {"error": {"message": "inference request is invalid"}}, status=400
+                )
+            return web.json_response(
+                {"choices": [{"message": {"content": "replayed ok"}, "finish_reason": "stop"}]}
             )
         if payload.get("model") == "empty-once":
             self.empty_reply_calls += 1
@@ -506,6 +516,63 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
         status = self.provider.circuit_status()["chat"]
         self.assertEqual(status["active_candidate_id"], "backup")
         self.assertEqual(self.failure_calls, 1)
+
+    async def test_transient_masquerade_400_replays_same_candidate(self):
+        # 过载伪装的 400("inference request is invalid")同一请求秒级重放即 200
+        # (实弹 livetest1/livetest2 双双命中):应在同一候选上先重放一次,
+        # 而不是立刻消耗 failover 链。
+        self.settings.update(
+            base_url=str(self.server.make_url("/v1")).rstrip("/"),
+            model="transient-400-once",
+        )
+        reply = await self.provider.complete(
+            "system", [{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(reply.text, "replayed ok")
+        self.assertEqual(self.transient_calls, 2)
+        status = self.provider.circuit_status()["chat"]
+        self.assertEqual(status["active_candidate_id"], "primary")
+
+    async def test_transient_masquerade_400_retry_does_not_switch_to_fallback(self):
+        # 主档抖一次但重放成功时,备用通道不应被切换占用。
+        fallback_calls = []
+        fallback_app = web.Application()
+
+        async def fallback_chat(request):
+            fallback_calls.append(await request.json())
+            return web.json_response(
+                {"choices": [{"message": {"content": "backup reply"}, "finish_reason": "stop"}]}
+            )
+
+        fallback_app.router.add_post("/v1/chat/completions", fallback_chat)
+        fallback_server = TestServer(fallback_app)
+        await fallback_server.start_server()
+        try:
+            self.settings.update(
+                base_url=str(self.server.make_url("/v1")).rstrip("/"),
+                model="transient-400-once",
+            )
+            self.settings.update_fallbacks(
+                "chat",
+                [{
+                    "id": "backup-t400",
+                    "label": "Backup T400",
+                    "base_url": str(fallback_server.make_url("/v1")).rstrip("/"),
+                    "model": "fallback-model",
+                    "enabled": True,
+                    "protocol": "openai_chat",
+                    "inherit_chat_key": False,
+                }],
+            )
+            reply = await self.provider.complete(
+                "system", [{"role": "user", "content": "hi"}]
+            )
+            self.assertEqual(reply.text, "replayed ok")
+            self.assertEqual(fallback_calls, [])
+            status = self.provider.circuit_status()["chat"]
+            self.assertEqual(status["active_candidate_id"], "primary")
+        finally:
+            await fallback_server.close()
 
     async def test_each_capability_has_a_redacted_live_diagnostic(self):
         for capability in ["chat", "vision", "embedding", "rerank"]:

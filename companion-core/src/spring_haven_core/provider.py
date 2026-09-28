@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -506,29 +507,43 @@ class OpenAICompatibleProvider:
         for index, candidate in enumerate(candidates):
             candidate_payload = dict(payload)
             candidate_payload["model"] = candidate.model
-            try:
-                data = await self._post_json(
-                    candidate, path, candidate_payload, capability
-                )
-                if validator is not None:
-                    try:
-                        validator(data)
-                    except ProviderError as exc:
-                        if exc.failover_allowed:
-                            self._record_provider_failure(
-                                f"{capability}:{candidate.candidate_id}", str(exc)
-                            )
+            for attempt in (0, 1):
+                try:
+                    data = await self._post_json(
+                        candidate, path, candidate_payload, capability
+                    )
+                    if validator is not None:
+                        try:
+                            validator(data)
+                        except ProviderError as exc:
+                            if exc.failover_allowed:
+                                self._record_provider_failure(
+                                    f"{capability}:{candidate.candidate_id}", str(exc)
+                                )
+                            raise
+                    self._record_active_candidate(
+                        capability,
+                        candidate,
+                        "" if index == 0 else errors[-1],
+                    )
+                    return data
+                except ProviderError as exc:
+                    # 过载伪装的瞬时 400 在同一候选上先重放一次:实弹证明同一
+                    # 请求秒级重放即 200(官方与中转都见过);单候选抖动不该
+                    # 耗尽整个 failover 链——当主档 402、备档抖一下时,旧逻辑
+                    # 会把一整轮对话打死(livetest2)。
+                    if (
+                        attempt == 0
+                        and exc.status_code == 400
+                        and exc.failover_allowed
+                        and "inference request is invalid" in str(exc)
+                    ):
+                        await asyncio.sleep(0.8)
+                        continue
+                    errors.append(str(exc))
+                    if not exc.failover_allowed or index >= len(candidates) - 1:
                         raise
-                self._record_active_candidate(
-                    capability,
-                    candidate,
-                    "" if index == 0 else errors[-1],
-                )
-                return data
-            except ProviderError as exc:
-                errors.append(str(exc))
-                if not exc.failover_allowed or index >= len(candidates) - 1:
-                    raise
+                    break
         raise ProviderError(
             f"all {capability} provider candidates failed: {'; '.join(errors)}"
         )
