@@ -18,7 +18,7 @@
   ——宽窗口修复 q006 但把 q001/q002 挤出 top-5(近重复簇内重排),结论维持 12;
   数据与定案记入 ADR-011 D5 修订注记
 - **Godot 无头编译预检脚本** —— `tools/godot_headless_check.ps1`:
-  `--headless --editor --quit` 以完整 autoload 上下文扫描全部 .gd(实测 118 个
+  `--headless --editor --quit` 以完整 autoload 上下文扫描全部 .gd(实测 120 个
   零编译错误),把「GDScript 盲改必错」教训固化为可重复的一键检查
 - **UI v3 设计 token 落地** —— 预览稿官方色板接入主题表:`haru`(明昼·
   奶油木 #F6F1E7/#C96B2E)与 `haru_night`(夜话 #171521/#E8935C)两个新主题,
@@ -77,8 +77,10 @@
 
 - **评测夹具脱敏(公开仓库安全整改)** —— 旧 recall_eval_set.json 含真实
   存档衍生数据(真实记忆 ID + 真实游玩主题查询 + 存档规模注记),已连同
-  全部 git 历史一并抹除(git filter-repo 重写 69 提交)——公开仓库不留给
-  下载者任何真实存档痕迹。评测改为确定性合成语料:
+  全部 git 历史一并抹除(git filter-repo 重写 69 提交;随后把曾用作防回归
+  哨兵的真实查询片段从历史中二次替换清除——仅 2 个提交哈希变动、工作树
+  逐字节不变)——公开仓库不留给下载者任何真实存档痕迹。评测改为确定性
+  合成语料:
   tools/build_synthetic_eval_store.py 生成工坊/家务类中性主题语料与配套
   夹具(CI 棘轮 = 合成语料 14/14 = 1.0,全平台可跑不依赖本地存档);
   真实存档回归锚移至本机 user_data/(recall_eval_set.real.json + 快照,
