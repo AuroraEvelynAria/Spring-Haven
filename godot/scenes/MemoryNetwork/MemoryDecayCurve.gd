@@ -66,7 +66,7 @@ func _draw() -> void:
 		return
 	var effective := half_life * intrinsic
 	# 横轴投射到「现在」与两倍半衰的较远者:既能看到过去,也能看到将淡忘成什么样
-	var span := maxf(effective * 2.2, now - updated, 1.0)
+	var span := maxf(maxf(effective * 2.2, now - updated), 1.0)
 	var points := PackedVector2Array()
 	var half_cross_x := -1.0
 	for index in SAMPLES + 1:
