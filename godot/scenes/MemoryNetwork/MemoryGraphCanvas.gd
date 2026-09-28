@@ -13,22 +13,26 @@ const MAX_ZOOM := 2.4
 
 # ── Obsidian 式连续力导向(可读性优先)─────────────────────────────
 # 每帧模拟直至能量沉降:库仑斥力(全对,半径感知)+ 弹簧(可见边)+
-# 向心 + 作用域微锚 + 阻尼。拖拽把光标速度传给节点,松手后惯性滑行,
+# 向心 + 阻尼 + 软边界。拖拽把光标速度传给节点,松手后惯性滑行,
 # 弹簧拖着邻居弹性跟随 —— 「弹弓」手感来自连续模拟,而非固定步数。
-const REPULSION_K := 15000.0
+const REPULSION_K := 20000.0
 const REPULSION_FLOOR := 0.35
-const REPULSION_CUTOFF_SQ := 270000.0
-const LINK_SPRING_K := 0.028
-const LINK_LEN_STRONG := 152.0
-const LINK_LEN_WEAK := 238.0
-const CENTER_PULL := 0.0045
-const SCOPE_PULL := 0.0022
+const REPULSION_CUTOFF_SQ := 490000.0
+const LINK_SPRING_K := 0.03
+const LINK_LEN_STRONG := 120.0
+const LINK_LEN_WEAK := 190.0
+const CENTER_PULL := 0.007
 const DAMPING := 0.865
 const MAX_SPEED := 26.0
 const FLING_MAX := 22.0
-const SETTLE_ENERGY := 18.0
+# 模拟温度(alpha):唤醒置 1,逐帧衰减——力随温度冷却,布局约 5 秒收敛后
+# 冻结。d3/Obsidian 同款收敛模型,不存在"能量阈值提前休眠"或"永不停抖"
+const SIM_COOL_PER_FRAME := 0.0024
+const SIM_ALPHA_MIN := 0.01
+const SIM_ALPHA_DRAG := 0.5
 const COLLISION_PAD := 7.0
 const FOCUS_DIM := 0.15
+const SOFT_BOUNDARY := 0.9
 
 var _nodes: Array[Dictionary] = []
 var _edges: Array[Dictionary] = []
@@ -41,6 +45,7 @@ var _dragged_id := ""
 var _drag_target := Vector2.ZERO
 var _drag_velocity := Vector2.ZERO
 var _physics_awake := true
+var _sim_alpha := 1.0
 var _panning := false
 var _zoom := 1.0
 var _pan := Vector2.ZERO
@@ -155,6 +160,7 @@ func set_time_fade_days(days: float) -> void:
 
 func _wake_physics() -> void:
 	_physics_awake = true
+	_sim_alpha = 1.0
 
 
 func _is_ghost_node(node: Dictionary) -> bool:
@@ -259,33 +265,36 @@ func get_node_by_id(node_id: String) -> Dictionary:
 
 
 func _initialize_positions() -> void:
-	# 向日葵(黄金角)初始分布:开局就互相错开,避免"同一圈上挤一排"。
-	# 半径随画布尺寸伸缩,作用域只决定出发象限,最终位置交给力导向。
+	# Obsidian 式出生:全部节点从中心附近的小随机团出发,让库仑斥力把它们
+	# "炸开"到自然位置 —— 强初始能量保证布局充分展开,不会中途冻在半路
 	var count := maxi(1, _nodes.size())
-	var golden_angle := TAU * (3.0 - sqrt(5.0))
-	var spread_scale := clampf(size.length() / 900.0, 0.7, 1.9)
+	var spread := clampf(count * 1.6, 40.0, 110.0)
 	for index in _nodes.size():
 		var node: Dictionary = _nodes[index]
 		var node_id := str(node.id)
 		var seed := absi(hash(node_id))
-		var t := (float(index) + 0.6) / float(count)
-		var ring := (64.0 + 250.0 * sqrt(t)) * spread_scale
-		var angle := float(index) * golden_angle + float(seed % 1000) / 7000.0
-		var anchor := _scope_anchor(str(node.get("scope_role_id", "*")))
-		_positions[node_id] = anchor + Vector2.from_angle(angle) * ring
+		var angle := float(seed % 1000) / 1000.0 * TAU
+		var ring := 8.0 + float((seed / 7) % 100) * (spread / 100.0)
+		_positions[node_id] = Vector2.from_angle(angle) * ring
 		_velocities[node_id] = Vector2.ZERO
 
 
 func _process(delta: float) -> void:
 	var animating := _advance_ghost_animation(delta)
-	if _physics_awake or _dragged_id != "":
-		_simulate()
+	if _sim_alpha > SIM_ALPHA_MIN or _dragged_id != "":
+		_simulate(delta)
 		animating = true
 	if animating:
 		queue_redraw()
 
 
-func _simulate() -> void:
+func _simulate(delta: float) -> void:
+	# 温度冷却:拖拽中保持半温(邻居弹性跟随),松手后整图重新加热收敛
+	if _dragged_id != "":
+		_sim_alpha = maxf(_sim_alpha, SIM_ALPHA_DRAG)
+	else:
+		_sim_alpha = maxf(0.0, _sim_alpha - SIM_COOL_PER_FRAME * clampf(delta * 60.0, 0.0, 2.0))
+	var alpha := _sim_alpha
 	var forces: Dictionary = {}
 	for node in _nodes:
 		forces[str(node.id)] = Vector2.ZERO
@@ -326,34 +335,39 @@ func _simulate() -> void:
 		var pull := (distance - rest_length) * LINK_SPRING_K * (0.5 + strength * 0.8)
 		forces[source] = (forces[source] as Vector2) + direction * pull
 		forces[target] = (forces[target] as Vector2) - direction * pull
-	# 3) 积分:向心 + 作用域微锚 + 阻尼 + 限速;拖拽节点钉在光标上并携带手速
+	# 3) 积分:向心 + 软边界 + 阻尼 + 限速;拖拽节点钉在光标上并携带手速
 	var half_view := Vector2(
 		maxf(260.0, size.x / maxf(0.42, _zoom) * 0.5 - 40.0),
 		maxf(210.0, size.y / maxf(0.42, _zoom) * 0.5 - 46.0)
 	)
-	var energy := 0.0
 	for node in _nodes:
 		var node_id := str(node.id)
 		if node_id == _dragged_id:
 			_positions[node_id] = _drag_target
 			_velocities[node_id] = _drag_velocity
-			energy += 100.0
 			continue
 		var position: Vector2 = _positions[node_id]
 		var force: Vector2 = forces[node_id]
 		force += -position * CENTER_PULL
-		force += (_scope_anchor(str(node.get("scope_role_id", "*"))) - position) * SCOPE_PULL
-		var velocity: Vector2 = ((_velocities[node_id] as Vector2) + force) * DAMPING
+		# 软边界:靠近画布边缘就开始往回推,避免一排节点贴边躺平
+		var soft_x := half_view.x * SOFT_BOUNDARY
+		var soft_y := half_view.y * SOFT_BOUNDARY
+		if position.x > soft_x:
+			force.x -= (position.x - soft_x) * 0.12
+		elif position.x < -soft_x:
+			force.x += (-soft_x - position.x) * 0.12
+		if position.y > soft_y:
+			force.y -= (position.y - soft_y) * 0.12
+		elif position.y < -soft_y:
+			force.y += (-soft_y - position.y) * 0.12
+		var velocity: Vector2 = ((_velocities[node_id] as Vector2) + force * alpha) * DAMPING
 		if velocity.length() > MAX_SPEED:
 			velocity = velocity.normalized() * MAX_SPEED
-		energy += velocity.length_squared()
 		_velocities[node_id] = velocity
 		var next_position := position + velocity
 		next_position.x = clampf(next_position.x, -half_view.x, half_view.x)
 		next_position.y = clampf(next_position.y, -half_view.y, half_view.y)
 		_positions[node_id] = next_position
-	if energy < SETTLE_ENERGY and _dragged_id == "":
-		_physics_awake = false
 
 
 func _update_focus(focus_id: String) -> void:
@@ -379,16 +393,19 @@ func _draw() -> void:
 	var focus_active := _focus_id != ""
 	var font := get_theme_default_font()
 	for edge in _edges:
-		if float(edge.get("strength", 0.0)) < _min_strength:
-			continue
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
+		var touches_focus := focus_active and (source == _focus_id or target == _focus_id)
+		# 弱边默认不画;但聚焦节点的连接无论强弱都展开(Obsidian 式)
+		if float(edge.get("strength", 0.0)) < _min_strength and not touches_focus:
+			continue
 		if not _positions.has(source) or not _positions.has(target):
 			continue
 		var strength := clampf(float(edge.get("strength", 0.3)), 0.0, 1.0)
+		# 聚焦展开的弱边按中等强度渲染,保证可读
+		var render_strength := strength if not touches_focus else maxf(strength, 0.45)
 		var ghost_amount := clampf(_edge_ghost_amount(edge), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
-		var touches_focus := focus_active and (source == _focus_id or target == _focus_id)
 		var focused := focus_active and not touches_focus
 		var highlighted := (source == _selected_id or target == _selected_id) and lit_amount > 0.5
 		# ADR-015:claim 边(实体↔实体)/claim_source 边(记忆→实体);
@@ -407,17 +424,18 @@ func _draw() -> void:
 		# ADR-010:亮度经动画量平滑过渡 —— 游标拨过时边"渐亮"
 		if is_claim_edge:
 			var claim_base := Color("#8A8078") if link_type == "claim_source" else Color("#D8B26A")
-			var claim_alpha := 0.16 if link_type == "claim_source" else 0.26 + strength * 0.40
+			var claim_alpha := 0.14 if link_type == "claim_source" else 0.26 + render_strength * 0.40
 			if highlighted or hovered_endpoint or touches_focus:
 				claim_alpha += 0.22
 			edge_color = Color(claim_base, lerpf(GHOST_EDGE_ALPHA, claim_alpha, lit_amount) * focus_mul * dead_damp)
-			edge_width = lerpf(0.4, 0.5 if link_type == "claim_source" else 0.6 + strength * 0.8, lit_amount)
+			edge_width = lerpf(0.4, 0.5 if link_type == "claim_source" else 0.6 + render_strength * 0.8, lit_amount)
 		elif highlighted:
-			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + strength * 0.38, lit_amount) * focus_mul)
-			edge_width = lerpf(0.4, 1.0 + strength * 2.2, lit_amount)
+			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + render_strength * 0.38, lit_amount) * focus_mul)
+			edge_width = lerpf(0.4, 1.0 + render_strength * 2.2, lit_amount)
 		else:
-			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.04 + strength * 0.12, lit_amount) * focus_mul)
-			edge_width = lerpf(0.4, 0.45 + strength * 0.72, lit_amount)
+			# 普通记忆边是背景织物:压到极淡,可读性交给金边与聚焦展开
+			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.02 + render_strength * 0.05, lit_amount) * focus_mul)
+			edge_width = lerpf(0.4, 0.4 + render_strength * 0.5, lit_amount)
 		draw_line(
 			_world_to_screen(_positions[source]),
 			_world_to_screen(_positions[target]),
@@ -682,17 +700,6 @@ func _entity_color(node: Dictionary) -> Color:
 			return Color("#C99AA8")
 		_:
 			return Color("#B9A9D0")
-
-
-func _scope_anchor(scope: String) -> Vector2:
-	# 锚点只决定出发象限;SCOPE_PULL 极弱,最终疏密由斥力+碰撞决定
-	match scope:
-		"ling":
-			return Vector2(-330.0, 20.0)
-		"nai":
-			return Vector2(330.0, 20.0)
-		_:
-			return Vector2(0.0, -110.0)
 
 
 func _short_title(value: String, limit: int) -> String:
