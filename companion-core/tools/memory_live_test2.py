@@ -358,13 +358,31 @@ async def main_async() -> int:
             log(f"  {mark} [{role_id}] {query} top1={top1['title']}({top1['score']})")
         hit_count = sum(1 for item in recall_results if item["hit"])
 
-        # 传闻记忆专项:听者(nai)召回里应出现 is_second_hand=1 的行
-        heard_row = next(
-            (item for item in recall_results if item["role_id"] == NAI and any(t["is_second_hand"] for t in item["top3"])),
+        # 传闻记忆专项:生产召回窗口(memory_recall_limit=8)内听者应能看到
+        # is_second_hand=1 的行(top-3 判定过严,livetest2 实测它排第 5)
+        hvec, hmodel = await service._query_embedding("小玲那边最近发生了什么？")
+        heard_hits = store.recall(
+            save_id=SAVE_ID,
+            role_id=NAI,
+            query="小玲那边最近发生了什么？",
+            limit=8,
+            query_vector=hvec,
+            embedding_model=hmodel,
+            record_access=False,
+        )
+        heard_flag_ok = any(bool(item.get("is_second_hand")) for item in heard_hits)
+        heard_rank = next(
+            (
+                index + 1
+                for index, item in enumerate(heard_hits)
+                if bool(item.get("is_second_hand"))
+            ),
             None,
         )
-        heard_flag_ok = heard_row is not None
-        log(f"  👂 听者召回携带 is_second_hand 标记: {'✅' if heard_flag_ok else '❌'}")
+        log(
+            f"  👂 听者召回(生产窗口 top-8)携带 is_second_hand 标记:"
+            f" {'✅' if heard_flag_ok else '❌'}(排位 {heard_rank})"
+        )
 
         # 私域隔离:小奈的提拉米苏聊天记忆不得出现在小玲的召回
         tiramisu_ids = [
@@ -436,6 +454,7 @@ async def main_async() -> int:
                 "recall_eval": recall_results,
                 "recall_hit_rate": round(hit_count / len(recall_results), 4),
                 "heard_flag_ok": heard_flag_ok,
+                "heard_rank_in_production_window": heard_rank,
                 "isolation_ok": isolation_ok,
                 "mood": mood_state,
                 "entities": entities_count,
