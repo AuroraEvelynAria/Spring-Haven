@@ -347,6 +347,10 @@ class PromptComposer:
                 "title": str(raw.get("title", ""))[:120],
                 "content": content,
             }
+            # 二手传闻(heard_from):角色知道自己只是"听说"——
+            # 不得把传闻当作亲历断言,被追问细节时应如实转述来源
+            if bool(raw.get("is_second_hand", False)):
+                item["heard_secondhand"] = True
             serialized_size = len(json.dumps(item, ensure_ascii=False))
             if used_characters + serialized_size > 12_000:
                 break

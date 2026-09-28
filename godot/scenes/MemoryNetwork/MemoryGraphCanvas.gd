@@ -400,6 +400,20 @@ func _draw() -> void:
 				draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
 			if bool(node.get("always_active", false)) and lit_amount > 0.02:
 				draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
+			# 二手传闻(heard_from)节点:右上角细线空心菱形标记
+			if bool(node.get("is_second_hand", false)) and lit_amount > 0.02:
+				var mark_center := screen_position + Vector2(radius * 0.92, -radius * 0.92)
+				var mark_size := maxf(2.2, radius * 0.26)
+				var mark_points := PackedVector2Array([
+					mark_center + Vector2(0.0, -mark_size),
+					mark_center + Vector2(mark_size, 0.0),
+					mark_center + Vector2(0.0, mark_size),
+					mark_center + Vector2(-mark_size, 0.0),
+					mark_center + Vector2(0.0, -mark_size),
+				])
+				draw_polyline(
+					mark_points, Color(Color("#C9B8A0"), 0.82 * lit_amount), 1.2, true
+				)
 			# ADR-013 D4:夜织/季织节点上方的细线弦月 glyph(自绘,非 emoji)
 			if _is_weave_node(node) and lit_amount > 0.02:
 				var moon_center := screen_position + Vector2(0.0, -radius - 8.0)

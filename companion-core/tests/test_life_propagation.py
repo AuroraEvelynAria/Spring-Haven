@@ -154,5 +154,43 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("听说了", heard[0]["content"])
 
 
+class SecondHandPromptTests(unittest.TestCase):
+    """二手传闻(heard_from)在 prompt 中的可见性标记:不得当作亲历断言。"""
+
+    def test_memory_context_marks_second_hand_only(self) -> None:
+        from spring_haven_core.prompting import PromptComposer
+        from spring_haven_core.roles import RoleDefinition
+
+        roles = RoleRegistry(
+            {"ling": RoleDefinition("ling", "小玲", "春日 铃音", ("小玲",), "你是小玲。")}
+        )
+        composer = PromptComposer(roles)
+        messages = composer.messages(
+            roles.get("ling"),
+            "年糕怎么样了？",
+            [],
+            {},
+            memories=[
+                {
+                    "memory_id": "hm_heard",
+                    "kind": "episodic",
+                    "title": "听主人说起",
+                    "content": "听说年糕学会了新把戏。",
+                    "is_second_hand": True,
+                },
+                {
+                    "memory_id": "hm_first",
+                    "kind": "episodic",
+                    "title": "亲历",
+                    "content": "我亲眼看到年糕爬上猫架。",
+                },
+            ],
+        )
+        blob = "\n".join(item["content"] for item in messages)
+        # 传闻标记只出现一次(亲历记忆不带标记)
+        self.assertEqual(blob.count("heard_secondhand"), 1)
+        self.assertIn('"heard_secondhand":true', blob)
+
+
 if __name__ == "__main__":
     unittest.main()

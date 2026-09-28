@@ -334,6 +334,76 @@ async def main_async(keep: bool) -> int:
             f"(失效 {len(c_dead)}) / claim_source 边 {len(c_sources)}"
         )
 
+        # Phase 3 二手传闻实弹:小玲的高价值记忆「回家讲给」小奈听
+        digest_memory = store.put_memory(
+            {
+                "save_id": SAVE_ID,
+                "scope_role_id": ROLE_ID,
+                "kind": "episodic",
+                "title": "给年糕装了猫爬架",
+                "content": "今天把新买的猫爬架装好了,年糕一开始绕着不敢上,后来自己爬上去睡了整个下午。",
+                "importance": 0.85,
+                "confidence": 0.9,
+                "source_event_id": "livetest-digest-propagation",
+            },
+            source="daily_digest",
+        )
+        propagated = await service._propagate_digest(
+            save_id=SAVE_ID,
+            source_role=ROLE_ID,
+            day_key="livetest-day-prop",
+            digest_memory=digest_memory,
+        )
+        store.backfill_memory_links(save_id=SAVE_ID, limit=40)
+        spread_links = int(
+            store._connection.execute(
+                "SELECT COUNT(*) FROM memory_links WHERE save_id = ? AND link_type = 'spread'",
+                (SAVE_ID,),
+            ).fetchone()[0]
+        )
+        second_hand_ok = False
+        isolation_ok = False
+        if propagated:
+            target_scope = str(propagated.get("scope_role_id", ""))
+            second_hand_ok = bool(propagated.get("is_second_hand", False))
+            target_query = "年糕爬架"
+            tvec, tmodel = await service._query_embedding(target_query)
+            heard_hits = store.recall(
+                save_id=SAVE_ID,
+                role_id=target_scope,
+                query=target_query,
+                limit=5,
+                query_vector=tvec,
+                embedding_model=tmodel,
+                record_access=False,
+            )
+            got_for_target = any(
+                str(item["memory_id"]) == str(propagated["memory_id"])
+                for item in heard_hits
+            )
+            svec, smodel = await service._query_embedding(target_query)
+            source_hits = store.recall(
+                save_id=SAVE_ID,
+                role_id=ROLE_ID,
+                query=target_query,
+                limit=5,
+                query_vector=svec,
+                embedding_model=smodel,
+                record_access=False,
+            )
+            leaked_to_source = any(
+                str(item["memory_id"]) == str(propagated["memory_id"])
+                for item in source_hits
+            )
+            isolation_ok = got_for_target and not leaked_to_source
+            log(
+                f"  👂 二手传闻: {target_scope} 收讫(is_second_hand={second_hand_ok})"
+                f" / spread 边 {spread_links} | 听者可召回={got_for_target}"
+                f" 讲者不越权={'OK' if not leaked_to_source else '泄漏!'}"
+            )
+        else:
+            log("  👂 二手传闻: 传播未产出(importance<0.7 或 provider 失败)")
+
         # ADR-012:心境基线(organizer mood_delta 汇入后的当前值)
         role_home = roles.get(ROLE_ID).mood_home
         mood = store.current_mood(SAVE_ID, ROLE_ID, home=role_home)
@@ -345,13 +415,17 @@ async def main_async(keep: bool) -> int:
             f"  💭 心境: p={mood['pleasure']:.3f} a={mood['arousal']:.3f} "
             f"d={mood['dominance']:.3f}(home={role_home}, 审计 {mood_audit} 条)"
         )
-        mood_turns = sum(
+        mood_payload_turns = sum(
+            1 for turn in report["turns"] if isinstance(turn.get("mood"), dict)
+        )
+        mood_words_turns = sum(
             1
             for turn in report["turns"]
             if isinstance(turn.get("mood"), dict) and turn["mood"].get("words")
         )
         log(
-            f"  💭 心境通道: {mood_turns}/{len(report['turns'])} 轮响应携带定性词(消费侧契约)"
+            f"  💭 心境通道: {mood_payload_turns}/{len(report['turns'])} 轮携带 mood 载荷,"
+            f" {mood_words_turns} 轮越过中性带出词(温和剧本本就应多为中性)"
         )
 
         # 1) 召回评测
@@ -449,6 +523,12 @@ async def main_async(keep: bool) -> int:
                     "weave_count": len(weave_nodes),
                     "consolidated_links": int(weave_links),
                     "weave_titles": [m["title"] for m in weave_nodes],
+                },
+                "second_hand": {
+                    "propagated": bool(propagated),
+                    "is_second_hand": second_hand_ok,
+                    "spread_links": spread_links,
+                    "isolation_ok": isolation_ok,
                 },
                 "mood": {
                     "values": mood,

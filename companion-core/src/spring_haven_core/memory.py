@@ -4143,6 +4143,12 @@ class HeartloomStore:
             "influence": _json_object(row["influence_json"]),
             "source": row["source"],
             "source_event_id": row["source_event_id"],
+            # ADR-005/二手传闻:可见性标记(定向 SELECT 可能不含该列,防御式读取)
+            "is_second_hand": (
+                bool(row["is_second_hand"])
+                if "is_second_hand" in row.keys()
+                else False
+            ),
             "created_at": int(row["created_at"]),
             "updated_at": int(row["updated_at"]),
             "last_recalled_at": int(row["last_recalled_at"]),
