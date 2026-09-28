@@ -1888,7 +1888,7 @@ class HeartloomStore:
                 f"""
                 SELECT memory_id, kind, title, content, scope_role_id, lifecycle,
                        is_second_hand, importance, world_created_at, world_updated_at,
-                       source
+                       source, recall_count, half_life_days, intrinsic
                 FROM memory_entries
                 WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause} {query_clause} {asof_clause}
                 ORDER BY world_updated_at DESC, memory_id
@@ -1955,6 +1955,12 @@ class HeartloomStore:
                 "importance_bucket": importance_bucket(float(row["importance"])),
                 "world_created_at": float(row["world_created_at"]),
                 "world_updated_at": float(row["world_updated_at"]),
+                # 图谱三件套:节点大小用真实重要度;客户端绘制所选记忆的
+                # 艾宾浩斯 R(t) 曲线需要半衰期与稳定度(ADR-014)
+                "importance": round(float(row["importance"]), 4),
+                "recall_count": int(row["recall_count"]),
+                "half_life_days": float(row["half_life_days"]),
+                "intrinsic": float(row["intrinsic"]),
             }
             for row in nodes
         ]

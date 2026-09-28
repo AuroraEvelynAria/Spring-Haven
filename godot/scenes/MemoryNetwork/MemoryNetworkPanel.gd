@@ -31,11 +31,15 @@ var _detail_title: Label
 var _detail_meta: Label
 var _detail_content: RichTextLabel
 var _detail_keywords: Label
+var _related_title: Label
 var _related_list: VBoxContainer
 var _search_timer: Timer
+var _time_pins: MemoryTimePins
+var _decay_curve: MemoryDecayCurve
 var _graph: Dictionary = {}
 var _selected_node_id := ""
 var _load_generation := 0
+var _world_now := 0.0
 
 
 func _ready() -> void:
@@ -205,6 +209,12 @@ func _build_interface() -> void:
 	now_button.custom_minimum_size = Vector2(56, 30)
 	now_button.pressed.connect(_snap_time_to_now)
 	time_row.add_child(now_button)
+	# 章节钉:夜织/周织/季织与里程碑按诞生世界日排成书签条(悬停显摘要,点击跳转)
+	_time_pins = MemoryTimePins.new()
+	_time_pins.custom_minimum_size = Vector2(0, 16)
+	_time_pins.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_time_pins.pin_selected.connect(_on_pin_selected)
+	content.add_child(_time_pins)
 
 	_body = BoxContainer.new()
 	_body.vertical = false
@@ -260,14 +270,19 @@ func _build_interface() -> void:
 	for font_size_key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
 		_detail_content.add_theme_font_size_override(font_size_key, 13)
 	detail.add_child(_detail_content)
+	# ADR-014 消费侧:所选记忆的艾宾浩斯 R(t) 曲线(仅记忆节点显示)
+	_decay_curve = MemoryDecayCurve.new()
+	_decay_curve.custom_minimum_size = Vector2(0, 58)
+	_decay_curve.visible = false
+	detail.add_child(_decay_curve)
 	_detail_keywords = Label.new()
 	_detail_keywords.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_detail_keywords.add_theme_font_size_override("font_size", 11)
 	detail.add_child(_detail_keywords)
-	var related_title := Label.new()
-	related_title.text = "关联记忆"
-	related_title.add_theme_font_size_override("font_size", 13)
-	detail.add_child(related_title)
+	_related_title = Label.new()
+	_related_title.text = "关联记忆"
+	_related_title.add_theme_font_size_override("font_size", 13)
+	detail.add_child(_related_title)
 	var related_scroll := ScrollContainer.new()
 	related_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	related_scroll.custom_minimum_size = Vector2(0, 116)
@@ -355,11 +370,14 @@ func _load_graph() -> void:
 	_canvas.set_time_cursor(_current_cursor_value())
 	# ADR-010:用响应里的世界时间量程校准滑杆(earliest→world_now,恒定量程)
 	var world_now := float(data.get("world_now", 0.0))
+	_world_now = world_now
+	var earliest := 0.0
+	var latest := maxf(world_now, 1.0)
 	var world_range_variant = data.get("world_range", {})
 	if world_range_variant is Dictionary:
 		var world_range: Dictionary = world_range_variant
-		var earliest := float(world_range.get("earliest", 0.0))
-		var latest := maxf(world_now, earliest + 1.0)
+		earliest = float(world_range.get("earliest", 0.0))
+		latest = maxf(world_now, earliest + 1.0)
 		_time_slider.min_value = earliest
 		_time_slider.max_value = latest
 		_time_slider.step = 0.1
@@ -368,6 +386,10 @@ func _load_graph() -> void:
 		if _time_slider.value >= latest - 0.01:
 			_time_slider.set_value_no_signal(latest)
 		_update_time_label(_time_slider.value)
+	# 章节钉:织结节/周反思/里程碑 → 时间轴书签(纯客户端,随图重建)
+	_time_pins.set_range(earliest, latest)
+	_time_pins.set_pins(_collect_chapter_pins())
+	_time_pins.set_cursor(_current_cursor_value())
 	var node_count := int(data.get("node_count", 0))
 	_empty_state.visible = node_count == 0
 	_empty_state.text = "没有匹配的长期记忆" if node_count == 0 else ""
@@ -379,6 +401,9 @@ func _load_graph() -> void:
 
 func _show_node_details(node: Dictionary) -> void:
 	_selected_node_id = str(node.get("id", ""))
+	if str(node.get("node_type", "memory")) == "entity":
+		_show_entity_details(node)
+		return
 	_detail_title.text = str(node.get("title", "未命名记忆"))
 	var scope := str(node.get("scope_role_id", "*"))
 	var kind := str(node.get("kind", "episodic"))
@@ -399,6 +424,15 @@ func _show_node_details(node: Dictionary) -> void:
 		if not keyword.is_empty() and keyword not in keywords:
 			keywords.append(keyword)
 	_detail_keywords.text = "主题：%s" % ("、".join(keywords) if not keywords.is_empty() else "尚未提取")
+	_related_title.text = "关联记忆"
+	# ADR-014:遗忘曲线跟随所选记忆(与召回打分同款双参数公式)
+	_decay_curve.set_series({
+		"half_life_days": float(node.get("half_life_days", 0.0)),
+		"intrinsic": float(node.get("intrinsic", 1.0)),
+		"world_updated_at": float(node.get("world_updated_at", 0.0)),
+		"world_now": _world_now,
+	})
+	_decay_curve.visible = true
 	_rebuild_related_memories(_selected_node_id)
 
 
@@ -450,11 +484,139 @@ func _rebuild_related_memories(node_id: String) -> void:
 		_related_list.add_child(button)
 
 
+func _show_entity_details(node: Dictionary) -> void:
+	_decay_curve.visible = false
+	var kind_names := {"person": "人物", "object": "器物", "place": "地点", "event": "事件", "concept": "概念"}
+	_detail_title.text = str(node.get("name", "未名实体"))
+	_detail_meta.text = "%s · 首次相遇 世界第 %.1f 天\n现行主张 %d 条" % [
+		str(kind_names.get(str(node.get("kind", "concept")), "概念")),
+		float(node.get("world_created_at", 0.0)),
+		int(node.get("claim_count", 0)),
+	]
+	var aliases: Array[String] = []
+	for item in node.get("aliases", []):
+		var alias := str(item)
+		if not alias.is_empty():
+			aliases.append(alias)
+	_detail_content.text = ("别名：%s" % "、".join(aliases)) if not aliases.is_empty() else "由主张与出处记忆勾勒出的存在。"
+	_detail_keywords.text = "生命线：点下方条目可在图谱中跳转"
+	_related_title.text = "生命线 · 主张与出处"
+	_rebuild_entity_lifeline(_selected_node_id)
+
+
+func _rebuild_entity_lifeline(entity_id: String) -> void:
+	for child in _related_list.get_children():
+		child.queue_free()
+	var claims: Array[Dictionary] = []
+	var sources: Array[Dictionary] = []
+	var raw_edges = _graph.get("edges", [])
+	if raw_edges is Array:
+		for edge_variant in raw_edges:
+			if not edge_variant is Dictionary:
+				continue
+			var edge: Dictionary = edge_variant
+			var source := str(edge.get("source", ""))
+			var target := str(edge.get("target", ""))
+			if source != entity_id and target != entity_id:
+				continue
+			var link_type := str(edge.get("link_type", ""))
+			var other_id := target if source == entity_id else source
+			var other := _canvas.get_node_by_id(other_id)
+			if other.is_empty():
+				continue
+			if link_type == "claim":
+				claims.append({"node": other, "edge": edge})
+			elif link_type == "claim_source":
+				sources.append({"node": other, "edge": edge})
+	if claims.is_empty() and sources.is_empty():
+		var empty := Label.new()
+		empty.text = "这张星座还没有连线"
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty.add_theme_font_size_override("font_size", 11)
+		empty.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
+		_related_list.add_child(empty)
+		return
+	var text := Color(ThemeMgr.get_current_theme_data().text)
+	for item in claims:
+		var other: Dictionary = item.node
+		var edge: Dictionary = item.edge
+		var world_to_variant = edge.get("world_to")
+		var state_label := "现行" if world_to_variant == null else "已于第 %d 天改变" % int(float(world_to_variant))
+		var button := Button.new()
+		button.text = "〔主张〕%s → %s · %s" % [
+			str(edge.get("predicate", "")),
+			str(other.get("name", "未名实体")),
+			state_label,
+		]
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.flat = true
+		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_color_override("font_color", text)
+		button.add_theme_color_override("font_hover_color", text)
+		var object_text := str(edge.get("object_text", ""))
+		button.tooltip_text = object_text if not object_text.is_empty() else state_label
+		button.pressed.connect(func(): _canvas.select_node_by_id(str(other.get("id", ""))))
+		_related_list.add_child(button)
+	for item in sources:
+		var other: Dictionary = item.node
+		var edge: Dictionary = item.edge
+		var button := Button.new()
+		button.text = "〔出处〕%s" % str(other.get("display_title", other.get("title", "未命名记忆")))
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.flat = true
+		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_color_override("font_color", text)
+		button.add_theme_color_override("font_hover_color", text)
+		button.tooltip_text = "跳到这段记忆 · %s" % str(edge.get("predicate", ""))
+		button.pressed.connect(func(): _canvas.select_node_by_id(str(other.get("id", ""))))
+		_related_list.add_child(button)
+
+
+func _collect_chapter_pins() -> Array[Dictionary]:
+	var pins: Array[Dictionary] = []
+	for node_variant in _graph.get("nodes", []):
+		if not node_variant is Dictionary:
+			continue
+		var node: Dictionary = node_variant
+		if str(node.get("node_type", "memory")) != "memory":
+			continue
+		var source := str(node.get("source", ""))
+		var pin_kind := ""
+		if source.begins_with("consolidation_") or source == "season_weave":
+			pin_kind = "weave"
+		elif source == "weekly_insight":
+			pin_kind = "weekly"
+		elif source == "milestone":
+			pin_kind = "milestone"
+		if pin_kind.is_empty():
+			continue
+		pins.append({
+			"day": float(node.get("world_created_at", 0.0)),
+			"title": str(node.get("display_title", node.get("title", ""))),
+			"kind": pin_kind,
+		})
+	pins.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a.day) < float(b.day)
+	)
+	if pins.size() > 60:
+		var trimmed: Array[Dictionary] = []
+		for index in range(pins.size() - 60, pins.size()):
+			trimmed.append(pins[index])
+		pins = trimmed
+	return pins
+
+
+func _on_pin_selected(day: float) -> void:
+	_time_slider.set_value(day)
+
+
 func _clear_details() -> void:
 	_detail_title.text = "选择一条记忆"
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
 	_detail_content.text = ""
 	_detail_keywords.text = ""
+	_related_title.text = "关联记忆"
+	_decay_curve.visible = false
 	for child in _related_list.get_children():
 		child.queue_free()
 
@@ -496,12 +658,15 @@ func _on_time_value_changed(value: float) -> void:
 	_update_time_label(value)
 	if _canvas != null:
 		_canvas.set_time_cursor(_current_cursor_value())
+	if _time_pins != null:
+		_time_pins.set_cursor(_current_cursor_value())
 
 
 func _snap_time_to_now() -> void:
 	_time_slider.set_value_no_signal(_time_slider.max_value)
 	_update_time_label(_time_slider.max_value)
 	_canvas.set_time_cursor(-1.0)
+	_time_pins.set_cursor(-1.0)
 
 
 func _update_summary_status(node_count: int, available_count: int, edge_count: int, isolated: int) -> void:
@@ -558,6 +723,10 @@ func _apply_theme() -> void:
 	_detail_keywords.add_theme_color_override("font_color", Color(secondary, 0.92))
 	_empty_state.add_theme_color_override("font_color", Color(secondary, 0.82))
 	_canvas.set_palette(data)
+	if _time_pins != null:
+		_time_pins.set_palette(data)
+	if _decay_curve != null:
+		_decay_curve.set_palette(data)
 
 
 func _apply_readable_colors(node: Node, text: Color, secondary: Color) -> void:
