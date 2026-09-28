@@ -112,8 +112,20 @@ func _run() -> void:
 	var ambient_meta := ambient_view.get("meta") as Label
 	if not is_instance_valid(ambient_meta) or "小奈 →" not in ambient_meta.text or "小玲" not in ambient_meta.text:
 		failures.append("后台互聊消息没有显示说话者和收件人")
-	if sidebar.size.x < 330.0:
-		failures.append("桌面侧栏宽度未扩大")
+		if sidebar.visible:
+			failures.append("状态抽屉默认不应常驻显示")
+		var status_toggle := world.get("_status_toggle_button") as Button
+		if not is_instance_valid(status_toggle):
+			failures.append("状态抽屉入口未创建")
+		else:
+			status_toggle.pressed.emit()
+			await get_tree().process_frame
+			if not sidebar.visible or sidebar.size.x < 260.0:
+				failures.append("状态抽屉打开后尺寸异常")
+			status_toggle.pressed.emit()
+			await get_tree().process_frame
+			if sidebar.visible:
+				failures.append("状态抽屉关闭失败")
 	if not is_instance_valid(portrait_rig):
 		failures.append("角色表现层未创建")
 	else:

@@ -3,6 +3,7 @@ extends Control
 signal closed
 
 const GRAPH_CANVAS := preload("res://scenes/MemoryNetwork/MemoryGraphCanvas.gd")
+const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈"}
 const KIND_NAMES := {
 	"episodic": "经历",
@@ -44,13 +45,16 @@ var _world_now := 0.0
 # 不能靠"值是否等于最大值"判断 —— 滑杆 step=0.1 会把吸附后的值卡在
 # 最大值之下,导致一打开就误判为回溯、整图变幽灵
 var _time_following_now := true
+var _theme_source: Node
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build_interface()
-	Global.theme_changed.connect(_on_theme_changed)
+	_theme_source = get_node_or_null("/root/Global")
+	if is_instance_valid(_theme_source) and _theme_source.has_signal("theme_changed"):
+		_theme_source.theme_changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(_apply_responsive_layout)
 	hide()
 
@@ -84,6 +88,7 @@ func _build_interface() -> void:
 	_background = ColorRect.new()
 	_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_background.mouse_filter = Control.MOUSE_FILTER_STOP
+	_background.color = Color(0, 0, 0, 0.34)
 	add_child(_background)
 
 	var outer_margin := MarginContainer.new()
@@ -93,6 +98,7 @@ func _build_interface() -> void:
 	add_child(outer_margin)
 
 	_sheet = PanelContainer.new()
+	_sheet.name = "MemoryObservationSheet"
 	_sheet.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_sheet.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	outer_margin.add_child(_sheet)
@@ -112,7 +118,7 @@ func _build_interface() -> void:
 	header.add_theme_constant_override("separation", 9)
 	content.add_child(header)
 	var title := Label.new()
-	title.text = "🧶  心织记忆网络"
+	title.text = "心织记忆网络"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 20)
 	header.add_child(title)
@@ -125,25 +131,13 @@ func _build_interface() -> void:
 	legend.tooltip_text = "金色为共享记忆，青绿色为小玲记忆，粉色为小奈记忆；节点越大表示重要度越高。"
 	legend.add_theme_font_size_override("font_size", 11)
 	header.add_child(legend)
-	var reset_button := Button.new()
-	reset_button.text = "⌂"
-	reset_button.tooltip_text = "重置网络视角"
-	reset_button.flat = true
-	reset_button.custom_minimum_size = Vector2(36, 34)
+	var reset_button := _icon_button("reset", "重置网络视角")
 	reset_button.pressed.connect(func(): _canvas.reset_view())
 	header.add_child(reset_button)
-	var refresh_button := Button.new()
-	refresh_button.text = "↻"
-	refresh_button.tooltip_text = "重新计算记忆关系"
-	refresh_button.flat = true
-	refresh_button.custom_minimum_size = Vector2(36, 34)
+	var refresh_button := _icon_button("refresh", "重新计算记忆关系")
 	refresh_button.pressed.connect(_load_graph)
 	header.add_child(refresh_button)
-	var close_button := Button.new()
-	close_button.text = "✕"
-	close_button.tooltip_text = "关闭记忆网络"
-	close_button.flat = true
-	close_button.custom_minimum_size = Vector2(36, 34)
+	var close_button := _icon_button("close", "关闭记忆网络")
 	close_button.pressed.connect(close_panel)
 	header.add_child(close_button)
 
@@ -155,8 +149,8 @@ func _build_interface() -> void:
 	_scope_select.custom_minimum_size = Vector2(132, 34)
 	_add_scope_option("全部记忆", "")
 	_add_scope_option("共享记忆", "*")
-	_add_scope_option("🐾 仅小玲", "ling")
-	_add_scope_option("🐇 仅小奈", "nai")
+	_add_scope_option("仅小玲", "ling")
+	_add_scope_option("仅小奈", "nai")
 	_scope_select.item_selected.connect(func(_index: int): _load_graph())
 	filters.add_child(_scope_select)
 	_search_input = LineEdit.new()
@@ -167,9 +161,7 @@ func _build_interface() -> void:
 	_search_input.text_changed.connect(func(_text: String): _search_timer.start())
 	_search_input.text_submitted.connect(func(_text: String): _load_graph())
 	filters.add_child(_search_input)
-	var search_button := Button.new()
-	search_button.text = "🔍"
-	search_button.tooltip_text = "搜索记忆网络"
+	var search_button := _icon_button("search", "搜索记忆网络")
 	search_button.custom_minimum_size = Vector2(42, 34)
 	search_button.pressed.connect(_load_graph)
 	filters.add_child(search_button)
@@ -244,6 +236,8 @@ func _build_interface() -> void:
 	_canvas.add_child(_empty_state)
 
 	_detail_panel = PanelContainer.new()
+	_detail_panel.name = "MemoryDetailSheet"
+	_detail_panel.visible = false
 	_detail_panel.custom_minimum_size = Vector2(318, 0)
 	_detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body.add_child(_detail_panel)
@@ -544,6 +538,7 @@ func _detail_member_at_cursor(node: Dictionary) -> Dictionary:
 
 
 func _show_node_details(node: Dictionary) -> void:
+	_detail_panel.show()
 	_selected_node_id = str(node.get("id", ""))
 	if str(node.get("node_type", "memory")) == "entity":
 		_show_entity_details(node)
@@ -782,6 +777,7 @@ func _on_pin_selected(day: float) -> void:
 
 
 func _clear_details() -> void:
+	_detail_panel.hide()
 	_detail_title.text = "选择一条记忆"
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
 	_detail_content.text = ""
@@ -884,6 +880,15 @@ func _update_summary_status(summary_variant: Variant) -> void:
 	]
 
 
+func _icon_button(icon_id: String, hint: String) -> LineIconButton:
+	var button := LINE_ICON_BUTTON.new() as LineIconButton
+	button.set_icon(icon_id)
+	button.tooltip_text = hint
+	button.flat = true
+	button.custom_minimum_size = Vector2(36, 34)
+	return button
+
+
 func _add_scope_option(label: String, metadata: String) -> void:
 	var index := _scope_select.item_count
 	_scope_select.add_item(label)
@@ -920,8 +925,10 @@ func _apply_theme() -> void:
 	var background := Color(str(data.bg))
 	var text := Color(str(data.text))
 	var secondary := Color(str(data.secondary))
-	_background.color = background
-	_sheet.add_theme_stylebox_override("panel", _style(Color(background, 0.99), Color(text, 0.14), 6))
+	_background.color = Color(background, 0.28)
+	_sheet.add_theme_stylebox_override(
+		"panel", _style(Color(background, 0.68), Color(text, 0.18), 16)
+	)
 	_detail_panel.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.035), Color(text, 0.12), 5))
 	_apply_readable_colors(_sheet, text, secondary)
 	_detail_meta.add_theme_color_override("font_color", Color(secondary, 0.86))

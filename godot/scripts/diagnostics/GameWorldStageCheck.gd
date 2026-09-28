@@ -20,8 +20,8 @@ func _run() -> void:
 	await process_frame
 
 	# 舞台列结构
-	var stage_column: BoxContainer = world.get("_stage_column")
-	_expect(stage_column != null, "舞台列不存在")
+	var stage_column := world.get("_stage_column") as Control
+	_expect(stage_column != null and stage_column is VBoxContainer, "舞台列不存在或不是场景容器")
 	var stage_panel: PanelContainer = world.get("_stage_panel")
 	_expect(stage_panel != null and stage_panel.get_child_count() > 0, "立绘舞台面板为空")
 	var rig: Control = world.get("_portrait_rig")
@@ -35,9 +35,9 @@ func _run() -> void:
 
 	# HUD 结构
 	var sidebar: ScrollContainer = world.get("_sidebar")
-	_expect(sidebar != null, "HUD 滚动容器不存在")
+	_expect(sidebar != null and not sidebar.visible, "状态抽屉应默认隐藏")
 	var content: VBoxContainer = world.get("_sidebar_content")
-	_expect(content != null and content.get_child_count() == 4, "HUD 应为四块板(生活/周期/身心/絮语)")
+	_expect(content != null and content.get_child_count() == 4, "状态抽屉应保留四块板(生活/周期/身心/絮语)")
 	var widgets: Dictionary = world.get("_stat_widgets")
 	_expect(widgets.size() >= 11, "需求仪表数量不足: %d" % widgets.size())
 	var first_widget: Dictionary = widgets.get("hunger", {})

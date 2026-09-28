@@ -17,6 +17,8 @@ const RECIPIENT_RESOLVER := preload("res://scripts/domain/ConversationRecipientR
 const TEXT_SANITIZER := preload("res://scripts/domain/TextSanitizer.gd")
 const CHAT_PIPELINE := preload("res://scripts/domain/ChatPipeline.gd")
 const BACKGROUND_FX := preload("res://scenes/GameWorld/BackgroundFX.gd")
+const GARDEN_BACKDROP := preload("res://scenes/UI/GardenSceneBackdrop.gd")
+const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 const SHARED_HISTORY_LIMIT := 24
 const UI_MESSAGE_LIMIT := 72
 const STAT_TWEEN_DURATION := 0.58
@@ -27,35 +29,39 @@ const AFFECTION_STAT_KEYS := ["intimacy", "mood"]
 const THINKING_STEP_SECONDS := 0.42
 const CONVERSATION_VISIBILITY_PROTOCOL := "spring_heaven.conversation_visibility.v1"
 const ACTION_BUTTON_LABELS := {
-	"hug": "🤗 拥抱", "kiss": "💋 亲吻", "eat": "🍗 喂食",
-	"drink": "💧 喂水", "sleep": "🛏️ 休息"
+	"hug": "拥抱", "kiss": "亲吻", "eat": "进食",
+	"drink": "喝水", "sleep": "休息"
+}
+const ACTION_ICON_IDS := {
+	"hug": "heart", "kiss": "heart", "eat": "leaf",
+	"drink": "life", "sleep": "moon"
 }
 
 const ROLE_DATA := {
 	"ling": {
-		"name": "小玲", "full_name": "春日 鈴音", "icon": "🐾", "sub": "猫娘 · 21岁", "mood": "☀️ 暖洋洋", "color": "#F5A97F",
+		"name": "小玲", "full_name": "春日 鈴音", "sub": "猫娘 · 21岁", "mood": "暖洋洋", "color": "#F5A97F",
 		"diary": "“主人呀……刚才眯了一会儿，梦到小鱼干了。醒了发现你还在，比梦好。”",
 		"diary_footer": "—— 小玲 · 午后"
 	},
 	"nai": {
-		"name": "小奈", "full_name": "白瀬 雪奈", "icon": "🐇", "sub": "兔娘 · 19岁", "mood": "🌸 活力满满", "color": "#B8A6D9",
+		"name": "小奈", "full_name": "白瀬 雪奈", "sub": "兔娘 · 19岁", "mood": "活力满满", "color": "#B8A6D9",
 		"diary": "“嗯～今天排练的时候一直在想主人，跳错了好几个拍子。回来看到主人在，就对了。”",
 		"diary_footer": "—— 雪奈 · 傍晚"
 	}
 }
 
 const STAT_DEFS := {
-	"health": {"icon": "❤️", "label": "健康", "warning": "low", "threshold": 25.0},
-	"stamina": {"icon": "⚡", "label": "体力", "warning": "low", "threshold": 20.0},
-	"hunger": {"icon": "🍗", "label": "饥饿", "warning": "high", "threshold": 80.0},
-	"thirst": {"icon": "💧", "label": "口渴", "warning": "high", "threshold": 80.0},
-	"awake": {"icon": "😴", "label": "清醒度", "warning": "low", "threshold": 20.0},
-	"urine": {"icon": "💦", "label": "膀胱充盈", "warning": "high", "threshold": 85.0},
-	"intimacy": {"icon": "💞", "label": "好感度", "warning": "low", "threshold": 20.0},
-	"mood": {"icon": "🧠", "label": "心情", "warning": "low", "threshold": 30.0},
-	"stress": {"icon": "😰", "label": "压力", "warning": "high", "threshold": 75.0},
-	"fertility": {"icon": "❤️‍🔥", "label": "内膜容受性", "warning": "high", "threshold": 70.0},
-	"implantation": {"icon": "🛡️", "label": "服药后着床倾向", "warning": "high", "threshold": 100.0}
+	"health": {"label": "健康", "warning": "low", "threshold": 25.0},
+	"stamina": {"label": "体力", "warning": "low", "threshold": 20.0},
+	"hunger": {"label": "饥饿", "warning": "high", "threshold": 80.0},
+	"thirst": {"label": "口渴", "warning": "high", "threshold": 80.0},
+	"awake": {"label": "清醒度", "warning": "low", "threshold": 20.0},
+	"urine": {"label": "膀胱充盈", "warning": "high", "threshold": 85.0},
+	"intimacy": {"label": "好感度", "warning": "low", "threshold": 20.0},
+	"mood": {"label": "心情", "warning": "low", "threshold": 30.0},
+	"stress": {"label": "压力", "warning": "high", "threshold": 75.0},
+	"fertility": {"label": "内膜容受性", "warning": "high", "threshold": 70.0},
+	"implantation": {"label": "服药后着床倾向", "warning": "high", "threshold": 100.0}
 }
 
 var _current_role := "ling"
@@ -86,9 +92,12 @@ var _stat_pulse_tweens: Dictionary = {}
 var _pending_full_effects: Dictionary = {}
 var _last_action_event: Dictionary = {}
 
-var _background_fx: Control  # BackgroundFX.gd 实例；必须是本节点第一个子节点
+var _background_fx: Control  # GardenSceneBackdrop 实例；必须是本节点第一个子节点
 var _glow: ColorRect
 var _nav: PanelContainer
+var _utility_rail: HBoxContainer
+var _presence_stack: VBoxContainer
+var _status_toggle_button: Button
 var _brand: Label
 var _connection_status: Label
 var _memory_status: Label
@@ -102,7 +111,7 @@ var _memory_network_button: Button
 var _settings_button: Button
 var _menu_button: Button
 var _role_switch_panel: PanelContainer
-var _main_layout: BoxContainer
+var _main_layout: Control
 var _chat_area: VBoxContainer
 var _chat_scroll: ScrollContainer
 var _chat_list: VBoxContainer
@@ -116,7 +125,7 @@ var _recipient_hint: Label
 var _voice_button: Button
 var _voice_status: Label
 var _send_button: Button
-var _stage_column: BoxContainer
+var _stage_column: Control
 var _stage_panel: PanelContainer
 var _stage_portrait_holder: Control
 var _stage_backlight: ColorRect
@@ -311,11 +320,9 @@ func _season_for_month(month: int) -> String:
 	return "winter"
 
 func _build_background_fx() -> void:
-	# #11：背景底色、柔光晕、粒子、季节染色统一由 BackgroundFX 子层负责绘制。
-	# 它必须是本节点的第一个子节点（_ready 中先于 _build_interface 调用），
-	# 才能保证绘制落在所有 UI 之下——不得调换该调用顺序。
-	_background_fx = BACKGROUND_FX.new()
-	_background_fx.name = "BackgroundFX"
+	# 场景背景必须是第一个子节点：所有 UI 以锚点浮在庭院空间之上。
+	_background_fx = GARDEN_BACKDROP.new()
+	_background_fx.name = "GardenSceneBackdrop"
 	add_child(_background_fx)
 	_build_background_glow()
 	_build_season_overlay()
@@ -342,20 +349,17 @@ func _current_stats() -> Dictionary:
 	return _stats_for_role(_current_role)
 
 func _build_interface() -> void:
-	var root_vbox := VBoxContainer.new()
-	root_vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root_vbox.add_theme_constant_override("separation", 0)
-	add_child(root_vbox)
-	_build_nav(root_vbox)
-
-	_main_layout = BoxContainer.new()
-	_main_layout.vertical = false
-	_main_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_main_layout.add_theme_constant_override("separation", 0)
-	root_vbox.add_child(_main_layout)
-	_build_chat_area(_main_layout)
+	_main_layout = Control.new()
+	_main_layout.name = "SceneShell"
+	_main_layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_main_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_main_layout.z_index = 1
+	add_child(_main_layout)
+	_build_nav(_main_layout)
+	_build_presence_stack(_main_layout)
 	_build_sidebar(_main_layout)
-	_build_log_bar(root_vbox)
+	_build_chat_area(_main_layout)
+	_build_log_bar(_main_layout)
 func _refresh_life_mini_status() -> void:
 	#Update the one-line weather + money status in the nav bar.
 	if not is_instance_valid(_life_mini_status):
@@ -369,8 +373,7 @@ func _refresh_life_mini_status() -> void:
 			season_text = season
 	var weather_text := ""
 	if not weather.is_empty():
-		weather_text = "%s %s %d°C" % [
-			str(weather.get("icon", "🌤️")),
+		weather_text = "%s %d°C" % [
 			str(weather.get("label", "")),
 			int(weather.get("temperature", 0)),
 		]
@@ -384,118 +387,110 @@ func _refresh_life_mini_status() -> void:
 		parts.append(money_text)
 	_life_mini_status.text = "  ".join(parts)
 
-func _build_nav(parent: VBoxContainer) -> void:
+func _build_nav(parent: Control) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_nav = PanelContainer.new()
-	_nav.custom_minimum_size = Vector2(0, 52)
-	_nav.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0))
-	_nav.material = _glass_material(data, 2.0)
+	_nav.name = "TitleLockup"
+	_nav.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_nav.offset_left = 24.0
+	_nav.offset_top = 18.0
+	_nav.offset_right = 330.0
+	_nav.offset_bottom = 106.0
+	_nav.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_nav.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", Color.WHITE)), Color.TRANSPARENT, 14, 10))
 	parent.add_child(_nav)
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_right", 16)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_bottom", 8)
-	_nav.add_child(margin)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	margin.add_child(row)
-
+	var lockup := VBoxContainer.new()
+	lockup.add_theme_constant_override("separation", 2)
+	_nav.add_child(lockup)
 	_brand = Label.new()
-	_brand.text = "✦  春日庭院"
-	_brand.add_theme_font_size_override("font_size", 14)
+	_brand.text = "春日庭院"
+	_brand.add_theme_font_size_override("font_size", 23)
 	_brand.add_theme_color_override("font_color", Color(data.primary))
-	_brand.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_brand)
+	lockup.add_child(_brand)
 	_life_mini_status = Label.new()
 	_life_mini_status.name = "LifeMiniStatus"
 	_life_mini_status.add_theme_font_size_override("font_size", 11)
-	_life_mini_status.add_theme_color_override("font_color", Color(data.secondary, 0.78))
-	_life_mini_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_life_mini_status)
+	_life_mini_status.add_theme_color_override("font_color", Color(data.secondary, 0.86))
+	lockup.add_child(_life_mini_status)
 	_refresh_life_mini_status()
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
-
 	_connection_status = Label.new()
 	_connection_status.name = "ConnectionStatus"
-	_connection_status.add_theme_font_size_override("font_size", 11)
-	_connection_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_connection_status)
+	_connection_status.add_theme_font_size_override("font_size", 10)
+	lockup.add_child(_connection_status)
 	_memory_status = Label.new()
 	_memory_status.name = "MemoryStatus"
-	_memory_status.text = "🧶 心织记忆 · 待命"
-	_memory_status.tooltip_text = "独立 Heartloom SQLite 记忆尚无召回记录"
-	_memory_status.add_theme_font_size_override("font_size", 11)
-	_memory_status.add_theme_color_override("font_color", Color(data.secondary, 0.70))
-	_memory_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_memory_status)
-	_memory_network_button = Button.new()
-	_memory_network_button.text = "🕸️"
-	_memory_network_button.tooltip_text = "打开心织记忆网络"
-	_memory_network_button.flat = true
-	_memory_network_button.custom_minimum_size = Vector2(38, 34)
+	_memory_status.text = "心织 · 待命"
+	_memory_status.tooltip_text = "独立 Heartloom SQLite 记忆状态"
+	_memory_status.add_theme_font_size_override("font_size", 10)
+	_memory_status.add_theme_color_override("font_color", Color(data.secondary, 0.76))
+	lockup.add_child(_memory_status)
+
+	_utility_rail = HBoxContainer.new()
+	_utility_rail.name = "UtilityRail"
+	_utility_rail.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_utility_rail.offset_left = -326.0
+	_utility_rail.offset_top = 20.0
+	_utility_rail.offset_right = -20.0
+	_utility_rail.offset_bottom = 60.0
+	_utility_rail.add_theme_constant_override("separation", 5)
+	parent.add_child(_utility_rail)
+	_memory_network_button = _scene_icon_button("memory", "打开心织记忆网络")
 	_memory_network_button.pressed.connect(func(): _memory_network_panel.show_panel())
-	row.add_child(_memory_network_button)
-
-	_explore_button = Button.new()
-	_explore_button.text = "🌿 小玲 3D"
-	_explore_button.tooltip_text = "进入客餐厅探索样板"
-	_explore_button.flat = true
-	_explore_button.custom_minimum_size = Vector2(86, 34)
+	_utility_rail.add_child(_memory_network_button)
+	_archive_button = _scene_icon_button("archive", "聊天归档")
+	_archive_button.pressed.connect(func(): _archive_panel.show_panel())
+	_utility_rail.add_child(_archive_button)
+	_status_toggle_button = _scene_icon_button("status", "打开角色状态")
+	_status_toggle_button.pressed.connect(func(): _sidebar.visible = not _sidebar.visible)
+	_utility_rail.add_child(_status_toggle_button)
+	_explore_button = _scene_icon_button("compass", "进入客餐厅探索样板")
 	_explore_button.pressed.connect(_open_exploration)
-	row.add_child(_explore_button)
+	_utility_rail.add_child(_explore_button)
+	var life_review_button := _scene_icon_button("leaf", "生活回顾")
+	life_review_button.pressed.connect(func(): _life_review_panel.show_panel())
+	_utility_rail.add_child(life_review_button)
+	var house_editor_button := _scene_icon_button("home", "家の地图编辑器")
+	house_editor_button.pressed.connect(func(): _house_editor.show_panel())
+	_utility_rail.add_child(house_editor_button)
+	_settings_button = _scene_icon_button("settings", "设置与开发者选项")
+	_settings_button.pressed.connect(func(): _settings.show_panel())
+	_utility_rail.add_child(_settings_button)
+	_menu_button = _scene_icon_button("close", "返回主菜单")
+	_menu_button.pressed.connect(_back_to_menu)
+	_utility_rail.add_child(_menu_button)
 
+
+func _scene_icon_button(icon_id: String, hint: String) -> LineIconButton:
+	var button := LINE_ICON_BUTTON.new() as LineIconButton
+	button.set_icon(icon_id)
+	button.tooltip_text = hint
+	button.flat = true
+	button.custom_minimum_size = Vector2(38, 38)
+	return button
+
+
+func _build_presence_stack(parent: Control) -> void:
+	var data := ThemeMgr.get_current_theme_data()
+	_presence_stack = VBoxContainer.new()
+	_presence_stack.name = "PresenceStack"
+	_presence_stack.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	_presence_stack.offset_left = 28.0
+	_presence_stack.offset_top = -78.0
+	_presence_stack.offset_right = 180.0
+	_presence_stack.offset_bottom = 78.0
+	_presence_stack.add_theme_constant_override("separation", 10)
+	parent.add_child(_presence_stack)
 	_role_switch_panel = PanelContainer.new()
-	_role_switch_panel.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.045), Color(data.text, 0.08), 18, 3))
-	row.add_child(_role_switch_panel)
-	var roles := HBoxContainer.new()
+	_role_switch_panel.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", Color.WHITE)), Color(data.get("line", Color.TRANSPARENT)), 15, 5))
+	_presence_stack.add_child(_role_switch_panel)
+	var roles := VBoxContainer.new()
 	roles.add_theme_constant_override("separation", 3)
 	_role_switch_panel.add_child(roles)
-	_ling_button = _role_button("🐾 小玲", "ling")
-	_nai_button = _role_button("🐇 小奈", "nai")
+	_ling_button = _role_button("小玲", "ling")
+	_nai_button = _role_button("小奈", "nai")
 	roles.add_child(_ling_button)
 	roles.add_child(_nai_button)
 
-	_archive_button = Button.new()
-	_archive_button.text = "📚"
-	_archive_button.tooltip_text = "聊天归档"
-	_archive_button.flat = true
-	_archive_button.custom_minimum_size = Vector2(38, 34)
-	_archive_button.pressed.connect(func(): _archive_panel.show_panel())
-	row.add_child(_archive_button)
-
-	var life_review_button := Button.new()
-	life_review_button.text = "🌿"
-	life_review_button.tooltip_text = "生活回顾"
-	life_review_button.flat = true
-	life_review_button.custom_minimum_size = Vector2(38, 34)
-	life_review_button.pressed.connect(func(): _life_review_panel.show_panel())
-	row.add_child(life_review_button)
-
-	var house_editor_button := Button.new()
-	house_editor_button.text = "🏠"
-	house_editor_button.tooltip_text = "家の地图编辑器"
-	house_editor_button.flat = true
-	house_editor_button.custom_minimum_size = Vector2(38, 34)
-	house_editor_button.pressed.connect(func(): _house_editor.show_panel())
-	row.add_child(house_editor_button)
-
-	_settings_button = Button.new()
-	_settings_button.text = "🎨"
-	_settings_button.tooltip_text = "设置与开发者选项"
-	_settings_button.flat = true
-	_settings_button.custom_minimum_size = Vector2(38, 34)
-	_settings_button.pressed.connect(func(): _settings.show_panel())
-	row.add_child(_settings_button)
-	_menu_button = Button.new()
-	_menu_button.text = "⏻"
-	_menu_button.tooltip_text = "返回主菜单"
-	_menu_button.flat = true
-	_menu_button.custom_minimum_size = Vector2(38, 34)
-	_menu_button.pressed.connect(_back_to_menu)
-	row.add_child(_menu_button)
 
 func _role_button(text: String, role: String) -> Button:
 	var button := Button.new()
@@ -507,18 +502,38 @@ func _role_button(text: String, role: String) -> Button:
 	button.pressed.connect(func(): _select_reply_role(role))
 	return button
 
-func _build_chat_area(parent: BoxContainer) -> void:
+func _build_chat_area(parent: Control) -> void:
+	var data := ThemeMgr.get_current_theme_data()
 	_chat_area = VBoxContainer.new()
-	_chat_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_chat_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat_area.name = "ConversationLayer"
+	_chat_area.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_chat_area.offset_left = -390.0
+	_chat_area.offset_right = 390.0
+	_chat_area.offset_top = -344.0
+	_chat_area.offset_bottom = -28.0
 	_chat_area.add_theme_constant_override("separation", 0)
-	parent.add_child(_chat_area)
+	var conversation_plate := PanelContainer.new()
+	conversation_plate.name = "ConversationPlate"
+	conversation_plate.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	conversation_plate.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 20, 0))
+	conversation_plate.material = _glass_material(data, 2.0)
+	_chat_area.add_child(conversation_plate)
+	var plate_margin := MarginContainer.new()
+	plate_margin.add_theme_constant_override("margin_left", 12)
+	plate_margin.add_theme_constant_override("margin_right", 12)
+	plate_margin.add_theme_constant_override("margin_top", 8)
+	plate_margin.add_theme_constant_override("margin_bottom", 0)
+	conversation_plate.add_child(plate_margin)
+	var chat_stack := VBoxContainer.new()
+	chat_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	chat_stack.add_theme_constant_override("separation", 0)
+	plate_margin.add_child(chat_stack)
 	_chat_scroll = ScrollContainer.new()
 	_chat_scroll.name = "ChatScroll"
 	_chat_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_chat_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_chat_area.add_child(_chat_scroll)
+	chat_stack.add_child(_chat_scroll)
 	var chat_margin := MarginContainer.new()
 	chat_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	chat_margin.add_theme_constant_override("margin_left", 18)
@@ -563,13 +578,11 @@ func _build_input_area() -> void:
 	_action_bar.add_theme_constant_override("v_separation", 6)
 	content.add_child(_action_bar)
 	for key in ACTION_BUTTON_LABELS:
-		var button := Button.new()
+		var button := _scene_icon_button(str(ACTION_ICON_IDS.get(key, "heart")), str(ACTION_BUTTON_LABELS[key]))
 		button.name = "Action_%s" % key
-		button.text = ACTION_BUTTON_LABELS[key]
 		button.set_meta("action_id", str(key))
 		button.set_meta("idle_text", str(ACTION_BUTTON_LABELS[key]))
-		button.custom_minimum_size = Vector2(86, 40)
-		button.add_theme_font_size_override("font_size", 14)
+		button.custom_minimum_size = Vector2(42, 38)
 		var action := str(key)
 		button.pressed.connect(func(): _apply_action(action))
 		_action_bar.add_child(button)
@@ -587,18 +600,9 @@ func _build_input_area() -> void:
 	_chat_input.text_submitted.connect(func(_text: String): _send_message())
 	_chat_input.text_changed.connect(_on_chat_input_changed)
 	input_row.add_child(_chat_input)
-	_voice_button = Button.new()
+	_voice_button = _scene_icon_button("microphone", "开始语音输入")
 	_voice_button.name = "VoiceInputButton"
-	_voice_button.text = "🎙️"
-	_voice_button.tooltip_text = "开始语音输入"
 	_voice_button.custom_minimum_size = Vector2(46, 42)
-	_voice_button.add_theme_font_size_override("font_size", 18)
-	_voice_button.add_theme_stylebox_override(
-		"normal", _panel_style(Color(data.text, 0.05), Color.TRANSPARENT, 12, 6)
-	)
-	_voice_button.add_theme_stylebox_override(
-		"hover", _panel_style(Color(data.primary, 0.14), Color.TRANSPARENT, 12, 6)
-	)
 	_voice_button.pressed.connect(_toggle_voice_input)
 	input_row.add_child(_voice_button)
 	_send_button = Button.new()
@@ -626,35 +630,37 @@ func _build_input_area() -> void:
 	_voice_status.add_theme_color_override("font_color", Color(data.secondary, 0.96))
 	hint_row.add_child(_voice_status)
 	_update_recipient_hint()
-func _build_sidebar(parent: BoxContainer) -> void:
+func _build_sidebar(parent: Control) -> void:
 	var data := ThemeMgr.get_current_theme_data()
-	_stage_column = BoxContainer.new()
+	_stage_column = VBoxContainer.new()
 	_stage_column.name = "StageColumn"
-	_stage_column.vertical = true
-	_stage_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_stage_column.add_theme_constant_override("separation", 10)
+	_stage_column.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_stage_column.offset_left = -410.0
+	_stage_column.offset_top = -500.0
+	_stage_column.offset_right = -22.0
+	_stage_column.offset_bottom = -118.0
+	_stage_column.add_theme_constant_override("separation", 6)
+	_stage_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(_stage_column)
 
 	_stage_panel = PanelContainer.new()
 	_stage_panel.name = "StagePanel"
-	_stage_panel.add_theme_stylebox_override(
-		"panel", _panel_style(Color(data.text, 0.028), Color.TRANSPARENT, 16, 0)
-	)
-	_stage_panel.material = _glass_material(data, 2.0)
+	_stage_panel.add_theme_stylebox_override("panel", _panel_style(Color(0, 0, 0, 0), Color.TRANSPARENT, 0, 0))
+	_stage_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stage_column.add_child(_stage_panel)
 	var stage_margin := MarginContainer.new()
-	stage_margin.add_theme_constant_override("margin_left", 16)
-	stage_margin.add_theme_constant_override("margin_right", 16)
-	stage_margin.add_theme_constant_override("margin_top", 18)
-	stage_margin.add_theme_constant_override("margin_bottom", 6)
+	stage_margin.add_theme_constant_override("margin_left", 10)
+	stage_margin.add_theme_constant_override("margin_right", 10)
+	stage_margin.add_theme_constant_override("margin_top", 4)
+	stage_margin.add_theme_constant_override("margin_bottom", 0)
 	_stage_panel.add_child(stage_margin)
 	var stage_stack := VBoxContainer.new()
-	stage_stack.add_theme_constant_override("separation", 2)
+	stage_stack.add_theme_constant_override("separation", 1)
 	stage_margin.add_child(stage_stack)
 
 	_stage_portrait_holder = Control.new()
 	_stage_portrait_holder.name = "StagePortraitHolder"
-	_stage_portrait_holder.custom_minimum_size = Vector2(0, 280)
+	_stage_portrait_holder.custom_minimum_size = Vector2(0, 330)
 	_stage_portrait_holder.clip_contents = false
 	stage_stack.add_child(_stage_portrait_holder)
 	_stage_backlight = ColorRect.new()
@@ -667,9 +673,7 @@ func _build_sidebar(parent: BoxContainer) -> void:
 	_stage_backlight.offset_bottom = -6.0
 	_stage_backlight.material = ShaderMaterial.new()
 	(_stage_backlight.material as ShaderMaterial).shader = GLOW_SHADER
-	(_stage_backlight.material as ShaderMaterial).set_shader_parameter(
-		"glow_color", Color(data.primary, 0.10)
-	)
+	(_stage_backlight.material as ShaderMaterial).set_shader_parameter("glow_color", Color(data.primary, 0.10))
 	(_stage_backlight.material as ShaderMaterial).set_shader_parameter("radius", 0.62)
 	_stage_portrait_holder.add_child(_stage_backlight)
 	_stage_shadow = ColorRect.new()
@@ -688,8 +692,9 @@ func _build_sidebar(parent: BoxContainer) -> void:
 	_portrait_rig.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_portrait_rig.offset_left = 14.0
 	_portrait_rig.offset_right = -14.0
-	_portrait_rig.offset_top = -272.0
-	_portrait_rig.offset_bottom = -18.0
+	_portrait_rig.offset_top = -314.0
+	_portrait_rig.offset_bottom = -10.0
+	_portrait_rig.set("stage_mode", true)
 	_stage_portrait_holder.add_child(_portrait_rig)
 	_portrait_rig.call("set_role", _current_role)
 	_portrait_rig.call("set_body_state", LifeSim.build_role_state(_current_role))
@@ -715,45 +720,53 @@ func _build_sidebar(parent: BoxContainer) -> void:
 
 	_sidebar = ScrollContainer.new()
 	_sidebar.name = "StatusSidebar"
+	_sidebar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_sidebar.offset_left = -350.0
+	_sidebar.offset_top = 86.0
+	_sidebar.offset_right = -22.0
+	_sidebar.offset_bottom = -86.0
 	_sidebar.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_sidebar.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_sidebar.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.02), Color.TRANSPARENT, 16, 0))
+	_sidebar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 16, 0))
 	_sidebar.material = _glass_material(data, 2.0)
-	_stage_column.add_child(_sidebar)
+	_sidebar.visible = false
+	parent.add_child(_sidebar)
 	var hud_margin := MarginContainer.new()
 	hud_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hud_margin.add_theme_constant_override("margin_left", 14)
 	hud_margin.add_theme_constant_override("margin_right", 14)
-	hud_margin.add_theme_constant_override("margin_top", 4)
-	hud_margin.add_theme_constant_override("margin_bottom", 10)
+	hud_margin.add_theme_constant_override("margin_top", 14)
+	hud_margin.add_theme_constant_override("margin_bottom", 14)
 	_sidebar.add_child(hud_margin)
 	_sidebar_content = VBoxContainer.new()
 	_sidebar_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_sidebar_content.add_theme_constant_override("separation", 10)
 	hud_margin.add_child(_sidebar_content)
 	_refresh_stage_identity()
-func _build_log_bar(parent: VBoxContainer) -> void:
+
+func _build_log_bar(parent: Control) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_log_bar = PanelContainer.new()
-	_log_bar.custom_minimum_size = Vector2(0, 26)
-	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.04), Color.TRANSPARENT, 0, 0))
+	_log_bar.name = "TransientToast"
+	_log_bar.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_log_bar.offset_left = 24.0
+	_log_bar.offset_top = -88.0
+	_log_bar.offset_right = 380.0
+	_log_bar.offset_bottom = -56.0
+	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 12, 7))
 	_log_bar.material = _glass_material(data, 1.4)
 	parent.add_child(_log_bar)
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 14)
-	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_right", 10)
 	margin.add_theme_constant_override("margin_top", 3)
 	margin.add_theme_constant_override("margin_bottom", 3)
 	_log_bar.add_child(margin)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	margin.add_child(row)
 	_log_label = Label.new()
-	_log_label.text = "📋   等待互动…"
+	_log_label.text = "等待互动…"
 	_log_label.add_theme_font_size_override("font_size", 11)
 	_log_label.add_theme_color_override("font_color", Color(data.text, 0.92))
 	_log_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_log_label)
+	margin.add_child(_log_label)
 
 func _refresh_sidebar() -> void:
 	for active_tween in _stat_tweens.values():
@@ -808,7 +821,7 @@ func _refresh_stage_identity() -> void:
 	var role: Dictionary = ROLE_DATA[_current_role]
 	var data := ThemeMgr.get_current_theme_data()
 	if is_instance_valid(_stage_name_label):
-		_stage_name_label.text = "%s  %s" % [str(role.icon), str(role.name)]
+		_stage_name_label.text = str(role.name)
 		_stage_name_label.add_theme_color_override(
 			"font_color", Color(str(role.color))
 		)
@@ -817,11 +830,9 @@ func _refresh_stage_identity() -> void:
 		_stage_sub_label.add_theme_color_override("font_color", Color(data.secondary))
 	if is_instance_valid(_stage_mood_label):
 		# ADR-012(消费侧):已收到实时心境词则优先于静态文案
-		var live_mood_words := str(_mood_words_by_role.get(_current_role, ""))
-		_stage_mood_label.text = (
-			live_mood_words if not live_mood_words.is_empty() else str(role.mood)
-		)
-		_stage_mood_label.add_theme_color_override("font_color", Color(data.secondary, 0.72))
+			var live_mood_words := str(_mood_words_by_role.get(_current_role, ""))
+			_stage_mood_label.text = live_mood_words if not live_mood_words.is_empty() else str(role.mood)
+			_stage_mood_label.add_theme_color_override("font_color", Color(data.secondary, 0.72))
 	if is_instance_valid(_stage_backlight) and _stage_backlight.material:
 		(_stage_backlight.material as ShaderMaterial).set_shader_parameter(
 			"glow_color", Color(data.primary, 0.10)
@@ -1057,7 +1068,7 @@ func _cycle_card() -> PanelContainer:
 	content.add_theme_constant_override("separation", 4)
 	card.add_child(content)
 	var title := Label.new()
-	title.text = "🩸  生理周期"
+	title.text = "生理周期"
 	title.add_theme_font_size_override("font_size", 10)
 	title.add_theme_color_override("font_color", Color(cycle_color, 0.86))
 	content.add_child(title)
@@ -1102,12 +1113,12 @@ func _stat_row(key: String) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.name = "Stat_%s" % key
 	row.add_theme_constant_override("separation", 8)
-	var icon := Label.new()
-	icon.text = definition.icon
-	icon.custom_minimum_size = Vector2(20, 0)
-	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	icon.add_theme_font_size_override("font_size", 14)
-	row.add_child(icon)
+	var marker := ColorRect.new()
+	marker.color = Color(_stat_color(key, value), 0.82)
+	marker.custom_minimum_size = Vector2(3, 18)
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	marker.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(marker)
 	var info := VBoxContainer.new()
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_theme_constant_override("separation", 2)
@@ -1320,7 +1331,7 @@ func _diary_card(role: Dictionary) -> PanelContainer:
 	content.add_theme_constant_override("separation", 5)
 	plate.add_child(content)
 	var title := Label.new()
-	title.text = "📖  今日絮语"
+	title.text = "今日絮语"
 	title.add_theme_font_size_override("font_size", 13)
 	title.add_theme_color_override("font_color", Color(data.secondary, 0.9))
 	content.add_child(title)
@@ -1395,8 +1406,8 @@ func _add_message(
 		var status_label := Label.new()
 		status_label.add_theme_font_size_override("font_size", 10)
 		delivery_row.add_child(status_label)
-		var retry_button := Button.new()
-		retry_button.text = "↻"
+		var retry_button := LINE_ICON_BUTTON.new() as LineIconButton
+		retry_button.set_icon("refresh")
 		retry_button.tooltip_text = "重新发送"
 		retry_button.flat = true
 		retry_button.custom_minimum_size = Vector2(24, 22)
@@ -1567,7 +1578,7 @@ func _refresh_interaction_state() -> void:
 	_update_command_button_styles()
 	_update_thinking_indicators()
 	_sync_portrait_state()
-	if draft_enabled and get_viewport().gui_get_focus_owner() == null:
+	if draft_enabled and _chat_input.is_inside_tree() and get_viewport().gui_get_focus_owner() == null:
 		_chat_input.grab_focus()
 
 func _pending_response_role() -> String:
@@ -1639,9 +1650,8 @@ func _update_thinking_indicators() -> void:
 		var role_id := str(waiting.get("role", "ling"))
 		var role: Dictionary = ROLE_DATA.get(role_id, ROLE_DATA.ling)
 		if is_instance_valid(label):
-			label.text = "%s  %s正在思考 %s" % [
-				str(role.icon), str(role.name), _thinking_dots()
-			]
+			label.text = "%s正在思考 %s" % [str(role.name), _thinking_dots()]
+
 
 func _update_thinking_visuals(delta: float) -> void:
 	if not is_instance_valid(_input_panel) or not _input_panel_style:
@@ -2241,24 +2251,24 @@ func _on_memory_status_changed(status: Dictionary) -> void:
 	var color := Color(ThemeMgr.get_current_theme_data().secondary, 0.70)
 	match _memory_state:
 		"queued":
-			_memory_status.text = "🧶 心织排队"
+			_memory_status.text = "心织 · 排队"
 			color = Color("#6EA8D9")
 		"processing", "waiting":
-			_memory_status.text = "🧶 心织处理中"
+			_memory_status.text = "心织 · 处理中"
 			color = Color("#D9A441")
 		"success":
-			_memory_status.text = "🧶 心织 · 唤起 %d" % recalled_count
+			_memory_status.text = "心织 · 唤起 %d" % recalled_count
 			color = Color("#4CAF7D")
 		"ready":
-			_memory_status.text = "🧶 心织 · %d 条" % memory_count
+			_memory_status.text = "心织 · %d 条" % memory_count
 			color = Color(ThemeMgr.get_current_theme_data().primary, 0.82)
 		"skipped":
-			_memory_status.text = "🧶 本轮略过"
+			_memory_status.text = "心织 · 本轮略过"
 		"error":
-			_memory_status.text = "🧶 心织失败"
+			_memory_status.text = "心织 · 失败"
 			color = Color("#D9534F")
 		_:
-			_memory_status.text = "🧶 心织记忆 · 待命"
+			_memory_status.text = "心织 · 待命"
 	_memory_status.tooltip_text = "%s%s" % [
 		("%s · " % role_name) if not role_name.is_empty() else "",
 		message if not message.is_empty() else "尚无记忆整理记录",
@@ -2393,7 +2403,7 @@ func _on_proactive_message(role: String, text: String, message_id: String) -> vo
 	if attachments is Array and not attachments.is_empty() and attachments[0] is Dictionary:
 		var photo: Dictionary = attachments[0]
 		if str(photo.get("kind", "")) == "local_photo":
-			_add_system_message("📷 本地相册 · %s" % str(photo.get("label", "照片")))
+			_add_system_message("本地相册 · %s" % str(photo.get("label", "照片")))
 	_update_log("%s主动发来消息" % str((ROLE_DATA.get(role, ROLE_DATA.ling) as Dictionary).name))
 
 func _on_ambient_dialogue_message(
@@ -2450,14 +2460,14 @@ func _on_voice_recording_changed(recording: bool, duration_seconds: float) -> vo
 	if not is_instance_valid(_voice_button):
 		return
 	if recording:
-		_voice_button.text = "⏹"
+		(_voice_button as LineIconButton).set_icon("stop")
 		_voice_button.tooltip_text = "停止录音并转成文字"
 		_voice_button.add_theme_stylebox_override(
 			"normal", _panel_style(Color("#D9534F", 0.18), Color("#D9534F", 0.78), 8, 6)
 		)
 		_set_voice_status("录音 %.1f 秒" % duration_seconds, Color("#D9534F"))
 	else:
-		_voice_button.text = "🎙️"
+		(_voice_button as LineIconButton).set_icon("microphone")
 		_voice_button.tooltip_text = "开始语音输入"
 		var data := ThemeMgr.get_current_theme_data()
 		_voice_button.add_theme_stylebox_override(
@@ -2557,9 +2567,7 @@ func _add_waiting_message(request_id: String, role: String) -> void:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var label := Label.new()
 	label.name = "Waiting_%s" % request_id.validate_node_name()
-	label.text = "%s  %s正在思考 %s" % [
-		str(role_data.icon), str(role_data.name), _thinking_dots()
-	]
+	label.text = "%s正在思考 %s" % [str(role_data.name), _thinking_dots()]
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	label.add_theme_font_size_override("font_size", 12)
 	label.add_theme_color_override(
@@ -2606,7 +2614,7 @@ func _scroll_to_bottom() -> void:
 		_chat_scroll.scroll_vertical = int(_chat_scroll.get_v_scroll_bar().max_value)
 
 func _update_log(text: String) -> void:
-	_log_label.text = "📋   " + text
+	_log_label.text = text
 	_log_label.modulate.a = 1.0
 	var tween := create_tween()
 	tween.tween_property(_log_label, "modulate:a", 0.90, 2.0)
@@ -2648,43 +2656,60 @@ func _on_viewport_size_changed() -> void:
 	_update_message_bubble_widths()
 
 func _apply_responsive_layout() -> void:
-	if not _main_layout:
+	if not is_instance_valid(_main_layout):
 		return
 	var width := get_viewport_rect().size.x
-	var compact := width <= 820.0
-	var narrow := width <= 480.0
-	_main_layout.vertical = compact
+	var compact := width <= 940.0
+	var narrow := width <= 640.0
 	_brand.visible = not narrow
-	_connection_status.visible = width > 600.0
+	_connection_status.visible = width > 520.0
 	_memory_status.visible = width > 720.0
 	_explore_button.visible = width > 560.0
-	_ling_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
-	_nai_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
-	_settings_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
-	_archive_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
-	_memory_network_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
-	_menu_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
+	_ling_button.custom_minimum_size = Vector2(108 if not narrow else 86, 32)
+	_nai_button.custom_minimum_size = Vector2(108 if not narrow else 86, 32)
+	for button in [_settings_button, _archive_button, _memory_network_button, _menu_button, _explore_button, _status_toggle_button]:
+		if is_instance_valid(button):
+			button.custom_minimum_size = Vector2(32 if narrow else 38, 32 if narrow else 38)
 	if compact:
-		_stage_column.vertical = false
-		_stage_column.custom_minimum_size = Vector2(0, 210)
-		_stage_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_stage_column.size_flags_vertical = Control.SIZE_SHRINK_END
-		_stage_panel.size_flags_horizontal = Control.SIZE_FILL
-		_stage_panel.size_flags_vertical = Control.SIZE_FILL
-		_stage_portrait_holder.custom_minimum_size = Vector2(176, 170)
-		_sidebar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_sidebar.size_flags_vertical = Control.SIZE_FILL
-		_brand.add_theme_font_size_override("font_size", 12)
+		_stage_column.offset_left = -310.0
+		_stage_column.offset_top = -400.0
+		_stage_column.offset_right = -12.0
+		_stage_column.offset_bottom = -112.0
+		_stage_portrait_holder.custom_minimum_size = Vector2(0, 240)
+		_chat_area.offset_left = -minf(360.0, width * 0.46)
+		_chat_area.offset_right = minf(360.0, width * 0.46)
+		_chat_area.offset_top = -320.0
+		_chat_area.offset_bottom = -18.0
+		_sidebar.offset_left = -minf(350.0, width - 28.0)
+		_sidebar.offset_right = -14.0
+		_sidebar.offset_top = 74.0
+		_sidebar.offset_bottom = -74.0
+		_log_bar.visible = not narrow
 	else:
-		_stage_column.vertical = true
-		_stage_column.custom_minimum_size = Vector2(372, 0)
-		_stage_column.size_flags_horizontal = Control.SIZE_FILL
-		_stage_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_stage_panel.size_flags_horizontal = Control.SIZE_FILL
-		_stage_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		_sidebar.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_stage_portrait_holder.custom_minimum_size = Vector2(0, 280)
-		_brand.add_theme_font_size_override("font_size", 14)
+		_stage_column.offset_left = -410.0
+		_stage_column.offset_top = -500.0
+		_stage_column.offset_right = -22.0
+		_stage_column.offset_bottom = -118.0
+		_stage_portrait_holder.custom_minimum_size = Vector2(0, 330)
+		_chat_area.offset_left = -390.0
+		_chat_area.offset_right = 390.0
+		_chat_area.offset_top = -344.0
+		_chat_area.offset_bottom = -28.0
+		_sidebar.offset_left = -350.0
+		_sidebar.offset_right = -22.0
+		_sidebar.offset_top = 86.0
+		_sidebar.offset_bottom = -86.0
+		_log_bar.visible = true
+	if narrow:
+		_stage_column.offset_left = width * 0.5 - 150.0
+		_stage_column.offset_right = width * 0.5 + 150.0
+		_stage_column.offset_top = -470.0
+		_stage_column.offset_bottom = -210.0
+		_stage_portrait_holder.custom_minimum_size = Vector2(0, 210)
+		_chat_area.offset_left = -width * 0.5 + 12.0
+		_chat_area.offset_right = width * 0.5 - 12.0
+		_chat_area.offset_top = -225.0
+		_chat_area.offset_bottom = -12.0
 	_glow.position = get_viewport_rect().size / 2.0 - _glow.size / 2.0
 	call_deferred("_update_message_bubble_widths")
 
@@ -2704,17 +2729,15 @@ func _apply_chat_input_theme(data: Dictionary) -> void:
 func _on_theme_changed(_data: Dictionary) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_glow.material.set_shader_parameter("glow_color", Color(data.primary, 0.09))
-	_nav.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0))
-	_input_panel_style = _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0)
+	_nav.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", Color.WHITE)), Color.TRANSPARENT, 14, 10))
+	_input_panel_style = _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 20, 0)
 	_input_panel.add_theme_stylebox_override("panel", _input_panel_style)
-	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.04), Color.TRANSPARENT, 0, 0))
-	_sidebar.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.02), Color.TRANSPARENT, 16, 0))
-	_stage_panel.add_theme_stylebox_override("panel", _panel_style(Color(data.text, 0.028), Color.TRANSPARENT, 16, 0))
-	_nav.material = _glass_material(data, 2.0)
+	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 12, 7))
+	_sidebar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 16, 0))
+	_stage_panel.add_theme_stylebox_override("panel", _panel_style(Color(0, 0, 0, 0), Color.TRANSPARENT, 0, 0))
 	_input_panel.material = _glass_material(data, 1.8)
 	_sidebar.material = _glass_material(data, 2.0)
 	_log_bar.material = _glass_material(data, 1.4)
-	_stage_panel.material = _glass_material(data, 2.0)
 	if _stage_backlight and _stage_backlight.material:
 		(_stage_backlight.material as ShaderMaterial).set_shader_parameter(
 			"glow_color", Color(data.primary, 0.10)

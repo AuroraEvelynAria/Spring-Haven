@@ -9,7 +9,7 @@ func _ready() -> void:
 
 func _run() -> void:
 	var panel := PANEL_SCENE.instantiate()
-	add_child(panel)
+	get_tree().root.add_child(panel)
 	panel.show()
 	await get_tree().process_frame
 	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
@@ -65,7 +65,8 @@ func _run() -> void:
 	if canvas.size.x < 300.0 or canvas.size.y < 260.0:
 		_finish(4, "记忆网络画布尺寸异常：%s" % canvas.size)
 		return
-	var screenshot := get_viewport().get_texture().get_image()
+	var viewport := get_viewport()
+	var screenshot := viewport.get_texture().get_image()
 	var screenshot_path := "user://memory-network-check.png"
 	if screenshot == null or screenshot.is_empty():
 		if DisplayServer.get_name() != "headless":

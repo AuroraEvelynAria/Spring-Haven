@@ -85,6 +85,8 @@ func _draw_icon(center: Vector2, r: float, color: Color) -> void:
 		"close":
 			_line(center + Vector2(-r * 0.65, -r * 0.65), center + Vector2(r * 0.65, r * 0.65), color)
 			_line(center + Vector2(r * 0.65, -r * 0.65), center + Vector2(-r * 0.65, r * 0.65), color)
+		"stop":
+			draw_rect(Rect2(center - Vector2(r * 0.52, r * 0.52), Vector2(r * 1.04, r * 1.04)), color, false, icon_stroke, true)
 		"refresh":
 			draw_arc(center, r * 0.68, -PI * 0.15, PI * 1.45, 20, color, icon_stroke, true)
 			var tip := center + Vector2(r * 0.72, -r * 0.08)
@@ -120,6 +122,9 @@ func _draw_icon(center: Vector2, r: float, color: Color) -> void:
 			for angle in [0.0, PI * 0.25, PI * 0.5, PI * 0.75, PI, PI * 1.25, PI * 1.5, PI * 1.75]:
 				var direction := Vector2.from_angle(angle)
 				_line(center + direction * r * 0.58, center + direction * r * 0.88, color, icon_stroke)
+		"moon":
+			draw_arc(center, r * 0.64, PI * 0.30, PI * 1.70, 20, color, icon_stroke, true)
+			draw_arc(center + Vector2(r * 0.25, -r * 0.06), r * 0.54, PI * 0.44, PI * 1.58, 18, color, icon_stroke, true)
 		"leaf", "life":
 			var leaf := PackedVector2Array([
 				center + Vector2(-r * 0.78, r * 0.62),
