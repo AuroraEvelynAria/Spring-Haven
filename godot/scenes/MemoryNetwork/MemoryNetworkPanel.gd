@@ -369,7 +369,7 @@ func _load_graph() -> void:
 			edge["target"] = str(edge.get("dst", ""))
 			edge["strength"] = float(edge.get("link_strength", 0.5))
 			mapped_edges.append(edge)
-	_graph = {"nodes": mapped_nodes, "edges": mapped_edges}
+	_graph = _collapse_duplicate_nodes(mapped_nodes, mapped_edges)
 	_canvas.set_graph(_graph)
 	_canvas.set_min_strength(float(_strength_slider.value))
 	# ADR-010:用响应里的世界时间量程校准滑杆(earliest→world_now,恒定量程)
@@ -403,12 +403,88 @@ func _load_graph() -> void:
 	_time_pins.set_cursor(_current_cursor_value())
 	_canvas.set_time_cursor(_current_cursor_value())
 	var node_count := int(data.get("node_count", 0))
+	var collapsed_count := int((_graph.get("nodes", []) as Array).size())
+	var collapsed_edges := int((_graph.get("edges", []) as Array).size())
 	_empty_state.visible = node_count == 0
 	_empty_state.text = "没有匹配的长期记忆" if node_count == 0 else ""
-	_update_summary_status(node_count, node_count, mapped_edges.size(), 0)
+	_update_summary_status(collapsed_count, node_count, collapsed_edges, 0)
 	_status.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
 	_selected_node_id = ""
 	_clear_details()
+
+
+func _collapse_duplicate_nodes(nodes: Array, edges: Array) -> Dictionary:
+	"""同标题记忆折叠为单节点(标签带 ×N)。
+
+	对话流水(「与主人的一次对话」)、自动用户记忆(「彼此的关系」)与里程碑
+	都是"同题多份":不折叠时几十条同名记忆在图里堆成毛线球。折叠后图按
+	主题呈现,节点数回到 Obsidian 量级;实体节点不参与折叠;边按代表节点
+	重映射并去重(同类型同对取最强),组内自环丢弃。
+	"""
+	var groups: Dictionary = {}
+	for node_variant in nodes:
+		var node: Dictionary = node_variant
+		if str(node.get("node_type", "memory")) == "entity":
+			continue
+		var key := str(node.get("title", "")).strip_edges()
+		if key.is_empty():
+			continue
+		if not groups.has(key):
+			groups[key] = []
+		groups[key].append(node)
+	var rep_of: Dictionary = {}
+	var collapsed: Array = []
+	for key in groups:
+		var group: Array = groups[key]
+		var rep: Dictionary = group[0]
+		for node_variant in group:
+			if _node_rank(node_variant) > _node_rank(rep):
+				rep = node_variant
+		for node_variant in group:
+			rep_of[str(node_variant.get("id", ""))] = str(rep.get("id", ""))
+		if group.size() > 1:
+			var kept: Dictionary = rep.duplicate(true)
+			kept["member_count"] = group.size()
+			collapsed.append(kept)
+		else:
+			collapsed.append(rep)
+	for node_variant in nodes:
+		var node: Dictionary = node_variant
+		if str(node.get("node_type", "memory")) == "entity":
+			collapsed.append(node)
+			rep_of[str(node.get("id", ""))] = str(node.get("id", ""))
+	var seen: Dictionary = {}
+	var merged_edges: Array = []
+	for edge_variant in edges:
+		var edge: Dictionary = edge_variant
+		var source := str(rep_of.get(str(edge.get("source", "")), edge.get("source", "")))
+		var target := str(rep_of.get(str(edge.get("target", "")), edge.get("target", "")))
+		if source == target or source.is_empty() or target.is_empty():
+			continue
+		var pair: Array = [source, target]
+		pair.sort()
+		var edge_key := "%s|%s|%s" % [pair[0], pair[1], str(edge.get("link_type", ""))]
+		var mapped: Dictionary = edge.duplicate(true)
+		mapped["source"] = source
+		mapped["target"] = target
+		if seen.has(edge_key):
+			var index: int = seen[edge_key]
+			if float(merged_edges[index].get("strength", 0.0)) < float(mapped.get("strength", 0.0)):
+				merged_edges[index] = mapped
+			continue
+		seen[edge_key] = merged_edges.size()
+		merged_edges.append(mapped)
+	for node_variant in collapsed:
+		var node: Dictionary = node_variant
+		node["content"] = str(node.get("content", ""))
+	return {"nodes": collapsed, "edges": merged_edges}
+
+
+func _node_rank(node: Dictionary) -> float:
+	return (
+		float(node.get("importance", 0.5)) * 2.0
+		+ minf(2.0, log(1.0 + float(node.get("recall_count", 0))) * 0.4)
+	)
 
 
 func _show_node_details(node: Dictionary) -> void:
@@ -423,11 +499,12 @@ func _show_node_details(node: Dictionary) -> void:
 	var importance_label := str(
 		bucket_names.get(str(node.get("importance_bucket", "normal")), "中")
 	)
-	_detail_meta.text = "%s · %s · 重要度：%s\n世界第 %.1f 天" % [
+	_detail_meta.text = "%s · %s · 重要度：%s\n世界第 %.1f 天%s" % [
 		str(SCOPE_NAMES.get(scope, scope)),
 		str(KIND_NAMES.get(kind, kind)),
 		importance_label,
 		float(node.get("world_updated_at", 0.0)),
+		"　（同类记忆 ×%d，折叠显示）" % int(node.get("member_count", 1)) if int(node.get("member_count", 1)) > 1 else "",
 	]
 	_detail_content.text = str(node.get("content", ""))
 	var keywords: Array[String] = []

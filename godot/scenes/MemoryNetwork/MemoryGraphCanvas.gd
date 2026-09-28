@@ -51,7 +51,13 @@ var _sim_alpha := 1.0
 var _panning := false
 var _zoom := 1.0
 var _pan := Vector2.ZERO
+## 度数上限(Obsidian「毛线球」对策):每个节点默认只绘制最强的 K 条边,
+## 其余边在聚焦/悬停/选中时展开 —— 高连接节点不再喷成"蜘蛛"
+const EDGE_KEEP_PER_NODE := 3
+
 var _min_strength := 0.55
+var _aspect_stretch := 1.0
+var _primary_edge_ids: Dictionary = {}
 var _degrees: Dictionary = {}
 # 布局位置缓存(静态,跨面板开关):再次打开直接复用上次沉降结果,开局即稳定
 static var _layout_cache: Dictionary = {}
@@ -125,6 +131,7 @@ func set_graph(graph: Dictionary) -> void:
 			if _node_by_id.has(str(edge.get("source", ""))) and _node_by_id.has(str(edge.get("target", ""))):
 				_edges.append(edge)
 	_compute_degrees()
+	_compute_primary_edges()
 	var reused := _apply_cached_layout()
 	if not reused:
 		_initialize_positions()
@@ -134,6 +141,34 @@ func set_graph(graph: Dictionary) -> void:
 		_sim_alpha = 0.3
 	reset_view()
 	queue_redraw()
+
+
+func _compute_primary_edges() -> void:
+	"""每节点保留最强的 K 条边;两端都进各自 Top-K 的边才是"常显"。
+
+	枢纽节点因此只留 3 条辐条(不是每条辐条都常显),其余边在聚焦/悬停/
+	选中时完整展开 —— 这是 Obsidian 式"度数十限"在渲染侧的落地。
+	"""
+	var keep_count: Dictionary = {}
+	var by_node: Dictionary = {}
+	for index in _edges.size():
+		var edge: Dictionary = _edges[index]
+		for endpoint in [str(edge.get("source", "")), str(edge.get("target", ""))]:
+			if not by_node.has(endpoint):
+				by_node[endpoint] = []
+			(by_node[endpoint] as Array).append(index)
+	for node_id in by_node:
+		var indices: Array = by_node[node_id]
+		indices.sort_custom(func(a: int, b: int) -> bool:
+			return float(_edges[a].get("strength", 0.0)) > float(_edges[b].get("strength", 0.0))
+		)
+		for index in mini(indices.size(), EDGE_KEEP_PER_NODE):
+			var link_id := str(_edges[indices[index]].get("link_id", ""))
+			keep_count[link_id] = int(keep_count.get(link_id, 0)) + 1
+	_primary_edge_ids.clear()
+	for link_id in keep_count:
+		if int(keep_count[link_id]) >= 2:
+			_primary_edge_ids[link_id] = true
 
 
 func _compute_degrees() -> void:
@@ -274,8 +309,11 @@ func _edge_ghost_amount(edge: Dictionary) -> float:
 func get_visible_edge_count() -> int:
 	var count := 0
 	for edge in _edges:
-		if float(edge.get("strength", 0.0)) >= _min_strength and not _is_ghost_edge(edge):
-			count += 1
+		if float(edge.get("strength", 0.0)) < _min_strength or _is_ghost_edge(edge):
+			continue
+		if not _primary_edge_ids.has(str(edge.get("link_id", ""))):
+			continue
+		count += 1
 	return count
 
 
@@ -389,6 +427,7 @@ func _simulate(delta: float) -> void:
 		maxf(260.0, size.x / maxf(0.42, _zoom) * 0.5 - 40.0),
 		maxf(210.0, size.y / maxf(0.42, _zoom) * 0.5 - 46.0)
 	)
+	_aspect_stretch = clampf(half_view.x / maxf(1.0, half_view.y), 1.0, 2.6)
 	for node in _nodes:
 		var node_id := str(node.id)
 		if node_id == _dragged_id:
@@ -397,7 +436,9 @@ func _simulate(delta: float) -> void:
 			continue
 		var position: Vector2 = _positions[node_id]
 		var force: Vector2 = forces[node_id]
-		force += -position * CENTER_PULL
+		# 向心力按画布宽高比拉伸(椭球):宽画布上云团会摊成椭圆,
+		# 而不是被上下边界压成一排贴边节点
+		force += -Vector2(position.x, position.y * _aspect_stretch) * CENTER_PULL
 		# 软边界:靠近画布边缘就开始往回推,避免一排节点贴边躺平
 		var soft_x := half_view.x * SOFT_BOUNDARY
 		var soft_y := half_view.y * SOFT_BOUNDARY
@@ -446,8 +487,16 @@ func _draw() -> void:
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
 		var touches_focus := focus_active and (source == _focus_id or target == _focus_id)
+		var touches_light := (
+			touches_focus
+			or source == _selected_id or target == _selected_id
+			or source == _hovered_id or target == _hovered_id
+		)
 		# 弱边默认不画;但聚焦节点的连接无论强弱都展开(Obsidian 式)
 		if float(edge.get("strength", 0.0)) < _min_strength and not touches_focus:
+			continue
+		# 度数上限:非"常显"边只在聚焦/悬停/选中时出现
+		if not touches_light and not _primary_edge_ids.has(str(edge.get("link_id", ""))):
 			continue
 		if not _positions.has(source) or not _positions.has(target):
 			continue
@@ -577,10 +626,13 @@ func _draw() -> void:
 			should_label = selected or hovered or _zoom >= 0.55
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
+			var member_count := int(node.get("member_count", 1))
 			var label := _short_title(
 				str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
 				14
 			)
+			if member_count > 1:
+				label += " ×%d" % member_count
 			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
 			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
