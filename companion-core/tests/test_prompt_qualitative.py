@@ -35,6 +35,9 @@ class QualitativeStructureTests(unittest.IsolatedAsyncioTestCase):
         self.provider = FakeProvider()
         self.service = _make_service(self.roles, self.provider)
 
+    def tearDown(self):
+        self.service.close()
+
     async def test_runtime_block_has_no_numeric_guarded_fields(self):
         payload = valid_payload()
         payload["state"]["body_state"] = {
@@ -100,6 +103,9 @@ class NumericAuditTests(unittest.IsolatedAsyncioTestCase):
         self.roles = make_registry(_tmp_root("qual-audit"))
         self.provider = FakeProvider()
         self.service = _make_service(self.roles, self.provider)
+
+    def tearDown(self):
+        self.service.close()
 
     async def test_no_field_anchored_numeric_pairs_in_prompt(self):
         payload = valid_payload()
