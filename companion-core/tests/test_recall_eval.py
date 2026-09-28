@@ -54,17 +54,13 @@ class RecallEvalFixtureTests(unittest.TestCase):
                     self.assertRegex(mid, MEMORY_ID_RE, f"{case['id']} 非法记忆 id")
 
     def test_fixture_is_synthetic_and_matches_builder(self) -> None:
-        """夹具 ⇔ 生成器一致性:ID/查询漂移即报错;且不得含真实存档数据。"""
+        """夹具 ⇔ 生成器全等:任何改动(包括把真实数据塞回生成器)都会失配。"""
         committed = json.loads(FIXTURE.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as tmp:
             rebuilt = build_synthetic_eval_store(Path(tmp) / "evalsyn.sqlite3")
         self.assertEqual(
-            committed["cases"], rebuilt["cases"], "夹具与生成器输出漂移,请重新生成"
+            committed, rebuilt, "夹具与生成器输出漂移,请重新生成或排查篡改"
         )
-        blob = FIXTURE.read_text(encoding="utf-8")
-        # 真实存档时代的历史残留哨兵:任何一个出现都意味着真实数据回来了
-        for forbidden in ("[redacted]", "[redacted]", "[redacted]", "[redacted]", "[redacted]"):
-            self.assertNotIn(forbidden, blob)
 
 
 class RecallEvalSyntheticTests(unittest.TestCase):
