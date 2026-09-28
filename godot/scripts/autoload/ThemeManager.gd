@@ -56,22 +56,41 @@ func apply_theme(theme_name: String) -> void:
 	if not THEMES.has(theme_name):
 		theme_name = "amber"
 	current_theme_name = theme_name
-	current_theme_data = THEMES[theme_name].duplicate(true)
+	current_theme_data = _with_scene_tokens(THEMES[theme_name].duplicate(true))
 	_apply_theme_resource(current_theme_data)
 
 func apply_custom_theme(bg: String, primary: String, accent: String) -> void:
 	var bg_color := Color(bg)
 	var is_dark := _luminance(bg_color) < 0.4
 	current_theme_name = "custom"
-	current_theme_data = {
+	current_theme_data = _with_scene_tokens({
 		"bg": bg,
 		"primary": primary,
 		"accent": accent,
 		"text": "#EDE8E0" if is_dark else "#1A1715",
 		"secondary": "#A09888" if is_dark else "#5A5550",
 		"is_dark": is_dark
-	}
+	})
 	_apply_theme_resource(current_theme_data)
+
+func _with_scene_tokens(base: Dictionary) -> Dictionary:
+	var data := base.duplicate(true)
+	var bg := Color(str(data.get("bg", "#171521")))
+	var primary := Color(str(data.get("primary", "#E8935C")))
+	var accent := Color(str(data.get("accent", "#D9B36A")))
+	var text := Color(str(data.get("text", "#EAE4D8")))
+	var dark := bool(data.get("is_dark", true))
+	data["glass"] = Color(text, 0.075 if dark else 0.42)
+	data["glass_strong"] = Color(bg.lightened(0.08 if dark else 0.02), 0.84 if dark else 0.78)
+	data["line"] = Color(text, 0.14 if dark else 0.12)
+	data["accent_soft"] = Color(primary, 0.18 if dark else 0.12)
+	data["accent_glow"] = Color(primary, 0.30 if dark else 0.24)
+	data["wood"] = accent.darkened(0.24 if dark else 0.16)
+	data["scene_pane_a"] = bg.lightened(0.14 if dark else 0.10)
+	data["scene_pane_b"] = primary.lerp(bg, 0.78)
+	data["leaf"] = primary.darkened(0.30 if dark else 0.42)
+	return data
+
 
 func _apply_theme_resource(data: Dictionary) -> void:
 	var theme := Theme.new()

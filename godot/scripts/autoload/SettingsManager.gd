@@ -3,6 +3,7 @@ extends Node
 signal interaction_tuning_changed(role: String, action: String)
 signal ambient_dialogue_settings_changed(config: Dictionary)
 signal runtime_tuning_changed(config: Dictionary)
+signal visual_accessibility_changed(reduced_motion: bool)
 
 const INTERACTION_RULES := preload("res://scripts/domain/InteractionRules.gd")
 const TUNING_PROFILES := preload("res://scripts/domain/InteractionTuningProfiles.gd")
@@ -50,9 +51,11 @@ var settings: Dictionary = {
 	"display": {"view_mode": "2d", "resolution": DEFAULT_RESOLUTION, "fullscreen": false, "vsync": true},
 	"audio": {"master": 0.8, "music": 0.7, "voice": 1.0},
 	"tts": {"voice_ling": "", "voice_nai": ""},
-	"ui": {
-		"theme": "amber",
-		"font_size": 15,
+		"ui": {
+			"theme": "amber",
+			"reduced_motion": false,
+			"font_size": 15,
+
 		"font_family": "system",
 		"language": "zh_CN",
 		"custom_bg": "#1A120E",
@@ -138,6 +141,7 @@ func apply_all() -> void:
 	_applying = true
 	apply_display()
 	ThemeMgr.apply_theme(str(settings.ui.theme))
+	visual_accessibility_changed.emit(bool(settings.ui.get("reduced_motion", false)))
 	Global.view_mode_changed.emit(str(settings.display.view_mode))
 	Global.font_size_changed.emit(int(settings.ui.font_size))
 	if has_node("/root/Audio"):

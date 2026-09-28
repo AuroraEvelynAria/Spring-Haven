@@ -143,6 +143,16 @@ func _build_display_section(parent: VBoxContainer, data: Dictionary) -> void:
 	vsync_toggle.button_pressed = bool(Settings.settings.display.vsync)
 	vsync_toggle.toggled.connect(_on_vsync_toggled)
 	row.add_child(vsync_toggle)
+	var reduced_motion := CheckBox.new()
+	reduced_motion.text = "减少动态效果"
+	reduced_motion.tooltip_text = "停止背景漂浮、菜单粒子与非必要呼吸动效，不影响对话和网络反馈。"
+	reduced_motion.button_pressed = bool(Settings.settings.ui.get("reduced_motion", false))
+	reduced_motion.toggled.connect(func(enabled: bool):
+		Settings.settings.ui.reduced_motion = enabled
+		Settings.save()
+		Settings.visual_accessibility_changed.emit(enabled)
+	)
+	row.add_child(reduced_motion)
 
 func _build_theme_section(parent: VBoxContainer, data: Dictionary) -> void:
 	parent.add_child(KIT.section_label("预设主题", data))
