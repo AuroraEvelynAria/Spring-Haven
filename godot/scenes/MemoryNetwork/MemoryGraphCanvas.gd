@@ -11,6 +11,25 @@ const DEFAULT_SCOPE_COLORS := {
 const MIN_ZOOM := 0.42
 const MAX_ZOOM := 2.4
 
+# ── Obsidian 式连续力导向(可读性优先)─────────────────────────────
+# 每帧模拟直至能量沉降:库仑斥力(全对,半径感知)+ 弹簧(可见边)+
+# 向心 + 作用域微锚 + 阻尼。拖拽把光标速度传给节点,松手后惯性滑行,
+# 弹簧拖着邻居弹性跟随 —— 「弹弓」手感来自连续模拟,而非固定步数。
+const REPULSION_K := 15000.0
+const REPULSION_FLOOR := 0.35
+const REPULSION_CUTOFF_SQ := 270000.0
+const LINK_SPRING_K := 0.028
+const LINK_LEN_STRONG := 152.0
+const LINK_LEN_WEAK := 238.0
+const CENTER_PULL := 0.0045
+const SCOPE_PULL := 0.0022
+const DAMPING := 0.865
+const MAX_SPEED := 26.0
+const FLING_MAX := 22.0
+const SETTLE_ENERGY := 18.0
+const COLLISION_PAD := 7.0
+const FOCUS_DIM := 0.15
+
 var _nodes: Array[Dictionary] = []
 var _edges: Array[Dictionary] = []
 var _node_by_id: Dictionary = {}
@@ -19,10 +38,12 @@ var _velocities: Dictionary = {}
 var _selected_id := ""
 var _hovered_id := ""
 var _dragged_id := ""
+var _drag_target := Vector2.ZERO
+var _drag_velocity := Vector2.ZERO
+var _physics_awake := true
 var _panning := false
 var _zoom := 1.0
 var _pan := Vector2.ZERO
-var _layout_steps := 0
 var _min_strength := 0.55
 # ADR-010:世界日时间游标(客户端调光)。-1 = 实时态(全部点亮);
 # 游标之后诞生的节点/边降为低亮度"幽灵",布局不受影响 —— 拖动全程零重排。
@@ -36,6 +57,9 @@ const GHOST_ANIM_SPEED := 9.0
 ## 消除"成批翻面"的顿挫感。由面板按时间线总量校准。
 const GHOST_FADE_DAYS_DEFAULT := 4.0
 var _time_fade_days := GHOST_FADE_DAYS_DEFAULT
+# 悬停聚焦(Obsidian 式):聚焦节点的邻域保持明亮,其余淡出
+var _focus_id := ""
+var _focus_neighbors: Dictionary = {}
 var _palette := {
 	"background": Color("#100E0D"),
 	"grid": Color(1, 1, 1, 0.045),
@@ -54,6 +78,11 @@ func _ready() -> void:
 	queue_redraw()
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_wake_physics()
+
+
 func set_graph(graph: Dictionary) -> void:
 	_nodes.clear()
 	_edges.clear()
@@ -62,6 +91,9 @@ func set_graph(graph: Dictionary) -> void:
 	_velocities.clear()
 	_selected_id = ""
 	_hovered_id = ""
+	_dragged_id = ""
+	_focus_id = ""
+	_focus_neighbors.clear()
 	var raw_nodes = graph.get("nodes", [])
 	if raw_nodes is Array:
 		for node_variant in raw_nodes:
@@ -83,8 +115,8 @@ func set_graph(graph: Dictionary) -> void:
 			if _node_by_id.has(str(edge.get("source", ""))) and _node_by_id.has(str(edge.get("target", ""))):
 				_edges.append(edge)
 	_initialize_positions()
-	_layout_steps = 180 if _nodes.size() <= 120 else 120
 	_seed_ghost_amounts()
+	_wake_physics()
 	reset_view()
 	queue_redraw()
 
@@ -105,7 +137,7 @@ func set_palette(theme_data: Dictionary) -> void:
 
 func set_min_strength(value: float) -> void:
 	_min_strength = clampf(value, 0.0, 1.0)
-	_layout_steps = maxi(_layout_steps, 90)
+	_wake_physics()
 	queue_redraw()
 
 
@@ -119,6 +151,10 @@ func set_time_cursor(world_day: float) -> void:
 func set_time_fade_days(days: float) -> void:
 	_time_fade_days = clampf(days, 0.5, 120.0)
 	queue_redraw()
+
+
+func _wake_physics() -> void:
+	_physics_awake = true
 
 
 func _is_ghost_node(node: Dictionary) -> bool:
@@ -223,13 +259,18 @@ func get_node_by_id(node_id: String) -> Dictionary:
 
 
 func _initialize_positions() -> void:
+	# 向日葵(黄金角)初始分布:开局就互相错开,避免"同一圈上挤一排"。
+	# 半径随画布尺寸伸缩,作用域只决定出发象限,最终位置交给力导向。
 	var count := maxi(1, _nodes.size())
+	var golden_angle := TAU * (3.0 - sqrt(5.0))
+	var spread_scale := clampf(size.length() / 900.0, 0.7, 1.9)
 	for index in _nodes.size():
 		var node: Dictionary = _nodes[index]
 		var node_id := str(node.id)
 		var seed := absi(hash(node_id))
-		var angle := TAU * (float(index) / float(count)) + float(seed % 1000) / 4000.0
-		var ring := 100.0 + float(index % 5) * 54.0 + float(seed % 41)
+		var t := (float(index) + 0.6) / float(count)
+		var ring := (64.0 + 250.0 * sqrt(t)) * spread_scale
+		var angle := float(index) * golden_angle + float(seed % 1000) / 7000.0
 		var anchor := _scope_anchor(str(node.get("scope_role_id", "*")))
 		_positions[node_id] = anchor + Vector2.from_angle(angle) * ring
 		_velocities[node_id] = Vector2.ZERO
@@ -237,28 +278,39 @@ func _initialize_positions() -> void:
 
 func _process(delta: float) -> void:
 	var animating := _advance_ghost_animation(delta)
-	if _layout_steps > 0 and _nodes.size() > 1:
-		_step_force_layout(delta)
+	if _physics_awake or _dragged_id != "":
+		_simulate()
 		animating = true
 	if animating:
 		queue_redraw()
 
 
-func _step_force_layout(_delta: float) -> void:
+func _simulate() -> void:
 	var forces: Dictionary = {}
 	for node in _nodes:
 		forces[str(node.id)] = Vector2.ZERO
+	# 1) 库仑斥力(全对,半径感知):重叠/贴近时按半径和额外强推 —— 防堆叠的核心
 	for left_index in _nodes.size():
-		var left_id := str(_nodes[left_index].id)
+		var left: Dictionary = _nodes[left_index]
+		var left_id := str(left.id)
 		var left_position: Vector2 = _positions[left_id]
 		for right_index in range(left_index + 1, _nodes.size()):
-			var right_id := str(_nodes[right_index].id)
+			var right: Dictionary = _nodes[right_index]
+			var right_id := str(right.id)
 			var difference: Vector2 = (_positions[right_id] as Vector2) - left_position
-			var distance_squared := maxf(144.0, difference.length_squared())
-			var direction := difference.normalized() if difference.length_squared() > 0.01 else Vector2.RIGHT
-			var repulsion := minf(1.8, 4500.0 / distance_squared)
-			forces[left_id] = (forces[left_id] as Vector2) - direction * repulsion
-			forces[right_id] = (forces[right_id] as Vector2) + direction * repulsion
+			var distance_squared := difference.length_squared()
+			if distance_squared > REPULSION_CUTOFF_SQ:
+				continue
+			var distance := maxf(18.0, sqrt(distance_squared))
+			var direction := difference / distance
+			var push := REPULSION_K / (distance_squared + 420.0)
+			push = maxf(push, REPULSION_FLOOR)
+			var overlap := (_base_radius(left) + _base_radius(right) + COLLISION_PAD) - distance
+			if overlap > 0.0:
+				push += overlap * 0.55
+			forces[left_id] = (forces[left_id] as Vector2) - direction * push
+			forces[right_id] = (forces[right_id] as Vector2) + direction * push
+	# 2) 弹簧(可见边):偏软,允许受力振荡 —— 甩动回弹的手感来源
 	for edge in _edges:
 		if float(edge.get("strength", 0.0)) < _min_strength:
 			continue
@@ -270,37 +322,62 @@ func _step_force_layout(_delta: float) -> void:
 		var distance := maxf(1.0, difference.length())
 		var direction := difference / distance
 		var strength := clampf(float(edge.get("strength", 0.4)), 0.1, 1.0)
-		var desired_distance := lerpf(176.0, 108.0, strength)
-		var attraction := clampf((distance - desired_distance) * 0.006 * strength, -1.8, 2.6)
-		forces[source] = (forces[source] as Vector2) + direction * attraction
-		forces[target] = (forces[target] as Vector2) - direction * attraction
+		var rest_length := lerpf(LINK_LEN_WEAK, LINK_LEN_STRONG, strength)
+		var pull := (distance - rest_length) * LINK_SPRING_K * (0.5 + strength * 0.8)
+		forces[source] = (forces[source] as Vector2) + direction * pull
+		forces[target] = (forces[target] as Vector2) - direction * pull
+	# 3) 积分:向心 + 作用域微锚 + 阻尼 + 限速;拖拽节点钉在光标上并携带手速
+	var half_view := Vector2(
+		maxf(260.0, size.x / maxf(0.42, _zoom) * 0.5 - 40.0),
+		maxf(210.0, size.y / maxf(0.42, _zoom) * 0.5 - 46.0)
+	)
+	var energy := 0.0
 	for node in _nodes:
 		var node_id := str(node.id)
 		if node_id == _dragged_id:
+			_positions[node_id] = _drag_target
+			_velocities[node_id] = _drag_velocity
+			energy += 100.0
 			continue
 		var position: Vector2 = _positions[node_id]
-		var anchor := _scope_anchor(str(node.get("scope_role_id", "*")))
 		var force: Vector2 = forces[node_id]
-		force += (anchor - position) * 0.012
-		force += -position * 0.008
-		var velocity: Vector2 = ((_velocities[node_id] as Vector2) + force) * 0.84
-		if velocity.length() > 8.0:
-			velocity = velocity.normalized() * 8.0
+		force += -position * CENTER_PULL
+		force += (_scope_anchor(str(node.get("scope_role_id", "*"))) - position) * SCOPE_PULL
+		var velocity: Vector2 = ((_velocities[node_id] as Vector2) + force) * DAMPING
+		if velocity.length() > MAX_SPEED:
+			velocity = velocity.normalized() * MAX_SPEED
+		energy += velocity.length_squared()
 		_velocities[node_id] = velocity
 		var next_position := position + velocity
-		var world_half := Vector2(
-			maxf(120.0, size.x / maxf(0.2, _zoom) * 0.5 - 48.0),
-			maxf(100.0, size.y / maxf(0.2, _zoom) * 0.5 - 58.0)
-		)
-		next_position.x = clampf(next_position.x, -world_half.x, world_half.x)
-		next_position.y = clampf(next_position.y, -world_half.y, world_half.y)
+		next_position.x = clampf(next_position.x, -half_view.x, half_view.x)
+		next_position.y = clampf(next_position.y, -half_view.y, half_view.y)
 		_positions[node_id] = next_position
-	_layout_steps -= 1
+	if energy < SETTLE_ENERGY and _dragged_id == "":
+		_physics_awake = false
+
+
+func _update_focus(focus_id: String) -> void:
+	if focus_id == _focus_id:
+		return
+	_focus_id = focus_id
+	_focus_neighbors.clear()
+	if focus_id != "":
+		for edge in _edges:
+			var source := str(edge.get("source", ""))
+			var target := str(edge.get("target", ""))
+			if source == focus_id:
+				_focus_neighbors[target] = true
+			elif target == focus_id:
+				_focus_neighbors[source] = true
+	queue_redraw()
 
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), _palette.background)
 	_draw_grid()
+	# 悬停/拖拽聚焦:邻域保持明亮,其余整体淡出(Obsidian 式可读性核心)
+	var focus_active := _focus_id != ""
+	var font := get_theme_default_font()
 	for edge in _edges:
 		if float(edge.get("strength", 0.0)) < _min_strength:
 			continue
@@ -311,6 +388,8 @@ func _draw() -> void:
 		var strength := clampf(float(edge.get("strength", 0.3)), 0.0, 1.0)
 		var ghost_amount := clampf(_edge_ghost_amount(edge), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
+		var touches_focus := focus_active and (source == _focus_id or target == _focus_id)
+		var focused := focus_active and not touches_focus
 		var highlighted := (source == _selected_id or target == _selected_id) and lit_amount > 0.5
 		# ADR-015:claim 边(实体↔实体)/claim_source 边(记忆→实体);
 		# 游标越过 world_to 的失效主张压暗 —— 「过去相信过」仍可见
@@ -322,21 +401,22 @@ func _draw() -> void:
 			if world_to_variant != null and _time_cursor >= 0.0 and _time_cursor >= float(world_to_variant):
 				dead_damp = 0.32
 		var hovered_endpoint := (source == _hovered_id or target == _hovered_id) and lit_amount > 0.5
+		var focus_mul := FOCUS_DIM if focused else 1.0
 		var edge_color: Color
 		var edge_width: float
 		# ADR-010:亮度经动画量平滑过渡 —— 游标拨过时边"渐亮"
 		if is_claim_edge:
 			var claim_base := Color("#8A8078") if link_type == "claim_source" else Color("#D8B26A")
 			var claim_alpha := 0.16 if link_type == "claim_source" else 0.26 + strength * 0.40
-			if highlighted or hovered_endpoint:
+			if highlighted or hovered_endpoint or touches_focus:
 				claim_alpha += 0.22
-			edge_color = Color(claim_base, lerpf(GHOST_EDGE_ALPHA, claim_alpha, lit_amount) * dead_damp)
+			edge_color = Color(claim_base, lerpf(GHOST_EDGE_ALPHA, claim_alpha, lit_amount) * focus_mul * dead_damp)
 			edge_width = lerpf(0.4, 0.5 if link_type == "claim_source" else 0.6 + strength * 0.8, lit_amount)
 		elif highlighted:
-			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + strength * 0.38, lit_amount))
+			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + strength * 0.38, lit_amount) * focus_mul)
 			edge_width = lerpf(0.4, 1.0 + strength * 2.2, lit_amount)
 		else:
-			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.04 + strength * 0.12, lit_amount))
+			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.04 + strength * 0.12, lit_amount) * focus_mul)
 			edge_width = lerpf(0.4, 0.45 + strength * 0.72, lit_amount)
 		draw_line(
 			_world_to_screen(_positions[source]),
@@ -345,8 +425,8 @@ func _draw() -> void:
 			edge_width,
 			true
 		)
-		# ADR-015:谓词标签只在端点选中/悬停时绘制(避免刷屏)
-		if is_claim_edge and lit_amount > 0.5 and (highlighted or hovered_endpoint):
+		# ADR-015:谓词标签只在端点选中/悬停/聚焦时绘制(避免刷屏)
+		if is_claim_edge and lit_amount > 0.5 and (highlighted or hovered_endpoint or touches_focus):
 			var predicate := str(edge.get("predicate", ""))
 			if not predicate.is_empty():
 				var midpoint := (
@@ -354,7 +434,7 @@ func _draw() -> void:
 					+ _world_to_screen(_positions[target])
 				) * 0.5
 				draw_string(
-					get_theme_default_font(),
+					font,
 					midpoint + Vector2(-30.0, -3.0),
 					predicate,
 					HORIZONTAL_ALIGNMENT_CENTER,
@@ -362,7 +442,6 @@ func _draw() -> void:
 					11,
 					Color(Color("#F2D58A"), 0.9 * lit_amount * dead_damp)
 				)
-	var font := get_theme_default_font()
 	var occupied_label_rects: Array[Rect2] = []
 	for node in _nodes:
 		var node_id := str(node.id)
@@ -374,34 +453,36 @@ func _draw() -> void:
 		var color := _entity_color(node) if is_entity else _node_color(node)
 		var ghost_amount := clampf(_node_ghost_amount(node), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
+		var in_focus := not focus_active or node_id == _focus_id or _focus_neighbors.has(node_id)
+		var focus_mul := 1.0 if in_focus else FOCUS_DIM
 		var selected := node_id == _selected_id and lit_amount > 0.5
 		var hovered := node_id == _hovered_id and lit_amount > 0.5
 		if is_entity:
 			# ADR-015:实体 = 细环 + 中心点(空心),与记忆实心圆一眼区分
-			var ring_alpha := lerpf(0.92, GHOST_NODE_ALPHA, ghost_amount)
+			var ring_alpha := lerpf(0.92, GHOST_NODE_ALPHA, ghost_amount) * focus_mul
 			if selected:
-				draw_circle(screen_position, radius + 6.0, Color(color, 0.14 * lit_amount))
+				draw_circle(screen_position, radius + 6.0, Color(color, 0.14 * lit_amount * focus_mul))
 				draw_arc(screen_position, radius + 4.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
 			elif hovered:
 				draw_arc(screen_position, radius + 3.0, 0.0, TAU, 32, Color(color, 0.6 * lit_amount), 1.4, true)
 			draw_arc(screen_position, radius, 0.0, TAU, 32, Color(color, ring_alpha), 1.6, true)
-			if lit_amount > 0.02:
+			if lit_amount > 0.02 and in_focus:
 				draw_circle(screen_position, maxf(1.5, radius * 0.28), Color(color, ring_alpha))
 		else:
 			if selected:
-				draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount))
+				draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount * focus_mul))
 				draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 2.2, true)
 			elif hovered:
 				draw_circle(screen_position, radius + 5.0, Color(color, 0.18 * lit_amount))
 			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
 			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
-			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount)))
-			if lit_amount > 0.02:
+			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
+			if lit_amount > 0.02 and in_focus:
 				draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
-			if bool(node.get("always_active", false)) and lit_amount > 0.02:
+			if bool(node.get("always_active", false)) and lit_amount > 0.02 and in_focus:
 				draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
 			# 二手传闻(heard_from)节点:右上角细线空心菱形标记
-			if bool(node.get("is_second_hand", false)) and lit_amount > 0.02:
+			if bool(node.get("is_second_hand", false)) and lit_amount > 0.02 and in_focus:
 				var mark_center := screen_position + Vector2(radius * 0.92, -radius * 0.92)
 				var mark_size := maxf(2.2, radius * 0.26)
 				var mark_points := PackedVector2Array([
@@ -412,18 +493,18 @@ func _draw() -> void:
 					mark_center + Vector2(0.0, -mark_size),
 				])
 				draw_polyline(
-					mark_points, Color(Color("#C9B8A0"), 0.82 * lit_amount), 1.2, true
+					mark_points, Color(Color("#C9B8A0"), 0.82 * lit_amount * focus_mul), 1.2, true
 				)
 			# ADR-013 D4:夜织/季织节点上方的细线弦月 glyph(自绘,非 emoji)
-			if _is_weave_node(node) and lit_amount > 0.02:
+			if _is_weave_node(node) and lit_amount > 0.02 and in_focus:
 				var moon_center := screen_position + Vector2(0.0, -radius - 8.0)
 				var moon_radius := maxf(3.5, radius * 0.38)
-				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount)
+				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount * focus_mul)
 				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
-				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount), 1.1, true)
+				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount * focus_mul), 1.1, true)
 		var should_label := false
 		if is_entity:
-			# 实体标签:选中/悬停必显;普通态需放大且有一定主张量
+			# 实体标签:选中/悬停必显;聚焦邻域内必显;普通态需放大且有一定主张量
 			should_label = selected or hovered or (
 				_zoom >= 0.85 and int(node.get("claim_count", 0)) >= 2
 			)
@@ -431,6 +512,9 @@ func _draw() -> void:
 			should_label = selected or hovered or (
 				_zoom >= 0.72 and float(node.get("importance", 0.5)) >= 0.66
 			)
+		# 聚焦模式下:邻域节点无条件出标签,非邻域一律不出
+		if focus_active:
+			should_label = in_focus
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
 			var label := _short_title(
@@ -494,28 +578,47 @@ func _gui_input(event: InputEvent) -> void:
 				var hit := _hit_test(mouse_event.position)
 				if not hit.is_empty():
 					_dragged_id = hit
+					_drag_target = _positions[hit]
+					_drag_velocity = Vector2.ZERO
+					_wake_physics()
+					_update_focus(hit)
 					select_node_by_id(hit, false)
 				else:
 					_panning = true
 			else:
+				# 弹弓松手:把手上的速度交给节点,带着邻居惯性滑行
+				if _dragged_id != "":
+					_velocities[_dragged_id] = _drag_velocity.limit_length(FLING_MAX)
+					_wake_physics()
 				_dragged_id = ""
 				_panning = false
 			accept_event()
 			return
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
-		var previous_hover := _hovered_id
-		_hovered_id = _hit_test(motion.position)
+		_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
 		if _dragged_id != "" and _positions.has(_dragged_id):
-			_positions[_dragged_id] = _screen_to_world(motion.position)
-			_velocities[_dragged_id] = Vector2.ZERO
-			_layout_steps = maxi(_layout_steps, 28)
+			var world_position := _screen_to_world(motion.position)
+			# 手速采样(指数平滑):松手时作为初速度,形成惯性
+			_drag_velocity = _drag_velocity * 0.55 + (world_position - _drag_target) * 0.45
+			_drag_velocity = _drag_velocity.limit_length(FLING_MAX)
+			_drag_target = world_position
+			_positions[_dragged_id] = world_position
 			accept_event()
 		elif _panning:
 			_pan += motion.relative
 			accept_event()
+		var previous_hover := _hovered_id
+		_hovered_id = _hit_test(motion.position)
 		if previous_hover != _hovered_id:
-			tooltip_text = str((_node_by_id.get(_hovered_id, {}) as Dictionary).get("title", ""))
+			_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+			var hovered_node: Dictionary = _node_by_id.get(_hovered_id, {})
+			tooltip_text = str(
+				(hovered_node as Dictionary).get(
+					"title",
+					str((hovered_node as Dictionary).get("name", ""))
+				)
+			)
 		queue_redraw()
 
 
@@ -525,7 +628,7 @@ func _hit_test(screen_position: Vector2) -> String:
 		var node_id := str(node.id)
 		if not _positions.has(node_id):
 			continue
-		var radius := _node_radius(node) * sqrt(_zoom) + 8.0
+		var radius := _base_radius(node) * sqrt(_zoom) + 8.0
 		if _world_to_screen(_positions[node_id]).distance_to(screen_position) <= radius:
 			return node_id
 	return ""
@@ -539,10 +642,16 @@ func _screen_to_world(screen_position: Vector2) -> Vector2:
 	return (screen_position - size * 0.5 - _pan) / _zoom
 
 
-func _node_radius(node: Dictionary) -> float:
+func _base_radius(node: Dictionary) -> float:
+	if _is_entity_node(node):
+		return 9.0
 	var importance := clampf(float(node.get("importance", 0.5)), 0.0, 1.0)
 	var recall_boost := minf(3.0, log(1.0 + float(node.get("recall_count", 0))) * 0.8)
 	return 8.0 + importance * 8.0 + recall_boost
+
+
+func _node_radius(node: Dictionary) -> float:
+	return _base_radius(node)
 
 
 func _node_color(node: Dictionary) -> Color:
@@ -576,13 +685,14 @@ func _entity_color(node: Dictionary) -> Color:
 
 
 func _scope_anchor(scope: String) -> Vector2:
+	# 锚点只决定出发象限;SCOPE_PULL 极弱,最终疏密由斥力+碰撞决定
 	match scope:
 		"ling":
-			return Vector2(-180.0, 12.0)
+			return Vector2(-330.0, 20.0)
 		"nai":
-			return Vector2(180.0, 12.0)
+			return Vector2(330.0, 20.0)
 		_:
-			return Vector2(0.0, -70.0)
+			return Vector2(0.0, -110.0)
 
 
 func _short_title(value: String, limit: int) -> String:
