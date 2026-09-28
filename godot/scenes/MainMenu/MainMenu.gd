@@ -7,9 +7,14 @@ const GLOW_SHADER := preload("res://shaders/glow.gdshader")
 const TITLE_SHADER := preload("res://shaders/gradient_text.gdshader")
 const BACKGROUND_SHADER := preload("res://shaders/menu_background.gdshader")
 const UIBREATH := preload("res://scripts/domain/UIBreath.gd")
+const GARDEN_BACKDROP := preload("res://scenes/UI/GardenSceneBackdrop.gd")
+const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 
 var _content: VBoxContainer
 var _title: Label
+var _lockup: VBoxContainer
+var _utility_rail: HBoxContainer
+var _scene_backdrop: GardenSceneBackdrop
 var _subtitle: Label
 var _start_button: Button
 var _new_game_button: Button
@@ -36,7 +41,10 @@ func _ready() -> void:
 	_initialize_particles()
 	_build_background()
 	_build_glow()
+	_build_lockup()
+	_build_utility_rail()
 	_build_menu()
+	Settings.visual_accessibility_changed.connect(_on_visual_accessibility_changed)
 	_settings = SETTINGS_SCENE.instantiate() as SETTINGS_PANEL_SCRIPT
 	add_child(_settings)
 	_journey_library = JOURNEY_LIBRARY_SCENE.instantiate() as JourneyLibraryPanel
@@ -105,14 +113,9 @@ func now_spin() -> float:
 	return Time.get_ticks_msec() * 0.0009
 
 func _build_background() -> void:
-	_background = ColorRect.new()
-	_background.name = "AnimatedBackground"
-	_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var material := ShaderMaterial.new()
-	material.shader = BACKGROUND_SHADER
-	_background.material = material
-	add_child(_background)
+	_scene_backdrop = GARDEN_BACKDROP.new()
+	_scene_backdrop.name = "GardenSceneBackdrop"
+	add_child(_scene_backdrop)
 
 func _build_glow() -> void:
 	_glow = ColorRect.new()
@@ -127,61 +130,121 @@ func _build_glow() -> void:
 	_glow.material = material
 	add_child(_glow)
 
-func _build_menu() -> void:
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
-
-	_content = VBoxContainer.new()
-	_content.name = "MenuContent"
-	_content.alignment = BoxContainer.ALIGNMENT_CENTER
-	_content.add_theme_constant_override("separation", 12)
-	_content.mouse_filter = Control.MOUSE_FILTER_PASS
-	center.add_child(_content)
-
+func _build_lockup() -> void:
+	_lockup = VBoxContainer.new()
+	_lockup.name = "TitleLockup"
+	_lockup.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_lockup.offset_left = 30.0
+	_lockup.offset_top = 26.0
+	_lockup.offset_right = 310.0
+	_lockup.offset_bottom = 126.0
+	_lockup.add_theme_constant_override("separation", 4)
+	_lockup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_lockup)
 	_title = Label.new()
-	_title.text = "✦ 春日庭院 ✦"
-	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_title.custom_minimum_size = Vector2(560, 78)
-	_title.add_theme_font_size_override("font_size", 56)
+	_title.text = "春日庭院"
+	_title.add_theme_font_size_override("font_size", 30)
 	_title.add_theme_constant_override("outline_size", 0)
 	var title_material := ShaderMaterial.new()
 	title_material.shader = TITLE_SHADER
 	_title.material = title_material
-	_content.add_child(_title)
+	_lockup.add_child(_title)
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(148, 2)
+	rule.color = Color(ThemeMgr.get_current_theme_data().primary, 0.8)
+	_lockup.add_child(rule)
+	var caption := Label.new()
+	caption.text = "一段持续生长的共同生活"
+	caption.add_theme_font_size_override("font_size", 11)
+	caption.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.88))
+	_lockup.add_child(caption)
+
+
+func _build_utility_rail() -> void:
+	_utility_rail = HBoxContainer.new()
+	_utility_rail.name = "UtilityRail"
+	_utility_rail.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_utility_rail.offset_left = -128.0
+	_utility_rail.offset_top = 22.0
+	_utility_rail.offset_right = -24.0
+	_utility_rail.offset_bottom = 62.0
+	_utility_rail.add_theme_constant_override("separation", 7)
+	add_child(_utility_rail)
+	var theme_button := _make_icon_button("theme", "切换昼夜主题")
+	theme_button.pressed.connect(_cycle_scene_theme)
+	_utility_rail.add_child(theme_button)
+	var settings_button := _make_icon_button("settings", "打开设置")
+	settings_button.pressed.connect(_on_settings_pressed)
+	_utility_rail.add_child(settings_button)
+
+
+func _make_icon_button(icon_id: String, hint: String) -> LineIconButton:
+	var button := LINE_ICON_BUTTON.new() as LineIconButton
+	button.set_icon(icon_id)
+	button.tooltip_text = hint
+	button.flat = true
+	button.custom_minimum_size = Vector2(38, 38)
+	return button
+
+
+func _cycle_scene_theme() -> void:
+	var keys := ["haru", "haru_night", "sakura", "mint"]
+	var current := ThemeMgr.current_theme_name
+	var index := keys.find(current)
+	var next_theme: String = str(keys[(index + 1) % keys.size()] if index >= 0 else keys[0])
+	Settings.settings.ui.theme = next_theme
+	Settings.save()
+	ThemeMgr.apply_theme(next_theme)
+
+
+func _build_menu() -> void:
+	var anchor := MarginContainer.new()
+	anchor.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	anchor.offset_left = -180.0
+	anchor.offset_right = 180.0
+	anchor.offset_top = -320.0
+	anchor.offset_bottom = -54.0
+	anchor.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(anchor)
+
+	_content = VBoxContainer.new()
+	_content.name = "MenuContent"
+	_content.alignment = BoxContainer.ALIGNMENT_END
+	_content.add_theme_constant_override("separation", 10)
+	_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	anchor.add_child(_content)
 
 	_subtitle = Label.new()
-	_subtitle.text = "双生  ·  絮语  ·  陪伴"
+	_subtitle.text = "双生 · 絮语 · 陪伴"
 	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_subtitle.add_theme_font_size_override("font_size", 16)
-	_subtitle.custom_minimum_size = Vector2(0, 28)
+	_subtitle.add_theme_font_size_override("font_size", 13)
+	_subtitle.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.84))
+	_subtitle.custom_minimum_size = Vector2(0, 24)
 	_content.add_child(_subtitle)
 
 	var menu := VBoxContainer.new()
 	menu.name = "MenuButtons"
 	menu.alignment = BoxContainer.ALIGNMENT_CENTER
-	menu.add_theme_constant_override("separation", 12)
+	menu.add_theme_constant_override("separation", 9)
 	_content.add_child(menu)
 
-	_start_button = _make_menu_button("🌸 继续旅程", true)
+	_start_button = _make_menu_button("继续旅程", true)
 	_start_button.name = "StartButton"
 	_start_button.pressed.connect(_on_start_pressed)
 	menu.add_child(_start_button)
-	_new_game_button = _make_menu_button("↻ 新旅程", false)
+	_new_game_button = _make_menu_button("新旅程", false)
 	_new_game_button.name = "NewGameButton"
 	_new_game_button.pressed.connect(_on_new_game_pressed)
 	menu.add_child(_new_game_button)
-	_journey_library_button = _make_menu_button("📚 旅程档案", false)
+	_journey_library_button = _make_menu_button("旅程档案", false)
 	_journey_library_button.name = "JourneyLibraryButton"
 	_journey_library_button.pressed.connect(_on_journey_library_pressed)
 	menu.add_child(_journey_library_button)
-	_life_lab_button = _make_menu_button("🍡 团子生活实验室", false)
+	_life_lab_button = _make_menu_button("生活实验室", false)
 	_life_lab_button.name = "LifeLabButton"
 	_life_lab_button.pressed.connect(_on_life_lab_pressed)
 	menu.add_child(_life_lab_button)
-	_settings_button = _make_menu_button("⚙️ 设置", false)
+	_settings_button = _make_menu_button("设置", false)
 	_settings_button.name = "SettingsButton"
 	_settings_button.pressed.connect(_on_settings_pressed)
 	menu.add_child(_settings_button)
@@ -209,7 +272,7 @@ func _build_menu() -> void:
 	_core_startup_dialog = AcceptDialog.new()
 	_core_startup_dialog.title = "Companion Core 未启动"
 	_core_startup_dialog.ok_button_text = "知道了"
-	_core_startup_dialog.add_button("📂 打开游戏目录", true, "open_game_directory")
+	_core_startup_dialog.add_button("打开游戏目录", true, "open_game_directory")
 	_core_startup_dialog.custom_action.connect(_on_core_startup_dialog_action)
 	add_child(_core_startup_dialog)
 
@@ -290,15 +353,17 @@ func _animate_intro() -> void:
 		tween.tween_property(child, "modulate:a", 1.0, 0.55).set_ease(Tween.EASE_OUT)
 		tween.tween_property(child, "position", target_position, 0.55).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 		delay += 0.09
-	# 呼吸感:入场结束后,标题与主按钮进入亮度呼吸(纯 modulate,零几何变化)
-	var breath_timer := create_tween()
-	breath_timer.tween_interval(delay + 0.6)
-	breath_timer.tween_callback(func():
-		if is_instance_valid(_title):
-			UIBREATH.breathe(_title, 0.05, 4.2)
-		if is_instance_valid(_start_button) and not _start_button.disabled:
-			UIBREATH.breathe(_start_button, 0.04, 2.8)
-	)
+	# 呼吸感:标题锁定与主按钮只做亮度变化，不改变界面几何。
+	if not bool(Settings.settings.ui.get("reduced_motion", false)):
+		var breath_timer := create_tween()
+		breath_timer.tween_interval(delay + 0.6)
+		breath_timer.tween_callback(func():
+			if is_instance_valid(_title):
+				UIBREATH.breathe(_title, 0.05, 4.2)
+			if is_instance_valid(_start_button) and not _start_button.disabled:
+				UIBREATH.breathe(_start_button, 0.04, 2.8)
+		)
+
 
 func _scale_button(button: Button, scale_value: float) -> void:
 	var tween := create_tween()
@@ -437,7 +502,15 @@ func _on_life_lab_pressed() -> void:
 
 func _on_theme_changed(_data: Dictionary) -> void:
 	_update_visuals()
+	if is_instance_valid(_scene_backdrop):
+		_scene_backdrop.refresh_theme()
 	queue_redraw()
+
+
+func _on_visual_accessibility_changed(reduced_motion: bool) -> void:
+	set_process(not reduced_motion)
+	if is_instance_valid(_scene_backdrop):
+		_scene_backdrop.set_animating(not reduced_motion)
 
 func _on_font_size_changed(size: int) -> void:
 	if _title:

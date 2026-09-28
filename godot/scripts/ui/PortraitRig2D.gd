@@ -10,6 +10,7 @@ const DEFAULT_SIZE := Vector2(310.0, 224.0)
 @export_file("*.json") var manifest_path := ""
 @export var eye_follow_strength := 1.0
 @export var motion_strength := 1.0
+@export var stage_mode := false
 
 var _manifest: Dictionary = {}
 # _palette/_draw_backdrop 处于每帧绘制路径：缓存调色板与样式框，
@@ -301,6 +302,11 @@ func _draw() -> void:
 
 func _draw_backdrop() -> void:
 	var palette := _palette()
+	if stage_mode:
+		# 场景舞台模式由父层负责环境；这里只保留柔光和地面落影。
+		draw_circle(size * Vector2(0.52, 0.46), minf(size.x, size.y) * 0.40, Color(palette.accent, 0.10))
+		draw_circle(Vector2(size.x * 0.53, size.y * 0.90), size.x * 0.25, Color(0.02, 0.02, 0.03, 0.16))
+		return
 	if _backdrop_style == null:
 		_backdrop_style = StyleBoxFlat.new()
 		_backdrop_style.set_border_width_all(1)
