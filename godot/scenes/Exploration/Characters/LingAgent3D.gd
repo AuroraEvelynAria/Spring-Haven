@@ -10,6 +10,8 @@ signal action_state_changed(state: Dictionary)
 signal destination_reached(label: String, position: Vector3)
 signal movement_failed(reason: String)
 signal local_visual_loaded(success: bool, resource_path: String)
+# ADR-012(消费侧):PAD 心境到达/变化(供 HUD 与场景表达订阅)
+signal mood_changed(mood: Dictionary)
 
 const LOCAL_PLACEHOLDER_MODEL_PATH := (
 	"res://local_assets/ling_placeholder/ling_placeholder.glb"
@@ -88,6 +90,13 @@ var _local_visual_loading := false
 var _safe_horizontal_velocity := Vector3.ZERO
 var _avoidance_velocity_ready := false
 var _base_move_speed := 2.8
+# ADR-012(消费侧):PAD 心境驱动的待机姿态(呼吸起伏/前倾)
+var _mood_pleasure := 0.0
+var _mood_arousal := 0.0
+var _mood_dominance := 0.0
+var _mood_words := ""
+var _mood_phase := 0.0
+var _visual_base_y := 0.0
 
 
 func _ready() -> void:
@@ -104,6 +113,7 @@ func _ready() -> void:
 	_gravity = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 	last_safe_transform = global_transform
 	_last_progress_position = global_position
+	_visual_base_y = visual_pivot.position.y
 	ground_probe.target_position = Vector3(0.0, -edge_probe_depth, 0.0)
 	ahead_ground_probe.target_position = Vector3(0.0, -edge_probe_depth, 0.0)
 	call_deferred("_enable_navigation_after_map_sync")
@@ -155,6 +165,56 @@ func _physics_process(delta: float) -> void:
 
 	_update_last_safe_transform()
 	_update_stuck_recovery(delta, has_motion_intent, edge_blocked)
+
+
+func _process(delta: float) -> void:
+	_animate_mood_pose(delta)
+
+
+func _animate_mood_pose(delta: float) -> void:
+	"""ADR-012(消费侧):待机时以呼吸起伏与微前倾表达 PAD 心境。
+
+	唤醒高 → 呼吸快;唤醒低(恹恹) → 深而慢;愉悦低 → 微微前倾。
+	只在站立待机时表达,移动时平滑归零,不干扰导航与转向
+	(只动 visual_pivot 的 y 与 rotation.x,rotation.y 归 _turn_visual_toward)。
+	"""
+	if not is_instance_valid(visual_pivot):
+		return
+	var idle := _mode == ActionMode.IDLE and is_on_floor()
+	var breath_speed := 1.0 + maxf(0.0, _mood_arousal) * 1.4
+	_mood_phase = fmod(_mood_phase + delta * breath_speed, TAU)
+	var target_bob := 0.0
+	var target_lean := 0.0
+	if idle:
+		var amplitude := 0.006 + maxf(0.0, -_mood_arousal) * 0.012
+		target_bob = sin(_mood_phase) * amplitude
+		target_lean = clampf(-_mood_pleasure, -1.0, 1.0) * 0.05
+	visual_pivot.position.y = lerpf(
+		visual_pivot.position.y, _visual_base_y + target_bob, clampf(delta * 3.0, 0.0, 1.0)
+	)
+	visual_pivot.rotation.x = lerpf(
+		visual_pivot.rotation.x, target_lean, clampf(delta * 2.0, 0.0, 1.0)
+	)
+
+
+## ADR-012(消费侧):接收 Companion Core 响应附带的 PAD 心境并驱动表达。
+func set_mood(mood: Dictionary) -> void:
+	if not mood is Dictionary:
+		return
+	_mood_pleasure = clampf(float(mood.get("pleasure", 0.0)), -1.0, 1.0)
+	_mood_arousal = clampf(float(mood.get("arousal", 0.0)), -1.0, 1.0)
+	_mood_dominance = clampf(float(mood.get("dominance", 0.0)), -1.0, 1.0)
+	_mood_words = str(mood.get("words", ""))
+	mood_changed.emit(get_mood())
+
+
+func get_mood() -> Dictionary:
+	return {
+		"pleasure": _mood_pleasure,
+		"arousal": _mood_arousal,
+		"dominance": _mood_dominance,
+		"words": _mood_words,
+	}
 
 
 ## 命令小玲移动到世界坐标。label 会原样出现在状态字典和到达信号中。

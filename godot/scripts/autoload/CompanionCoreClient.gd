@@ -10,6 +10,7 @@ signal error_received(message: String)
 signal request_failed(request_id: String, message: String, retryable: bool)
 signal health_changed(active: bool, message: String)
 signal memory_status_changed(status: Dictionary)
+signal mood_updated(role_id: String, mood: Dictionary)
 
 const DEFAULT_CORE_BASE_URL := "http://127.0.0.1:18340"
 const HEALTH_TIMEOUT_SECONDS := 5.0
@@ -854,6 +855,16 @@ func _dispatch_request(request_id: String) -> void:
 
 	var response_data = result.get("data", {})
 	if response_data is Dictionary:
+		# ADR-012(消费侧):PAD 心境随响应下发,转给场景做姿态/标签表达
+		var mood_variant = (response_data as Dictionary).get("mood")
+		if mood_variant is Dictionary:
+			var mood_role_id := ""
+			var payload_variant = info.get("payload", {})
+			if payload_variant is Dictionary:
+				mood_role_id = str((payload_variant as Dictionary).get("role_id", ""))
+			mood_updated.emit(
+				mood_role_id, (mood_variant as Dictionary).duplicate(true)
+			)
 		var memory_variant = (response_data as Dictionary).get("memory", {})
 		if memory_variant is Dictionary:
 			var recalled_count := maxi(0, int((memory_variant as Dictionary).get("recalled_count", 0)))

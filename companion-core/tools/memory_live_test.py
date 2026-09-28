@@ -284,6 +284,8 @@ async def main_async(keep: bool) -> int:
                         "recalled_count": recalled,
                         "elapsed_s": round(elapsed, 1),
                         "claims_so_far": turn_claims,
+                        # ADR-012 消费侧契约:响应携带 PAD(定性词 + 三维浮点)
+                        "mood": reply.get("mood"),
                     }
                 )
             await maintenance_pass(service, f"日{day}后")
@@ -342,6 +344,14 @@ async def main_async(keep: bool) -> int:
         log(
             f"  💭 心境: p={mood['pleasure']:.3f} a={mood['arousal']:.3f} "
             f"d={mood['dominance']:.3f}(home={role_home}, 审计 {mood_audit} 条)"
+        )
+        mood_turns = sum(
+            1
+            for turn in report["turns"]
+            if isinstance(turn.get("mood"), dict) and turn["mood"].get("words")
+        )
+        log(
+            f"  💭 心境通道: {mood_turns}/{len(report['turns'])} 轮响应携带定性词(消费侧契约)"
         )
 
         # 1) 召回评测

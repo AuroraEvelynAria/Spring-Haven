@@ -79,6 +79,12 @@ func _ready() -> void:
 	var life_sim := get_node_or_null("/root/LifeSim")
 	if is_instance_valid(life_sim) and life_sim.has_signal("autonomous_action"):
 		life_sim.connect("autonomous_action", Callable(self, "_on_life_autonomous_action"))
+	# ADR-012(消费侧):Companion Core 下发的 PAD 心境 → 3D 待机姿态
+	var core_client := get_node_or_null("/root/CompanionCore")
+	if is_instance_valid(core_client) and core_client.has_signal("mood_updated"):
+		var mood_callable := Callable(self, "_on_core_mood_updated")
+		if not core_client.is_connected("mood_updated", mood_callable):
+			core_client.connect("mood_updated", mood_callable)
 	# ADR 探索阶段①:玩家交互(按 E) → 动词执行 → 事件进 Heartloom
 	if is_instance_valid(_player):
 		_player.connect("interact_target_changed", Callable(self, "_on_interact_target_changed"))
@@ -423,6 +429,15 @@ func _capture_and_share_plant_photo() -> void:
 			"visual_summary": visual_summary,
 		})
 	_show_status("小玲给绿植拍了张照片，已存入本地相册。", Color("9ed6bd"))
+
+func _on_core_mood_updated(role_id: String, mood: Dictionary) -> void:
+	"""ADR-012(消费侧):小玲的 PAD 心境 → 3D 待机姿态(呼吸/前倾)。"""
+	if not is_instance_valid(_ling_agent) or mood.is_empty():
+		return
+	if not role_id.is_empty() and role_id != str(_ling_agent.role_id):
+		return
+	_ling_agent.set_mood(mood)
+
 
 func _on_life_autonomous_action(event: Dictionary) -> void:
 	if str(event.get("role_id", "")) != "ling" or not _navigation_ready:

@@ -119,6 +119,52 @@ class MoodDynamicsTests(unittest.TestCase):
         self.assertAlmostEqual(merged["dominance"], DEFAULT_MOOD_HOME[2] * (1 - MOOD_EWMA_ALPHA))
 
 
+class MoodResponsePayloadTests(unittest.TestCase):
+    """ADR-012 D3:chat 响应携带 mood(定性词 + 三维浮点),供 Godot 消费。"""
+
+    def test_chat_response_carries_mood(self):
+        from spring_haven_core.provider import ProviderReply
+        from spring_haven_core.service import CompanionService
+
+        class _StubProvider:
+            async def complete(self, system_prompt, messages):
+                return ProviderReply(text="喵。", finish_reason="stop")
+
+        roles = RoleRegistry(
+            {"ling": RoleDefinition("ling", "小玲", "春日 铃音", ("小玲",), "你是小玲。")}
+        )
+        store = HeartloomStore(":memory:", ["ling"])
+        try:
+            # 多轮累积越过 0.15 中性带(单轮 EWMA 仅 +0.036,按设计不出词)
+            for _ in range(10):
+                store.apply_mood_delta("s", "ling", {"p": 0.3, "a": 0.0, "d": 0.0})
+            service = CompanionService(
+                roles, _StubProvider(), store, memory_organizer_enabled=False
+            )
+            result = asyncio.run(
+                service.chat(
+                    {
+                        "request_id": "mood-1",
+                        "role_id": "ling",
+                        "save_id": "s",
+                        "text": "早安",
+                        "history": [],
+                        "event_type": "chat",
+                        "state": {},
+                    }
+                )
+            )
+            mood = result.get("mood")
+            self.assertIsInstance(mood, dict)
+            self.assertIn("pleasure", mood)
+            self.assertIn("arousal", mood)
+            self.assertIn("dominance", mood)
+            self.assertTrue(str(mood.get("words", "")))
+        finally:
+            service.close()
+            store.close()
+
+
 class MoodQualitativeTests(unittest.TestCase):
     def test_mood_words_bands(self):
         self.assertIn("明亮", mood_words({"pleasure": 0.7, "arousal": 0.6, "dominance": 0.2}))

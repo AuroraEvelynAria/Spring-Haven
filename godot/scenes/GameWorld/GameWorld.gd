@@ -61,6 +61,8 @@ const STAT_DEFS := {
 var _current_role := "ling"
 var _role_revision := 0
 var _stats_by_role: Dictionary = {}
+# ADR-012(消费侧):各角色最近一次来自 Companion Core 的 PAD 心境定性词
+var _mood_words_by_role: Dictionary = {}
 var _network_waiting := false
 var _typewriter_active := false
 var _typewriter_skip_requested := false
@@ -167,6 +169,8 @@ func _ready() -> void:
 	CompanionCore.request_failed.connect(_on_core_request_failed)
 	CompanionCore.health_changed.connect(_on_core_health_changed)
 	CompanionCore.memory_status_changed.connect(_on_memory_status_changed)
+	# ADR-012(消费侧):PAD 心境定性词替换舞台静态心境文案
+	CompanionCore.mood_updated.connect(_on_mood_updated)
 	VoiceInput.recording_changed.connect(_on_voice_recording_changed)
 	VoiceInput.transcription_started.connect(_on_voice_transcription_started)
 	VoiceInput.transcription_ready.connect(_on_voice_transcription_ready)
@@ -790,6 +794,16 @@ func _refresh_sidebar() -> void:
 	_sync_portrait_state()
 	call_deferred("_flush_pending_full_effects")
 
+func _on_mood_updated(role_id: String, mood: Dictionary) -> void:
+	"""ADR-012(消费侧):缓存实时心境词;当前角色立即刷新舞台标签。"""
+	var normalized := role_id.strip_edges()
+	if normalized.is_empty():
+		return
+	_mood_words_by_role[normalized] = str(mood.get("words", ""))
+	if normalized == _current_role:
+		_refresh_stage_identity()
+
+
 func _refresh_stage_identity() -> void:
 	var role: Dictionary = ROLE_DATA[_current_role]
 	var data := ThemeMgr.get_current_theme_data()
@@ -802,7 +816,11 @@ func _refresh_stage_identity() -> void:
 		_stage_sub_label.text = str(role.sub)
 		_stage_sub_label.add_theme_color_override("font_color", Color(data.secondary))
 	if is_instance_valid(_stage_mood_label):
-		_stage_mood_label.text = str(role.mood)
+		# ADR-012(消费侧):已收到实时心境词则优先于静态文案
+		var live_mood_words := str(_mood_words_by_role.get(_current_role, ""))
+		_stage_mood_label.text = (
+			live_mood_words if not live_mood_words.is_empty() else str(role.mood)
+		)
 		_stage_mood_label.add_theme_color_override("font_color", Color(data.secondary, 0.72))
 	if is_instance_valid(_stage_backlight) and _stage_backlight.material:
 		(_stage_backlight.material as ShaderMaterial).set_shader_parameter(
