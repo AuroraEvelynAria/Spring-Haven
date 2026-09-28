@@ -40,7 +40,10 @@ var _graph: Dictionary = {}
 var _selected_node_id := ""
 var _load_generation := 0
 var _world_now := 0.0
-var _time_range_initialized := false
+# 时间轴状态:true = 跟随「现在」(实时态);用户拨动滑杆后转 false(回溯态)。
+# 不能靠"值是否等于最大值"判断 —— 滑杆 step=0.1 会把吸附后的值卡在
+# 最大值之下,导致一打开就误判为回溯、整图变幽灵
+var _time_following_now := true
 
 
 func _ready() -> void:
@@ -379,16 +382,18 @@ func _load_graph() -> void:
 		var world_range: Dictionary = world_range_variant
 		earliest = float(world_range.get("earliest", 0.0))
 		latest = maxf(world_now, earliest + 1.0)
+		# 改 min/max/step 会让 Range 重新量化并触发 value_changed(会把
+		# 「跟随现在」误置为 false),所以先快照意图、配好量程后再恢复
+		var follow_now := _time_following_now
 		_time_slider.min_value = earliest
 		_time_slider.max_value = latest
 		_time_slider.step = 0.1
 		# 软边渐变带宽度 ≈ 时间线总量的 3%(限制在 1~45 世界日)
 		_canvas.set_time_fade_days(clampf((latest - earliest) * 0.03, 1.0, 45.0))
-		if not _time_range_initialized or _time_slider.value >= latest - 0.01:
-			# 首次加载:滑杆初值 1.0 并无意义,直接落在「现在」;
-			# 之后仅在已处于「现在」时跟随量程右移(用户拨到某天则保持)
+		_time_following_now = follow_now
+		if _time_following_now:
+			# 跟着「现在」:每次加载都把滑杆贴到最新量程右端
 			_time_slider.set_value_no_signal(latest)
-			_time_range_initialized = true
 		_update_time_label(_time_slider.value)
 	# 章节钉:织结节/周反思/里程碑 → 时间轴书签(纯客户端,随图重建)
 	_time_pins.set_range(earliest, latest)
@@ -645,23 +650,24 @@ func _on_strength_changed(value: float) -> void:
 func _update_time_label(value: float) -> void:
 	if _time_slider == null:
 		return
-	if value >= _time_slider.max_value - 0.01:
+	if _time_following_now or value >= _time_slider.max_value - 0.06:
 		_time_label.text = "时间 · 现在"
 	else:
 		_time_label.text = "时间 · 世界第 %d 天" % (int(value) + 1)
 
 
 func _current_cursor_value() -> float:
-	"""ADR-010(修订):滑杆在最大值 = 实时态(-1,全部点亮);否则返回世界日。"""
-	if _time_slider == null:
+	"""跟随「现在」时返回 -1(实时态,全部点亮);否则返回世界日(回溯态)。"""
+	if _time_slider == null or _time_following_now:
 		return -1.0
-	if _time_slider.value >= _time_slider.max_value - 0.01:
+	if _time_slider.value >= _time_slider.max_value - 0.06:
 		return -1.0
 	return float(_time_slider.value)
 
 
 func _on_time_value_changed(value: float) -> void:
 	# 纯客户端调光:不发请求、不重排,画布只改亮度
+	_time_following_now = value >= _time_slider.max_value - 0.06
 	_update_time_label(value)
 	if _canvas != null:
 		_canvas.set_time_cursor(_current_cursor_value())
@@ -670,6 +676,7 @@ func _on_time_value_changed(value: float) -> void:
 
 
 func _snap_time_to_now() -> void:
+	_time_following_now = true
 	_time_slider.set_value_no_signal(_time_slider.max_value)
 	_update_time_label(_time_slider.max_value)
 	_canvas.set_time_cursor(-1.0)

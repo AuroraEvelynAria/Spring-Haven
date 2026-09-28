@@ -15,24 +15,26 @@ const MAX_ZOOM := 2.4
 # 每帧模拟直至能量沉降:库仑斥力(全对,半径感知)+ 弹簧(可见边)+
 # 向心 + 阻尼 + 软边界。拖拽把光标速度传给节点,松手后惯性滑行,
 # 弹簧拖着邻居弹性跟随 —— 「弹弓」手感来自连续模拟,而非固定步数。
-const REPULSION_K := 20000.0
+const REPULSION_K := 11000.0
 const REPULSION_FLOOR := 0.35
 const REPULSION_CUTOFF_SQ := 490000.0
 const LINK_SPRING_K := 0.03
-const LINK_LEN_STRONG := 120.0
-const LINK_LEN_WEAK := 190.0
+const LINK_LEN_STRONG := 95.0
+const LINK_LEN_WEAK := 140.0
 const CENTER_PULL := 0.007
 const DAMPING := 0.865
 const MAX_SPEED := 26.0
 const FLING_MAX := 22.0
-# 模拟温度(alpha):唤醒置 1,逐帧衰减——力随温度冷却,布局约 5 秒收敛后
-# 冻结。d3/Obsidian 同款收敛模型,不存在"能量阈值提前休眠"或"永不停抖"
-const SIM_COOL_PER_FRAME := 0.0024
+# 模拟温度(alpha):唤醒置 1,逐帧衰减——力随温度冷却,布局约 2 秒收敛后
+# 冻结(d3/Obsidian 同款)。初始布局已是均匀云,冷却快、观感静
+const SIM_COOL_PER_FRAME := 0.004
 const SIM_ALPHA_MIN := 0.01
 const SIM_ALPHA_DRAG := 0.5
-const COLLISION_PAD := 7.0
-const FOCUS_DIM := 0.15
+const COLLISION_PAD := 6.0
+const FOCUS_DIM := 0.10
 const SOFT_BOUNDARY := 0.9
+## 度数软上限(Obsidian「毛线球」对策):连接数超过它,相关弹簧变软
+const HUB_DEGREE_SOFT_CAP := 7
 
 var _nodes: Array[Dictionary] = []
 var _edges: Array[Dictionary] = []
@@ -50,6 +52,9 @@ var _panning := false
 var _zoom := 1.0
 var _pan := Vector2.ZERO
 var _min_strength := 0.55
+var _degrees: Dictionary = {}
+# 布局位置缓存(静态,跨面板开关):再次打开直接复用上次沉降结果,开局即稳定
+static var _layout_cache: Dictionary = {}
 # ADR-010:世界日时间游标(客户端调光)。-1 = 实时态(全部点亮);
 # 游标之后诞生的节点/边降为低亮度"幽灵",布局不受影响 —— 拖动全程零重排。
 # 幽灵程度带时间插值(指数趋近),拨动滑杆时亮度平滑过渡。
@@ -119,11 +124,45 @@ func set_graph(graph: Dictionary) -> void:
 			var edge: Dictionary = (edge_variant as Dictionary).duplicate(true)
 			if _node_by_id.has(str(edge.get("source", ""))) and _node_by_id.has(str(edge.get("target", ""))):
 				_edges.append(edge)
-	_initialize_positions()
+	_compute_degrees()
+	var reused := _apply_cached_layout()
+	if not reused:
+		_initialize_positions()
 	_seed_ghost_amounts()
 	_wake_physics()
+	if reused:
+		_sim_alpha = 0.3
 	reset_view()
 	queue_redraw()
+
+
+func _compute_degrees() -> void:
+	_degrees.clear()
+	for edge in _edges:
+		var source := str(edge.get("source", ""))
+		var target := str(edge.get("target", ""))
+		_degrees[source] = int(_degrees.get(source, 0)) + 1
+		_degrees[target] = int(_degrees.get(target, 0)) + 1
+
+
+func _apply_cached_layout() -> bool:
+	"""复用上次沉降的位置(命中 ≥70% 才用);开局即稳定,不再重新炸开。"""
+	if _layout_cache.is_empty() or _nodes.size() < 8:
+		return false
+	var hits := 0
+	for node in _nodes:
+		if _layout_cache.has(str(node.id)):
+			hits += 1
+	if hits < int(float(_nodes.size()) * 0.7):
+		return false
+	for node in _nodes:
+		var node_id := str(node.id)
+		if _layout_cache.has(node_id):
+			_positions[node_id] = _layout_cache[node_id]
+		else:
+			_positions[node_id] = Vector2(randf_range(-50.0, 50.0), randf_range(-50.0, 50.0))
+		_velocities[node_id] = Vector2.ZERO
+	return true
 
 
 func set_palette(theme_data: Dictionary) -> void:
@@ -265,17 +304,22 @@ func get_node_by_id(node_id: String) -> Dictionary:
 
 
 func _initialize_positions() -> void:
-	# Obsidian 式出生:全部节点从中心附近的小随机团出发,让库仑斥力把它们
-	# "炸开"到自然位置 —— 强初始能量保证布局充分展开,不会中途冻在半路
+	# 椭圆向日葵(phyllotaxis)出生:按画布宽高比把节点均匀铺满,第一帧就是
+	# "像样的云",力导向只做轻微整理 —— 避免开场一秒还在打结
 	var count := maxi(1, _nodes.size())
-	var spread := clampf(count * 1.6, 40.0, 110.0)
+	var golden_angle := TAU * (3.0 - sqrt(5.0))
+	var ratio := clampf(size.x / maxf(1.0, size.y), 1.0, 2.6)
+	var base_r := minf(size.x * 0.5, size.y * 0.5) * 0.92
 	for index in _nodes.size():
 		var node: Dictionary = _nodes[index]
 		var node_id := str(node.id)
 		var seed := absi(hash(node_id))
-		var angle := float(seed % 1000) / 1000.0 * TAU
-		var ring := 8.0 + float((seed / 7) % 100) * (spread / 100.0)
-		_positions[node_id] = Vector2.from_angle(angle) * ring
+		var t := (float(index) + 0.6) / float(count)
+		var ring := base_r * sqrt(t)
+		var angle := float(index) * golden_angle + float(seed % 1000) / 7000.0
+		var position := Vector2.from_angle(angle) * ring
+		position.x *= ratio
+		_positions[node_id] = position
 		_velocities[node_id] = Vector2.ZERO
 
 
@@ -332,7 +376,12 @@ func _simulate(delta: float) -> void:
 		var direction := difference / distance
 		var strength := clampf(float(edge.get("strength", 0.4)), 0.1, 1.0)
 		var rest_length := lerpf(LINK_LEN_WEAK, LINK_LEN_STRONG, strength)
-		var pull := (distance - rest_length) * LINK_SPRING_K * (0.5 + strength * 0.8)
+		# 度数软上限:高连接节点的边变软,卫星散开、连线不再挤成一束
+		var hub_soften := 1.0
+		var hub_degree := maxi(int(_degrees.get(source, 0)), int(_degrees.get(target, 0)))
+		if hub_degree > HUB_DEGREE_SOFT_CAP:
+			hub_soften = maxf(0.35, float(HUB_DEGREE_SOFT_CAP) / float(hub_degree))
+		var pull := (distance - rest_length) * LINK_SPRING_K * (0.5 + strength * 0.8) * hub_soften
 		forces[source] = (forces[source] as Vector2) + direction * pull
 		forces[target] = (forces[target] as Vector2) - direction * pull
 	# 3) 积分:向心 + 软边界 + 阻尼 + 限速;拖拽节点钉在光标上并携带手速
@@ -368,6 +417,8 @@ func _simulate(delta: float) -> void:
 		next_position.x = clampf(next_position.x, -half_view.x, half_view.x)
 		next_position.y = clampf(next_position.y, -half_view.y, half_view.y)
 		_positions[node_id] = next_position
+	for node in _nodes:
+		_layout_cache[str(node.id)] = _positions[str(node.id)]
 
 
 func _update_focus(focus_id: String) -> void:
@@ -388,7 +439,6 @@ func _update_focus(focus_id: String) -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), _palette.background)
-	_draw_grid()
 	# 悬停/拖拽聚焦:邻域保持明亮,其余整体淡出(Obsidian 式可读性核心)
 	var focus_active := _focus_id != ""
 	var font := get_theme_default_font()
@@ -433,9 +483,9 @@ func _draw() -> void:
 			edge_color = Color(Color("#F2D58A"), lerpf(GHOST_EDGE_ALPHA, 0.52 + render_strength * 0.38, lit_amount) * focus_mul)
 			edge_width = lerpf(0.4, 1.0 + render_strength * 2.2, lit_amount)
 		else:
-			# 普通记忆边是背景织物:压到极淡,可读性交给金边与聚焦展开
-			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.02 + render_strength * 0.05, lit_amount) * focus_mul)
-			edge_width = lerpf(0.4, 0.4 + render_strength * 0.5, lit_amount)
+			# 普通记忆边:细而均匀的灰线(Obsidian 底网),聚焦时再发亮
+			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.08 + render_strength * 0.10, lit_amount) * focus_mul)
+			edge_width = lerpf(0.4, 0.5 + render_strength * 0.5, lit_amount)
 		draw_line(
 			_world_to_screen(_positions[source]),
 			_world_to_screen(_positions[target]),
@@ -467,7 +517,7 @@ func _draw() -> void:
 		if screen_position.x < -80.0 or screen_position.y < -60.0 or screen_position.x > size.x + 80.0 or screen_position.y > size.y + 60.0:
 			continue
 		var is_entity := _is_entity_node(node)
-		var radius := (9.0 if is_entity else _node_radius(node)) * sqrt(_zoom)
+		var radius := _base_radius(node) * sqrt(_zoom)
 		var color := _entity_color(node) if is_entity else _node_color(node)
 		var ghost_amount := clampf(_node_ghost_amount(node), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
@@ -488,15 +538,13 @@ func _draw() -> void:
 				draw_circle(screen_position, maxf(1.5, radius * 0.28), Color(color, ring_alpha))
 		else:
 			if selected:
-				draw_circle(screen_position, radius + 7.0, Color(color, 0.16 * lit_amount * focus_mul))
-				draw_arc(screen_position, radius + 5.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 2.2, true)
+				draw_circle(screen_position, radius + 5.0, Color(color, 0.14 * lit_amount * focus_mul))
+				draw_arc(screen_position, radius + 3.5, 0.0, TAU, 28, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
 			elif hovered:
-				draw_circle(screen_position, radius + 5.0, Color(color, 0.18 * lit_amount))
+				draw_circle(screen_position, radius + 4.0, Color(color, 0.16 * lit_amount))
 			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
 			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
 			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
-			if lit_amount > 0.02 and in_focus:
-				draw_circle(screen_position - Vector2(radius * 0.28, radius * 0.28), maxf(2.0, radius * 0.22), Color(1, 1, 1, 0.34 * lit_amount))
 			if bool(node.get("always_active", false)) and lit_amount > 0.02 and in_focus:
 				draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
 			# 二手传闻(heard_from)节点:右上角细线空心菱形标记
@@ -520,28 +568,26 @@ func _draw() -> void:
 				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount * focus_mul)
 				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
 				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount * focus_mul), 1.1, true)
+		# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
+		# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
 		var should_label := false
-		if is_entity:
-			# 实体标签:选中/悬停必显;聚焦邻域内必显;普通态需放大且有一定主张量
-			should_label = selected or hovered or (
-				_zoom >= 0.85 and int(node.get("claim_count", 0)) >= 2
-			)
-		else:
-			should_label = selected or hovered or (
-				_zoom >= 0.72 and float(node.get("importance", 0.5)) >= 0.66
-			)
-		# 聚焦模式下:邻域节点无条件出标签,非邻域一律不出
 		if focus_active:
 			should_label = in_focus
+		else:
+			should_label = selected or hovered or _zoom >= 0.55
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
 			var label := _short_title(
 				str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
-				12
+				14
 			)
-			var label_width := clampf(float(label.length()) * 13.0 + 18.0, 86.0, 190.0)
-			var label_position := screen_position + Vector2(-label_width * 0.5, radius + 17.0)
-			var label_rect := Rect2(label_position - Vector2(2.0, 14.0), Vector2(label_width + 4.0, 20.0))
+			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
+			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
+			var label_rect := Rect2(
+				label_position - Vector2(3.0, 12.0),
+				Vector2(text_size.x + 6.0, 18.0)
+			)
 			var overlaps := false
 			if not selected and not hovered:
 				for occupied in occupied_label_rects:
@@ -555,28 +601,11 @@ func _draw() -> void:
 				font,
 				label_position,
 				label,
-				HORIZONTAL_ALIGNMENT_CENTER,
-				label_width,
-				12,
-				Color(_palette.text, 0.97 if selected or hovered else 0.78)
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				11,
+				Color(_palette.text, 0.95 if selected or hovered else 0.72)
 			)
-
-
-func _draw_grid() -> void:
-	var spacing := 72.0 * _zoom
-	if spacing < 30.0:
-		spacing *= 2.0
-	var origin := size * 0.5 + _pan
-	var start_x := fmod(origin.x, spacing)
-	var start_y := fmod(origin.y, spacing)
-	var x := start_x
-	while x < size.x:
-		draw_line(Vector2(x, 0), Vector2(x, size.y), _palette.grid, 1.0)
-		x += spacing
-	var y := start_y
-	while y < size.y:
-		draw_line(Vector2(0, y), Vector2(size.x, y), _palette.grid, 1.0)
-		y += spacing
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -661,11 +690,12 @@ func _screen_to_world(screen_position: Vector2) -> Vector2:
 
 
 func _base_radius(node: Dictionary) -> float:
+	# Obsidian 式小节点:半径 4.5-9.5,留白交给布局,而不是靠小图块撑场面
 	if _is_entity_node(node):
-		return 9.0
+		return 6.5
 	var importance := clampf(float(node.get("importance", 0.5)), 0.0, 1.0)
-	var recall_boost := minf(3.0, log(1.0 + float(node.get("recall_count", 0))) * 0.8)
-	return 8.0 + importance * 8.0 + recall_boost
+	var recall_boost := minf(1.6, log(1.0 + float(node.get("recall_count", 0))) * 0.4)
+	return 4.5 + importance * 3.5 + recall_boost
 
 
 func _node_radius(node: Dictionary) -> float:
@@ -703,5 +733,7 @@ func _entity_color(node: Dictionary) -> Color:
 
 
 func _short_title(value: String, limit: int) -> String:
-	var compact := " ".join(value.split())
+	# 注意:Godot 的 String.split() 无参时按"单个字符"拆分(与 Python 不同),
+	# 曾把标题撑成"字 字 相 隔"、撞上限被截断加省略号;这里只折叠换行/制表
+	var compact := value.strip_edges().replace("\n", " ").replace("\t", " ")
 	return compact if compact.length() <= limit else compact.left(limit) + "…"
