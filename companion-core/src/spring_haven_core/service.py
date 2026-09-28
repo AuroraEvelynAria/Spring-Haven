@@ -1120,7 +1120,7 @@ class CompanionService:
         memory: dict[str, Any] | None = None
         try:
             memory = await self._propagate_with_provider(
-                source, target, day_key, title, content
+                source, target, day_key, title, content, importance
             )
         except Exception as exc:
             LOGGER.warning(
@@ -1153,6 +1153,7 @@ class CompanionService:
         day_key: str,
         title: str,
         content: str,
+        source_importance: float,
     ) -> dict[str, Any] | None:
         if not self.provider:
             return None
@@ -1160,7 +1161,7 @@ class CompanionService:
             "你是生活记忆传播整理器。一个角色经历了一件事，回家后讲给了另一个角色听。"
             "请以听者的第一人称视角，把这件事写成一条简洁的听说记忆（不超过两句话）。"
             "保持真实性，不要添加没有的信息。"
-            "严格输出 JSON：{\"title\":\"简短标题\",\"content\":\"听说内容\",\"importance\":0.0}"
+            "严格输出 JSON：{\"title\":\"简短标题\",\"content\":\"听说内容\",\"importance\":0.5}"
         )
         user_text = f"讲述者：{source.display_name}；听者：{target.display_name}\n"
         user_text += f"日期：{day_key}\n讲述的事（原标题：{title}）：\n{content[:600]}"
@@ -1172,11 +1173,15 @@ class CompanionService:
         if not parsed:
             return None
         first = parsed[0]
+        # 实弹 livetest2:模型会照抄提示词样例的 importance 值(实得 0.0),
+        # 传闻记忆沉出召回。与确定性回退同规则:轻微贬值但保底,且不得放大源事件。
+        llm_importance = self._bounded_float(first.get("importance"), 0.5, 0.0, 1.0)
+        floor = max(0.4, float(source_importance) - 0.2)
         return {
             "kind": "episodic",
             "title": str(first.get("title", "")).strip()[:120] or f"听{source.display_name}说起",
             "content": str(first.get("content", "")).strip()[:800],
-            "importance": self._bounded_float(first.get("importance"), 0.5, 0.0, 1.0),
+            "importance": min(float(source_importance), max(floor, llm_importance)),
             "confidence": 0.8,
             "half_life_days": 90.0,
         }

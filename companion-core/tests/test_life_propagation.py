@@ -55,14 +55,21 @@ class _Reply:
 class _FakeProvider:
     def __init__(self) -> None:
         self.fail = False
+        self.propagation_importance: float | None = None
 
     async def complete(self, system_prompt, messages):
         if self.fail:
             raise RuntimeError("provider down")
         content = str(messages[-1]["content"])
         if "讲述的事" in content:
+            importance = (
+                0.6
+                if self.propagation_importance is None
+                else self.propagation_importance
+            )
             return _Reply(
-                '{"title":"小玲说的事","content":"小玲今天告诉我，她在窗边晒了很久的太阳。","importance":0.6}'
+                '{"title":"小玲说的事","content":"小玲今天告诉我，她在窗边晒了很久的太阳。",'
+                '"importance":%s}' % importance
             )
         return _Reply(
             '{"memories":[{"title":"窗边的一天","content":"今天在窗边看了很久的书。","importance":0.8,"confidence":0.9}]}'
@@ -120,6 +127,27 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
         nai_memories2 = self.store.list_memories(save_id="s", role_id="nai")
         heard2 = [m for m in nai_memories2 if m["source"] == "heard_from_ling"]
         self.assertEqual(len(heard2), 1)
+
+    async def test_propagation_importance_clamped_to_source(self) -> None:
+        # livetest2 实弹发现:传播 LLM 会照抄提示词样例的 importance(实得 0.0),
+        # 传闻记忆沉出听者召回。钳制 = max(0.4, 源-0.2) 下限、源值上限。
+        # 假 provider 的 digest 恒返回 0.8,故源=0.8、地板=0.6。
+        for index, (llm_value, expected) in enumerate(
+            [(0.0, 0.6), (0.95, 0.8), (0.7, 0.7)]
+        ):
+            with self.subTest(case=index, llm=llm_value):
+                save_id = f"s-clamp-{index}"
+                self.provider.propagation_importance = llm_value
+                await self._seed(save_id, "ling", 0.8)
+                result = await self.service.run_due_life_digests(now=int(time.time()))
+                self.assertEqual(result["digested"], 2, result)
+                heard = [
+                    m
+                    for m in self.store.list_memories(save_id=save_id, role_id="nai")
+                    if m["source"] == "heard_from_ling"
+                ]
+                self.assertEqual(len(heard), 1)
+                self.assertAlmostEqual(float(heard[0]["importance"]), expected)
 
     async def test_low_importance_digest_does_not_propagate(self) -> None:
         # 低 importance 记忆不传播（provider 返回 0.8 会传播——用 fallback 测低值）
