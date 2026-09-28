@@ -179,20 +179,49 @@ with a lifecycle**:
 Its relationship to the life system: **the life system owns "now", Heartloom owns "the
 past"**. State changes get recorded, and come back as memory the next time she speaks.
 
-> ✅ **All implemented.**
+> ✅ **All implemented** — including the week-key → world-week migration that used to be
+> the honest caveat here (issue #23, closed with schema v7).
 >
 > A few things I built on top (doesn't change the description above):
 >
 > - **Local keyword indexing for Chinese and English** — Chinese uses 2–4 character
->   n-grams, so it recalls **without any cloud embedding**
+>   n-grams, so it recalls **without any cloud embedding**; with an embedding provider
+>   configured, **BGE-M3 vectors** join a hybrid blend (0.40 semantic / 0.25 lexical /
+>   0.20 importance / 0.10 recency / +0.05 graph boost), and a **semantic rescue scan**
+>   catches paraphrased questions when the lexical pool runs thin
+> - **Cross-encoder reranking** (BGE-Reranker-v2) re-orders the top-12 shortlist at
+>   0.55 rerank / 0.45 hybrid, with silent fallback when the rerank provider is off —
+>   the shortlist width was settled by an A/B on a frozen eval corpus
 > - Recall results go into a **dynamic** `<heartloom_memory_context>` that leaves the
 >   **stable system prefix untouched** — measured at **76%+ prompt cache hit**
+> - **An entity–claim layer with belief revision** (schema v8): subject–predicate–object
+>   triples over normalized entities; when a fact changes, the new claim **supersedes**
+>   the old one and a conflict audit edge is kept — "what she used to believe" stays
+>   queryable, and only non-superseded claims are injected as current facts
+> - **Decay, formalized** (schema v10): effective half-life = `half_life_days × intrinsic`;
+>   every successful recall **multiplies** stability up (capped) — "recalled often" now
+>   truly means "forgotten slower", and existing saves were migrated losslessly
+> - **A consolidation ladder**: post-turn organizer (≤3 memories) → daily digests →
+>   **nightly weaving** (≤1 theme memory per day, fabrication forbidden) → weekly
+>   reflections (with a forgotten-memories archive sweep) → a **seasonal "who I am"**
+>   identity memory every 90 world days
+> - **Hearsay tracking**: high-importance moments travel to the other character as
+>   `heard_from_*` memories flagged `is_second_hand` — the prompt marks them as
+>   second-hand, so nobody narrates hearsay as lived experience, and private memories
+>   never leak across scopes
+> - **A PAD mood baseline** (schema v9): bounded mood deltas flow in per turn and decay
+>   back to the character's home baseline over world days; the prompt only ever sees
+>   qualitative words, while the raw PAD vector goes to the 3D scene for idle animation
+> - The **memory network** gained a **time cursor** (scrub back to "what did she know on
+>   day N" — pure client-side dimming) and an **entity constellation** overlay: typed
+>   entity nodes, predicate-labeled claim edges, and superseded claims that dim out as
+>   the cursor passes them
 > - Memories are linked into an **explainable graph** where every edge returns its reason,
 >   with IDF downweighting and hard caps on node/edge/degree so it stays interactive over
 >   long runs
->
-> ⚠️ One honest caveat: the **world-time anchoring is designed but the week-key migration
-> isn't finished** (issue #23).
+> - Recall quality is guarded by a **deterministic eval harness**: a synthetic-corpus
+>   ratchet (14/14) runs in CI on every commit, plus a local-only real-archive anchor
+>   that never leaves this machine
 
 ## 9. Milestones and achievements
 

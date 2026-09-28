@@ -12,9 +12,9 @@ I wanted to introduce myself here because one piece of it overlaps with somethin
 still working on: **long-term memory**. Before that, let me lay out what I'm actually
 building.
 
-**Scale**: client is Godot 4.7 / GDScript — 118 `.gd` files, 32,964 lines; backend is
-Python 3.11+ (aiohttp + SQLite/WAL) — 17 modules, 11,293 lines; tests are 20 files, 5,492
-lines, **183 passing**.
+**Scale**: client is Godot 4.7 / GDScript — 120 `.gd` files, 34,125 lines; backend is
+Python 3.11+ (aiohttp + SQLite/WAL) — 17 modules, 13,120 lines; tests are 27 files, 7,315
+lines, **247 passing**.
 
 ---
 
@@ -196,15 +196,24 @@ time she speaks.
 > A few extra things I built on top (they don't change the description above):
 >
 > - A **local keyword index** for Chinese and English (Chinese uses 2–4 character n-grams,
->   **no cloud embedding dependency**)
+>   **no cloud embedding dependency**); with an embedding provider configured, BGE-M3
+>   vectors join a hybrid blend, and a **cross-encoder reranker** re-orders the top-12
+>   shortlist
 > - Recall results go into a **dynamic** `<heartloom_memory_context>` and **never pollute the
 >   stable system prefix** — **76%+ measured prefix-cache hit rate**
+> - An **entity–claim layer** (schema v8): subject–predicate–object triples with **belief
+>   revision** — when a fact changes, the new claim supersedes the old one and a conflict
+>   audit edge is kept, so "what she used to believe" stays queryable
+> - A **consolidation ladder**: post-turn organizer → daily digests → **nightly weaving** →
+>   weekly reflections → a seasonal "who I am" every 90 world days; high-importance moments
+>   travel to the other character as **second-hand hearsay** (`is_second_hand`), so nobody
+>   narrates "I heard about it" as "I lived it"
+> - A **PAD mood baseline** (schema v9) and two-parameter decay — effective half-life =
+>   `half_life_days × intrinsic` (schema v10, with multiplicative wake rewards)
 > - An **explainable relation graph** between memories; every edge returns why it exists, IDF
 >   suppresses words that are common across the whole store, and node / edge / per-node-degree
->   caps keep it interactive after long runs
->
-> ⚠️ One honest caveat: the **world-time anchoring is designed but the week-key migration
-> isn't finished** (issue #23).
+>   caps keep it interactive after long runs — plus a **time cursor** (scrub back to "what did
+>   she know on day N") and an **entity constellation** overlay
 
 ## 9. Milestones and achievements
 
@@ -251,8 +260,6 @@ I'd rather be explicit about this than overstate anything:
 
 - **Live2D** — adapter interface designed, not implemented
 - **VR, the full town, UGC** — designed, not built
-- **The week-key → world-week migration** in the memory time anchoring (issue #23) — designed,
-  not finished
 - **Webcam face tracking** — still an idea
 
 The full feature list, marked section by section as `✅ shipped / 🔧 designed / 💭 idea`, is in
@@ -268,7 +275,7 @@ straight into the AIRI frontend. Where I think I can be genuinely useful:
   and the one I'd most like to compare notes on
 - **ASR / TTS adapters** — I've already wired both up against real providers, including
   GPT-SoVITS
-- **Backend test coverage** — 183 tests is the habit I'd bring with me
+- **Backend test coverage** — 247 tests is the habit I'd bring with me
 
 If any of that is useful, I'm happy to work on it. And if you've done the Live2D side, I'd
 really like to hear how you approached it.

@@ -62,9 +62,11 @@ These aren't scripted NPCs. They're characters with **persistent memory, physiol
 
 ### 💬 Persistent Memory & Emotions
 
-- **Heartloom**, a timestamped local memory engine with natural decay, recall strengthening, and an **explorable memory network** with explainable links
-- **Daily digests, weekly self-reflections, and relationship milestones** — they remember, reflect, and grow over time
-- Characters share their lives with each other — important moments naturally travel between them
+- **Heartloom**, a local memory engine anchored to **virtual world time** — typed memories with natural decay, recall strengthening, and an **explorable memory network** where every link is explainable
+- **Facts, not just vibes**: an entity–claim layer tracks what she believes about the world (subject–predicate–object) and **revises beliefs** when reality changes — even "what she used to believe" stays auditable
+- **A consolidation ladder**: post-turn organizer → daily digests → nightly theme weaving → weekly reflections → a seasonal "who I am" summary — plus **deterministic milestones** unlocked as real memories
+- **Hybrid retrieval** (BGE-M3 embeddings + a local Chinese/English keyword index, re-ranked by a cross-encoder), and **hearsay tracking** — what a character only heard about is marked as second-hand knowledge, never narrated as lived experience
+- **Mood (PAD)** reacts to events and drifts back to baseline — the LLM only sees words, the 3D scene gets the numbers
 - Mood, stress, hunger, thirst, stamina, and menstrual cycles
 - **They'll miss you** — and send messages when they do
 
@@ -146,7 +148,7 @@ To help you get started, Spring Haven includes two fully-realized example charac
 
 ### ✅ Alpha (Current)
 - Dual-character personas with shared context and named multi-journey saves
-- Heartloom memory: timestamped recall, memory network visualization, digests & milestones
+- Heartloom memory: world-time recall, entity–claim belief revision, hybrid retrieval + cross-encoder rerank, nightly/weekly/seasonal consolidation, PAD mood, and an explorable memory network with a time cursor
 - Local RAG knowledge base with role scopes
 - Physiological needs, menstrual cycles, real weather, and autonomous routines & messages
 - DeepSeek API with 76%+ prompt cache hit rate
