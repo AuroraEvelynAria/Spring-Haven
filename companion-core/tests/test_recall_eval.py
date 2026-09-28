@@ -19,7 +19,10 @@ FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "recall_e
 # 回归下限(ratchet):记录当前冻结语料基线;任何检索改进使数字上升后应同步抬高此值。
 # 2026-09-27 首次基线 = 2/15(0.1333);同日修复 always_active 无条件占位 +
 # 词法池内局部 IDF + 触发词平面削平移除后 = 7/15(0.4667)。
-BASELINE_HIT_RATE = 0.4667
+# 2026-09-28 = 11/15(0.7333):①判定口径修正为「按记忆归属」——旧口径
+# 「任一角色全覆盖」对跨私有作用域的期望结构性不可满足(q008/q012/q015);
+# ②always_active 零词法相关时整体让位排序(q003),ADR-001 D1 二次修订。
+BASELINE_HIT_RATE = 0.7333
 
 
 class RecallEvalFixtureTests(unittest.TestCase):

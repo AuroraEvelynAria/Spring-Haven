@@ -1388,8 +1388,15 @@ class HeartloomStore:
                 # 曾被词法门槛起掉,导致改写式提问召回为空(实弹 livetest1 q6)
                 query_vector is not None and semantic >= SEMANTIC_ONLY_ADMISSION
             ):
-                scored.append((score, row))
-        scored.sort(key=lambda item: (item[0], int(item[1]["updated_at"])), reverse=True)
+                # 分级(ADR-001 D1 二次修订,2026-09-28):零词法相关的
+                # always_active 里程碑只保「在池」,排序时整体让位于一切
+                # 真正相关的记忆——冻结评测实证它们曾以 0.44-0.47 的
+                # 无关分挤掉 top-5 里的真实匹配(q001/q002/q003 各差 3 名)。
+                # 相关记忆不足 top-N 时它们仍自然补位,「永远记得」不破。
+                tier = 1 if (bool(row["always_active"]) and lexical <= 0.0) else 0
+                scored.append((score, row, tier))
+        scored.sort(key=lambda item: (item[2], -item[0], -int(item[1]["updated_at"])))
+        scored = [(score, row) for score, row, _tier in scored]
         # 仅对自动入库的对话用户记忆按内容去重:唤醒奖励会让重复互动的记忆
         # 越来越强,不去重时召回集会被同一模板刷屏,直接放大模型复读倾向。
         # manual / exchange 等来源的内容重复可能是合法的独立条目,不参与合并。

@@ -1,7 +1,9 @@
 """Heartloom 召回评测集驱动(ADR-001 D1 / 验收②「评测集上混合召回优于纯词法基线」)。
 
 评测集:tests/fixtures/recall_eval_set.json,期望命中已用真实存档标注。
-判定规则:case.expect_memory_ids 全部出现在 top-N(默认 5)召回结果中。
+判定规则(2026-09-28 修正为按记忆归属):每条期望记忆必须出现在其所有者
+角色的 top-N(默认 5)召回结果中;'*' 家庭共享记忆任一角色看到即算。
+（旧口径「任一角色全覆盖」对跨私有作用域的期望结构性不可满足。）
   - 负例(notes 含「负例」):期望无词法泄漏,返回结果只能包含 always_active 记忆。
   - 保留位(空 query 且无期望):跳过。
   - 其余零期望用例(如 q009 二手记忆):标注为 pending,不计入通过率。
@@ -151,15 +153,21 @@ def evaluate(
                 entry = dict(case)
                 if case["status"] == "active":
                     save_id, target_roles = _resolve_context(conn, case["expect"])
-                    # 标注角色优先;跨角色共享期望时逐角色各跑一次,任一角色
-                    # 的 top-N 全覆盖即算通过(匹配标注时的联合判定口径)。
                     ordered_roles = list(
                         dict.fromkeys(
                             ([case["actor"]] if case["actor"] else [])
                             + (target_roles or store_roles)
                         )
                     )
-                    best: dict[str, Any] | None = None
+                    # 逐角色各跑一次召回,再按「记忆归属」判定(2026-09-28 修正):
+                    # 期望记忆跨私有作用域时(小玲的 + 小奈的各一条),单角色
+                    # 的 top-N 永远看不到对方的私密记忆——旧口径「任一角色
+                    # 全覆盖」对 q008/q012/q015 结构性不可满足。正确口径:
+                    # 每条期望记忆必须出现在其**所有者角色**的 top-N 中
+                    # ('*' 家庭共享记忆:任一角色看到即算)。这与标注时
+                    # 「站在每个角色自己的视角检索」的意图一致。
+                    ranks_by_role: dict[str, dict[str, int]] = {}
+                    top_scores: list[float] = []
                     for role in ordered_roles:
                         rows = store.recall(
                             save_id=save_id,
@@ -168,29 +176,50 @@ def evaluate(
                             limit=limit,
                             record_access=False,
                         )
-                        ranks = {
+                        ranks_by_role[role] = {
                             str(row["memory_id"]): index + 1
                             for index, row in enumerate(rows)
                         }
-                        missed = [mid for mid in case["expect"] if mid not in ranks]
-                        hit = not missed
-                        better = best is None or (
-                            (not best["hit"], len(best["missed"]))
-                            > (not hit, len(missed))
+                        top_scores.append(
+                            float(rows[0].get("recall_score", 0.0)) if rows else 0.0
                         )
-                        if better:
-                            best = {
-                                "role": role,
-                                "actor": case["actor"],
-                                "hit": hit,
-                                "missed": missed,
-                                "ranks": {mid: ranks.get(mid) for mid in case["expect"]},
-                                "top_score": round(
-                                    float(rows[0].get("recall_score", 0.0)) if rows else 0.0, 4
-                                ),
-                                "returned": len(rows),
-                            }
-                    entry.update(best or {"hit": False, "missed": case["expect"]})
+                    scope_map: dict[str, str] = {}
+                    for memory_id in case["expect"]:
+                        scope_row = conn.execute(
+                            "SELECT scope_role_id FROM memory_entries WHERE memory_id = ?",
+                            (memory_id,),
+                        ).fetchone()
+                        scope_map[memory_id] = (
+                            str(scope_row[0]) if scope_row else "*"
+                        )
+                    missed: list[str] = []
+                    ranks: dict[str, int | None] = {}
+                    for memory_id in case["expect"]:
+                        scope = scope_map[memory_id]
+                        candidate_roles = (
+                            ordered_roles if scope == "*" else [scope]
+                        )
+                        found: int | None = None
+                        for role in candidate_roles:
+                            rank = ranks_by_role.get(role, {}).get(memory_id)
+                            if rank is not None and (found is None or rank < found):
+                                found = rank
+                        ranks[memory_id] = found
+                        if found is None:
+                            missed.append(memory_id)
+                    entry.update(
+                        {
+                            "role": case["actor"] or "multi",
+                            "actor": case["actor"],
+                            "hit": not missed,
+                            "missed": missed,
+                            "ranks": ranks,
+                            "top_score": round(max(top_scores, default=0.0), 4),
+                            "returned": sum(
+                                len(value) for value in ranks_by_role.values()
+                            ),
+                        }
+                    )
                 elif case["status"] == "negative":
                     save_id = _largest_real_save(conn)
                     leaks: list[str] = []
