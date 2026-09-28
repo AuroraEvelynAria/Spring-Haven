@@ -648,7 +648,8 @@ func get_heartloom_graph(
 		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
 	var url := _url("/heartloom/graph") + "?save_id=" + _save_id.uri_encode()
 	var normalized_role := role_id.strip_edges()
-	if not normalized_role.is_empty() and normalized_role != "*":
+	# 空值 = 全部范围；"*" 是明确的「仅共享」范围，必须原样发给 Core。
+	if not normalized_role.is_empty():
 		url += "&role_id=" + normalized_role.uri_encode()
 	if not query.strip_edges().is_empty():
 		url += "&query=" + query.strip_edges().uri_encode()

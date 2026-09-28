@@ -290,10 +290,30 @@ class HeartloomServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 service.memory.list_memories(save_id="heartloom-test"), []
             )
+            autonomous_history = service.memory.recent_events(
+                "heartloom-test", "ling", limit=8
+            )
+            self.assertTrue(
+                any(event["sender"] == "ai" for event in autonomous_history),
+                "主动联系的角色回复应保留在对话历史中",
+            )
+            self.assertFalse(
+                any(event["sender"] == "user" for event in autonomous_history),
+                "客户端自主脚手架绝不能伪装成主人发言写入对话流水",
+            )
+            self.assertFalse(
+                any("后台生活主动联系" in event["text"] for event in autonomous_history)
+            )
 
-            # 对照:普通回合照常落用户记忆并排队整理
+            # 对照:普通回合照常落用户记忆、对话事件并排队整理
             normal = await service.chat(payload("normal-1", "记住，我最喜欢栀子花。"))
             self.assertEqual(normal["memory"]["organizer_state"], "queued")
+            self.assertTrue(
+                any(
+                    event["sender"] == "user" and "栀子花" in event["text"]
+                    for event in service.memory.recent_events("heartloom-test", "ling", limit=8)
+                )
+            )
             sources = {
                 str(item["source"])
                 for item in service.memory.list_memories(save_id="heartloom-test")

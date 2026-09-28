@@ -71,17 +71,17 @@ class EntityClaimsStoreTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
-    def _memory(self, hint: str, content: str) -> str:
+    def _memory(self, hint: str, content: str, role_id: str = "ling") -> str:
         return str(
             self.store.put_memory(
                 {
                     "save_id": "s",
-                    "scope_role_id": "ling",
+                    "scope_role_id": role_id,
                     "kind": "episodic",
                     "content": content,
-                    "source_event_id": f"evt-{hint}",
+                    "source_event_id": f"evt-{role_id}-{hint}",
                 },
-                source="organizer_ling",
+                source=f"organizer_{role_id}",
             )["memory_id"]
         )
 
@@ -178,6 +178,34 @@ class EntityClaimsStoreTests(unittest.TestCase):
         # 召回记忆挂靠:传 source_memory_id 也能找到双方实体
         ids = self.store.entities_for_context(save_id="s", query="随便聊聊", memory_ids=[m1])
         self.assertEqual(len(ids), 2)  # 主人 + Herbal Essences
+
+    def test_role_filtered_fact_helpers_hide_other_role_private_claims(self):
+        ling_memory = self._memory("ling-private", "小玲知道一件私事", "ling")
+        nai_memory = self._memory("nai-private", "小奈知道另一件私事", "nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小玲私人物", "predicate": "存放", "object": "玲的柜子"}],
+            source_memory_id=ling_memory,
+        )
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小奈私人物", "predicate": "存放", "object": "奈的柜子"}],
+            source_memory_id=nai_memory,
+        )
+        ling_entities = self.store.entities_for_context(
+            save_id="s", role_id="ling", query="私人物", memory_ids=[ling_memory]
+        )
+        ling_facts = self.store.current_claims(
+            save_id="s", role_id="ling", entity_ids=ling_entities
+        )
+        self.assertEqual({fact["subject"] for fact in ling_facts}, {"小玲私人物"})
+        nai_entities = self.store.entities_for_context(
+            save_id="s", role_id="nai", query="私人物", memory_ids=[nai_memory]
+        )
+        nai_facts = self.store.current_claims(
+            save_id="s", role_id="nai", entity_ids=nai_entities
+        )
+        self.assertEqual({fact["subject"] for fact in nai_facts}, {"小奈私人物"})
 
     def test_claim_with_invalid_confidence_falls_back(self):
         self.store.put_claims(

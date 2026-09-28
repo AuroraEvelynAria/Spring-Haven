@@ -27,19 +27,19 @@ class EntityConstellationTests(unittest.TestCase):
                 (days, time.time()),
             )
 
-    def _memory(self, tag: str) -> str:
+    def _memory(self, tag: str, role_id: str = "ling") -> str:
         return str(
             self.store.put_memory(
                 {
                     "save_id": "s",
-                    "scope_role_id": "ling",
+                    "scope_role_id": role_id,
                     "kind": "episodic",
                     "title": f"记忆{tag}",
                     "content": f"关于{tag}的一段经历",
                     "trigger_terms": [tag],
-                    "source_event_id": f"eg-{tag}",
+                    "source_event_id": f"eg-{role_id}-{tag}",
                 },
-                source="organizer_ling",
+                source=f"organizer_{role_id}",
             )["memory_id"]
         )
 
@@ -120,6 +120,50 @@ class EntityConstellationTests(unittest.TestCase):
             if n["node_type"] == "entity" and n["name"] == "主人"
         )
         self.assertEqual(subject["claim_count"], 1)
+
+    def test_role_graph_hides_private_claims_from_other_roles(self):
+        # 本测试需要第二角色，模拟两人各自拥有不共享的来源记忆。
+        self.store.close()
+        self.store = HeartloomStore(":memory:", ["ling", "nai"])
+        ling_memory = self._memory("玲的私事", "ling")
+        nai_memory = self._memory("奈的私事", "nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小玲私人物", "predicate": "收在", "object": "玲的抽屉"}],
+            source_memory_id=ling_memory,
+        )
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小奈私人物", "predicate": "收在", "object": "奈的抽屉"}],
+            source_memory_id=nai_memory,
+        )
+
+        ling_page = self.store.graph_page(
+            save_id="s", role_id="ling", limit=20, include_entities=True
+        )
+        ling_entity_names = {
+            node["name"] for node in ling_page["nodes"] if node["node_type"] == "entity"
+        }
+        ling_predicates = {
+            edge["predicate"] for edge in ling_page["edges"] if edge["link_type"] == "claim"
+        }
+        self.assertIn("小玲私人物", ling_entity_names)
+        self.assertNotIn("小奈私人物", ling_entity_names)
+        self.assertEqual(ling_predicates, {"收在"})
+        self.assertTrue(
+            all(
+                edge["src"] != nai_memory
+                for edge in ling_page["edges"]
+                if edge["link_type"] == "claim_source"
+            )
+        )
+
+        full_page = self.store.graph_page(save_id="s", limit=20, include_entities=True)
+        full_entity_names = {
+            node["name"] for node in full_page["nodes"] if node["node_type"] == "entity"
+        }
+        self.assertIn("小玲私人物", full_entity_names)
+        self.assertIn("小奈私人物", full_entity_names)
 
     def test_as_of_filters_entities_and_claims(self):
         early_memory = self._memory("早期")

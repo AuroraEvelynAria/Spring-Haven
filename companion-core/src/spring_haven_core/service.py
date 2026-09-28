@@ -213,18 +213,23 @@ class CompanionService:
 
         role = self.roles.get(payload["role_id"])
         state = payload["state"]
+        local_state = state if isinstance(state, dict) else {}
+        # 自主回合的 payload.text 是客户端脚手架，不是主人说的话。必须在
+        # 写 conversation_events 前识别，否则它会回流进后续 prompt 的历史。
+        autonomous = bool(local_state.get("autonomous_event"))
         source_message_id = self._source_message_id(request_id, state)
         audience_roles = self._audience_roles(state)
         self._sync_history(save_id, payload["history"])
-        self.memory.record_event(
-            save_id=save_id,
-            message_id=source_message_id,
-            request_id=request_id,
-            sender="user",
-            text=payload["text"],
-            event_type=payload["event_type"],
-            audience_roles=audience_roles,
-        )
+        if not autonomous:
+            self.memory.record_event(
+                save_id=save_id,
+                message_id=source_message_id,
+                request_id=request_id,
+                sender="user",
+                text=payload["text"],
+                event_type=payload["event_type"],
+                audience_roles=audience_roles,
+            )
 
         durable_history = self.memory.recent_events(
             save_id,
@@ -255,7 +260,6 @@ class CompanionService:
                     LOGGER.warning("RAG retrieval degraded: %s", type(exc).__name__)
                     rag_state = "error"
         # #22 事件日志:确定性交互的数值变更记录到 state_events(仅调试用,ADR-1)
-        local_state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
         local_effect = local_state.get("local_effect") if isinstance(local_state.get("local_effect"), dict) else {}
         stat_changes = local_effect.get("stat_changes")
         if isinstance(stat_changes, list) and stat_changes:
@@ -274,7 +278,9 @@ class CompanionService:
             except (MemoryStoreError, TypeError, ValueError) as exc:
                 LOGGER.warning("state event logging failed: %s", exc)
         # ADR-009 D4:召回后水合实体当前事实(信念修订后的"现在相信什么")
-        current_facts = self._current_facts(save_id, payload["text"], memories)
+        current_facts = self._current_facts(
+            save_id, role.role_id, payload["text"], memories
+        )
         # ADR-012:PAD 心境(读取即连续稳态衰减),只以定性词进 prompt
         mood_values: dict[str, float] | None = None
         try:
@@ -316,7 +322,6 @@ class CompanionService:
         # 不是主人说的话:不落"主人曾说…"用户记忆、不建对话流水、不进整理器
         # ——否则角色会把提示词本身当成主人说过的事长期记住(实测污染:
         # "彼此的关系"记忆内容 = "这是你的后台生活主动联系时刻…")
-        autonomous = bool(local_state.get("autonomous_event"))
         fallback_memory: dict[str, Any] = {}
         if not autonomous:
             self.memory.remember_user_turn(
@@ -1420,7 +1425,9 @@ class CompanionService:
         )
         body_state = dict(role_state)
         body_state["role_id"] = role_id
-        offline_facts = self._current_facts(save_id, str(event["memory_query"]), memories)
+        offline_facts = self._current_facts(
+            save_id, role_id, str(event["memory_query"]), memories
+        )
         messages = self.prompts.messages(
             role,
             prompt,
@@ -1665,7 +1672,7 @@ class CompanionService:
             raise RequestValidationError("request must be a query object")
         save_id = self.validate_save_id(raw.get("save_id"))
         role_id = str(raw.get("role_id", "")).strip()
-        if role_id:
+        if role_id and role_id != "*":
             self.roles.get(role_id)
         try:
             limit = int(raw.get("limit", 120))
@@ -1778,12 +1785,13 @@ class CompanionService:
             raise RequestValidationError(str(exc)) from exc
 
     def _current_facts(
-        self, save_id: str, query: str, memories: list[dict[str, Any]]
+        self, save_id: str, role_id: str, query: str, memories: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """ADR-009 D4:按查询与召回记忆水合实体当前事实(失败静默为空)。"""
+        """ADR-009 D4:按当前角色可见的来源记忆水合实体事实(失败静默为空)。"""
         try:
             entity_ids = self.memory.entities_for_context(
                 save_id=save_id,
+                role_id=role_id,
                 query=str(query or ""),
                 memory_ids=[
                     str(item.get("memory_id", ""))
@@ -1794,7 +1802,7 @@ class CompanionService:
             if not entity_ids:
                 return []
             return self.memory.current_claims(
-                save_id=save_id, entity_ids=entity_ids, limit=12
+                save_id=save_id, role_id=role_id, entity_ids=entity_ids, limit=12
             )
         except Exception as exc:  # 事实水合失败不阻塞对话主流程
             LOGGER.warning("current facts hydration degraded: %s", type(exc).__name__)

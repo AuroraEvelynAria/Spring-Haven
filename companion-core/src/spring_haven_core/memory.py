@@ -1864,12 +1864,16 @@ class HeartloomStore:
         """
         node_limit = max(1, min(300, int(limit)))
         offset = max(0, int(offset))
-        role_clause = "" if not role_id else "AND (scope_role_id = ? OR scope_role_id = '*')"
+        normalized_role = str(role_id or "").strip()
+        role_clause = ""
+        params: list[Any] = [save_id]
+        if normalized_role == "*":
+            role_clause = "AND scope_role_id = '*'"
+        elif normalized_role:
+            role_clause = "AND (scope_role_id = ? OR scope_role_id = '*')"
+            params.append(normalized_role)
         query_clause = ""
         asof_clause = ""
-        params: list[Any] = [save_id]
-        if role_id:
-            params.extend([role_id])
         normalized_query = str(query).replace("\x00", " ").strip()
         if normalized_query:
             escaped = normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -1886,9 +1890,10 @@ class HeartloomStore:
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT memory_id, kind, title, content, scope_role_id, lifecycle,
-                       is_second_hand, importance, world_created_at, world_updated_at,
-                       source, recall_count, half_life_days, intrinsic
+                SELECT memory_id, kind, title, content, trigger_terms_json,
+                       scope_role_id, lifecycle, is_second_hand, importance,
+                       world_created_at, world_updated_at, source, recall_count,
+                       half_life_days, intrinsic
                 FROM memory_entries
                 WHERE save_id = ? AND lifecycle = 'active' AND enabled = 1 {role_clause} {query_clause} {asof_clause}
                 ORDER BY world_updated_at DESC, memory_id
@@ -1947,6 +1952,7 @@ class HeartloomStore:
                 "title": str(row["title"])[:80],
                 "summary": str(row["content"])[:120],
                 "content": str(row["content"])[:500],
+                "keywords": _json_list(row["trigger_terms_json"])[:12],
                 "scope_role_id": str(row["scope_role_id"]),
                 "lifecycle": str(row["lifecycle"]),
                 "is_second_hand": bool(row["is_second_hand"]),
@@ -1964,25 +1970,68 @@ class HeartloomStore:
             }
             for row in nodes
         ]
-        # ADR-015:实体星座——实体节点 + claim 边(实体↔实体) + claim_source
-        # 边(记忆→实体)。开启时记忆节点补 node_id/node_type;缺省关闭保持
-        # 与旧版响应逐字段等价(旧消费者零影响)。
+        memory_page_count = len(nodes)
+        entity_node_count = 0
+        # ADR-015:实体星座——实体和主张没有直接 role_id，必须以出处记忆的
+        # scope 反查可见性。角色视图不展示无出处的 Claim，避免来源不明事实
+        # 误泄露给任一角色；无角色的全局图保持原有完整审计行为。
         if include_entities:
             for item in node_payload:
                 item["node_id"] = item["memory_id"]
                 item["node_type"] = "memory"
             entity_asof = ""
+            entity_visibility = ""
             entity_params: list[Any] = [save_id]
+            claim_visibility = ""
+            claim_visibility_params: list[Any] = []
+            source_scope = ""
+            source_scope_params: list[Any] = []
+            if normalized_role == "*":
+                source_scope = "visibility_memory.scope_role_id = '*'"
+            elif normalized_role:
+                source_scope = "(visibility_memory.scope_role_id = ? OR visibility_memory.scope_role_id = '*')"
+                source_scope_params.append(normalized_role)
+            if source_scope:
+                entity_visibility = f"""
+                    AND EXISTS (
+                        SELECT 1
+                        FROM claims AS visibility_claim
+                        JOIN memory_entries AS visibility_memory
+                          ON visibility_memory.memory_id = visibility_claim.source_memory_id
+                         AND visibility_memory.save_id = visibility_claim.save_id
+                        WHERE visibility_claim.save_id = entities.save_id
+                          AND (
+                              visibility_claim.subject_entity_id = entities.entity_id
+                              OR visibility_claim.object_entity_id = entities.entity_id
+                          )
+                          AND visibility_memory.lifecycle = 'active'
+                          AND visibility_memory.enabled = 1
+                          AND {source_scope}
+                    )
+                """
+                claim_visibility = f"""
+                    AND EXISTS (
+                        SELECT 1
+                        FROM memory_entries AS visibility_memory
+                        WHERE visibility_memory.memory_id = claims.source_memory_id
+                          AND visibility_memory.save_id = claims.save_id
+                          AND visibility_memory.lifecycle = 'active'
+                          AND visibility_memory.enabled = 1
+                          AND {source_scope}
+                    )
+                """
+                claim_visibility_params = list(source_scope_params)
             if as_of_value is not None:
                 entity_asof = "AND world_created_at <= ?"
                 entity_params.append(as_of_value)
+            entity_params.extend(source_scope_params)
             with self._lock:
                 entity_rows = self._connection.execute(
                     f"""
                     SELECT entity_id, name, kind, aliases_json,
                            world_created_at, world_updated_at
                     FROM entities
-                    WHERE save_id = ? {entity_asof}
+                    WHERE save_id = ? {entity_asof} {entity_visibility}
                     ORDER BY world_updated_at DESC, name_norm
                     LIMIT 150
                     """,
@@ -1993,15 +2042,26 @@ class HeartloomStore:
                 claim_rows: list[sqlite3.Row] = []
                 if entity_ids:
                     placeholders = ",".join("?" for _ in entity_ids)
+                    claim_count_time = "AND world_to IS NULL"
+                    claim_count_params: list[Any] = [save_id, *entity_ids]
+                    if as_of_value is not None:
+                        claim_count_time = (
+                            "AND world_from <= ? "
+                            "AND (world_to IS NULL OR world_to > ?)"
+                        )
+                        claim_count_params.extend([as_of_value, as_of_value])
+                    claim_count_params.extend(claim_visibility_params)
                     for row in self._connection.execute(
                         f"""
                         SELECT subject_entity_id, COUNT(*) AS n
                         FROM claims
-                        WHERE save_id = ? AND world_to IS NULL
+                        WHERE save_id = ?
                           AND subject_entity_id IN ({placeholders})
+                          {claim_count_time}
+                          {claim_visibility}
                         GROUP BY subject_entity_id
                         """,
-                        [save_id, *entity_ids],
+                        claim_count_params,
                     ).fetchall():
                         current_counts[str(row["subject_entity_id"])] = int(row["n"])
                     claim_asof = ""
@@ -2009,6 +2069,7 @@ class HeartloomStore:
                     if as_of_value is not None:
                         claim_asof = "AND world_from <= ?"
                         claim_params.append(as_of_value)
+                    claim_params.extend(claim_visibility_params)
                     claim_rows = self._connection.execute(
                         f"""
                         SELECT claim_id, subject_entity_id, predicate, object_entity_id,
@@ -2019,6 +2080,7 @@ class HeartloomStore:
                           AND subject_entity_id IN ({placeholders})
                           AND object_entity_id IN ({placeholders})
                           {claim_asof}
+                          {claim_visibility}
                         ORDER BY (world_to IS NULL) DESC, world_from DESC
                         LIMIT 300
                         """,
@@ -2037,6 +2099,7 @@ class HeartloomStore:
                 }
                 for row in entity_rows
             ]
+            entity_node_count = len(entity_nodes)
             memory_id_set = set(node_ids)
             for row in claim_rows:
                 edges.append(
@@ -2082,8 +2145,11 @@ class HeartloomStore:
         return {
             "nodes": node_payload,
             "edges": edges,
-            "cursor": str(offset + len(node_payload)) if truncated else "",
+            # cursor 是 memory_entries 的 offset；实体是附加层，不能推进它。
+            "cursor": str(offset + memory_page_count) if truncated else "",
             "truncated": truncated,
+            "memory_node_count": memory_page_count,
+            "entity_node_count": entity_node_count,
             "node_count": len(node_payload),
             "as_of_world": round(as_of_value, 4) if as_of_value is not None else None,
             "world_now": round(self.world_now(save_id), 4),
@@ -3889,13 +3955,49 @@ class HeartloomStore:
         return stats
 
     def current_claims(
-        self, *, save_id: str, entity_ids: list[str], limit: int = 12
+        self,
+        *,
+        save_id: str,
+        entity_ids: list[str],
+        role_id: str = "",
+        limit: int = 12,
     ) -> list[dict[str, Any]]:
-        """给定实体的当前有效主张(world_to IS NULL;ADR-009 D4)。"""
+        """给定实体的当前有效主张(world_to IS NULL;ADR-009 D4)。
+
+        指定角色时，Claim 必须有一条该角色或共享的 active 来源记忆；没有
+        可验证出处的事实只在无角色的全局审计上下文可见。
+        """
         ids = [str(item) for item in dict.fromkeys(entity_ids) if item][:32]
         if not ids:
             return []
         placeholders = ",".join("?" * len(ids))
+        normalized_role = str(role_id).strip()
+        source_visibility = ""
+        params: list[Any] = [save_id, *ids]
+        if normalized_role == "*":
+            source_visibility = """
+                AND EXISTS (
+                    SELECT 1 FROM memory_entries AS source_memory
+                    WHERE source_memory.memory_id = c.source_memory_id
+                      AND source_memory.save_id = c.save_id
+                      AND source_memory.lifecycle = 'active'
+                      AND source_memory.enabled = 1
+                      AND source_memory.scope_role_id = '*'
+                )
+            """
+        elif normalized_role:
+            source_visibility = """
+                AND EXISTS (
+                    SELECT 1 FROM memory_entries AS source_memory
+                    WHERE source_memory.memory_id = c.source_memory_id
+                      AND source_memory.save_id = c.save_id
+                      AND source_memory.lifecycle = 'active'
+                      AND source_memory.enabled = 1
+                      AND (source_memory.scope_role_id = ? OR source_memory.scope_role_id = '*')
+                )
+            """
+            params.append(normalized_role)
+        params.append(max(1, min(32, int(limit))))
         with self._lock:
             rows = self._connection.execute(
                 f"""
@@ -3908,10 +4010,11 @@ class HeartloomStore:
                 LEFT JOIN entities AS o ON o.entity_id = c.object_entity_id
                 WHERE c.save_id = ? AND c.subject_entity_id IN ({placeholders})
                   AND c.world_to IS NULL
+                  {source_visibility}
                 ORDER BY c.confidence DESC, c.updated_at DESC
                 LIMIT ?
                 """,
-                (save_id, *ids, max(1, min(32, int(limit)))),
+                params,
             ).fetchall()
         return [self._claim_row(row) for row in rows]
 
@@ -3929,16 +4032,64 @@ class HeartloomStore:
         }
 
     def entities_for_context(
-        self, *, save_id: str, query: str, memory_ids: list[str]
+        self,
+        *,
+        save_id: str,
+        query: str,
+        memory_ids: list[str],
+        role_id: str = "",
     ) -> list[str]:
-        """查询子串命中 + 召回记忆挂靠的实体 id 并集(ADR-009 D4)。"""
+        """查询子串命中 + 召回记忆挂靠的可见实体 id 并集(ADR-009 D4)。"""
         matched: list[str] = []
         compact_query = re.sub(r"\s+", "", _normalize_text(query))
+        normalized_role = str(role_id).strip()
+        entity_visibility = ""
+        entity_params: list[Any] = [save_id]
+        if normalized_role == "*":
+            entity_visibility = """
+                AND EXISTS (
+                    SELECT 1
+                    FROM claims AS visibility_claim
+                    JOIN memory_entries AS visibility_memory
+                      ON visibility_memory.memory_id = visibility_claim.source_memory_id
+                     AND visibility_memory.save_id = visibility_claim.save_id
+                    WHERE visibility_claim.save_id = entities.save_id
+                      AND (
+                          visibility_claim.subject_entity_id = entities.entity_id
+                          OR visibility_claim.object_entity_id = entities.entity_id
+                      )
+                      AND visibility_memory.lifecycle = 'active'
+                      AND visibility_memory.enabled = 1
+                      AND visibility_memory.scope_role_id = '*'
+                )
+            """
+        elif normalized_role:
+            entity_visibility = """
+                AND EXISTS (
+                    SELECT 1
+                    FROM claims AS visibility_claim
+                    JOIN memory_entries AS visibility_memory
+                      ON visibility_memory.memory_id = visibility_claim.source_memory_id
+                     AND visibility_memory.save_id = visibility_claim.save_id
+                    WHERE visibility_claim.save_id = entities.save_id
+                      AND (
+                          visibility_claim.subject_entity_id = entities.entity_id
+                          OR visibility_claim.object_entity_id = entities.entity_id
+                      )
+                      AND visibility_memory.lifecycle = 'active'
+                      AND visibility_memory.enabled = 1
+                      AND (visibility_memory.scope_role_id = ? OR visibility_memory.scope_role_id = '*')
+                )
+            """
+            entity_params.append(normalized_role)
         with self._lock:
             rows = self._connection.execute(
-                "SELECT entity_id, name_norm, aliases_json FROM entities "
-                "WHERE save_id = ? LIMIT 500",
-                (save_id,),
+                f"""
+                SELECT entity_id, name_norm, aliases_json FROM entities
+                WHERE save_id = ? {entity_visibility}
+                LIMIT 500
+                """,
+                entity_params,
             ).fetchall()
         for row in rows:
             names = [str(row["name_norm"])]
@@ -3953,17 +4104,47 @@ class HeartloomStore:
         source_ids = [str(item) for item in dict.fromkeys(memory_ids) if item][:24]
         if source_ids:
             placeholders = ",".join("?" * len(source_ids))
+            source_visibility = ""
+            first_source_params: list[Any] = [save_id, *source_ids]
+            second_source_params: list[Any] = [save_id, *source_ids]
+            if normalized_role == "*":
+                source_visibility = """
+                    AND EXISTS (
+                        SELECT 1 FROM memory_entries AS source_memory
+                        WHERE source_memory.memory_id = claims.source_memory_id
+                          AND source_memory.save_id = claims.save_id
+                          AND source_memory.lifecycle = 'active'
+                          AND source_memory.enabled = 1
+                          AND source_memory.scope_role_id = '*'
+                    )
+                """
+            elif normalized_role:
+                source_visibility = """
+                    AND EXISTS (
+                        SELECT 1 FROM memory_entries AS source_memory
+                        WHERE source_memory.memory_id = claims.source_memory_id
+                          AND source_memory.save_id = claims.save_id
+                          AND source_memory.lifecycle = 'active'
+                          AND source_memory.enabled = 1
+                          AND (source_memory.scope_role_id = ? OR source_memory.scope_role_id = '*')
+                    )
+                """
+                first_source_params.append(normalized_role)
+                second_source_params.append(normalized_role)
+            source_params = first_source_params + second_source_params
             with self._lock:
                 linked = self._connection.execute(
                     f"""
                     SELECT DISTINCT subject_entity_id AS eid FROM claims
                     WHERE save_id = ? AND source_memory_id IN ({placeholders})
+                    {source_visibility}
                     UNION
                     SELECT DISTINCT object_entity_id AS eid FROM claims
                     WHERE save_id = ? AND object_entity_id IS NOT NULL
                       AND source_memory_id IN ({placeholders})
+                    {source_visibility}
                     """,
-                    (save_id, *source_ids, save_id, *source_ids),
+                    source_params,
                 ).fetchall()
             matched.extend(str(row["eid"]) for row in linked)
         return list(dict.fromkeys(matched))[:32]

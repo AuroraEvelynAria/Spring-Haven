@@ -376,8 +376,10 @@ class GraphEndpointTests(unittest.IsolatedAsyncioTestCase):
         (root / "personas/ling.md").write_text("你是小玲。", encoding="utf-8")
         (root / "roles.json").write_text(
             json.dumps(
-                {"roles": [{"role_id": "ling", "display_name": "小玲",
-                            "prompt_file": "personas/ling.md"}]},
+                {"roles": [
+                    {"role_id": "ling", "display_name": "小玲", "prompt_file": "personas/ling.md"},
+                    {"role_id": "nai", "display_name": "小奈", "prompt_file": "personas/ling.md"},
+                ]},
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -427,8 +429,78 @@ class GraphEndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         body = (await response.json())["data"]
         self.assertEqual(body["node_count"], 2)
+        self.assertEqual(body["memory_node_count"], 2)
+        self.assertEqual(body["entity_node_count"], 0)
         self.assertTrue(body["truncated"])
         self.assertTrue(body["cursor"])
+
+    async def test_entity_graph_cursor_advances_only_memory_page(self):
+        memory_ids: list[str] = []
+        for index in range(3):
+            entry = self.service.memory.put_memory(
+                {"save_id": "save-g", "scope_role_id": "ling", "kind": "episodic",
+                 "content": f"实体分页来源记忆 {index}", "source_event_id": f"evt-entity-page-{index}"},
+                source="organizer",
+            )
+            memory_ids.append(str(entry["memory_id"]))
+            self.service.memory.put_claims(
+                save_id="save-g",
+                claims=[{
+                    "subject": f"人物{index}",
+                    "predicate": "拥有",
+                    "object": f"物件{index}",
+                }],
+                source_memory_id=str(entry["memory_id"]),
+            )
+        first_response = await self.client.get(
+            "/heartloom/graph",
+            headers=self.headers,
+            params={"save_id": "save-g", "role_id": "ling", "limit": "1", "include_entities": "1"},
+        )
+        first = (await first_response.json())["data"]
+        self.assertEqual(first["memory_node_count"], 1)
+        self.assertGreater(first["entity_node_count"], 0)
+        self.assertEqual(first["cursor"], "1")
+        first_memory_ids = {
+            node["memory_id"] for node in first["nodes"] if node.get("node_type") == "memory"
+        }
+        second_response = await self.client.get(
+            "/heartloom/graph",
+            headers=self.headers,
+            params={
+                "save_id": "save-g", "role_id": "ling", "limit": "1",
+                "include_entities": "1", "cursor": first["cursor"],
+            },
+        )
+        second = (await second_response.json())["data"]
+        second_memory_ids = {
+            node["memory_id"] for node in second["nodes"] if node.get("node_type") == "memory"
+        }
+        self.assertEqual(len(second_memory_ids), 1)
+        self.assertFalse(first_memory_ids & second_memory_ids)
+        self.assertTrue(second_memory_ids <= set(memory_ids))
+
+    async def test_graph_scope_supports_shared_only(self):
+        for scope in ["*", "ling", "nai"]:
+            self.service.memory.put_memory(
+                {"save_id": "save-g", "scope_role_id": scope, "kind": "episodic",
+                 "content": f"{scope} 范围记忆", "source_event_id": f"evt-scope-{scope}"},
+                source="organizer",
+            )
+        shared_response = await self.client.get(
+            "/heartloom/graph",
+            headers=self.headers,
+            params={"save_id": "save-g", "role_id": "*", "limit": "20"},
+        )
+        shared = (await shared_response.json())["data"]
+        self.assertEqual({node["scope_role_id"] for node in shared["nodes"]}, {"*"})
+        ling_response = await self.client.get(
+            "/heartloom/graph",
+            headers=self.headers,
+            params={"save_id": "save-g", "role_id": "ling", "limit": "20"},
+        )
+        ling = (await ling_response.json())["data"]
+        self.assertEqual({node["scope_role_id"] for node in ling["nodes"]}, {"*", "ling"})
 
     async def test_state_events_logged_for_interactions(self):
         import json as _json
