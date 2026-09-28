@@ -27,7 +27,10 @@ const THEMES := {
 	"mint": {"bg": "#F0F5F2", "primary": "#7EC8B0", "accent": "#3A7A5A", "text": "#1A2A22", "secondary": "#4A6A5A", "is_dark": false},
 	"ocean": {"bg": "#0A0F14", "primary": "#6B9EC4", "accent": "#A8D8EA", "text": "#E8EEF5", "secondary": "#98A8B8", "is_dark": true},
 	"dusk": {"bg": "#1A0F0F", "primary": "#C06C6C", "accent": "#E8C97A", "text": "#EDD8D0", "secondary": "#A08880", "is_dark": true},
-	"stardust": {"bg": "#0A0A14", "primary": "#8B8BC0", "accent": "#C8C8E8", "text": "#E8E8F0", "secondary": "#9898B0", "is_dark": true}
+	"stardust": {"bg": "#0A0A14", "primary": "#8B8BC0", "accent": "#C8C8E8", "text": "#E8E8F0", "secondary": "#9898B0", "is_dark": true},
+	# UI v3 预览稿(春日庭院UI-v3-预览.html)的官方 token:明昼(奶油木)与夜话
+	"haru": {"bg": "#F6F1E7", "primary": "#C96B2E", "accent": "#9E4E1B", "text": "#33291F", "secondary": "#6B5D4C", "is_dark": false},
+	"haru_night": {"bg": "#171521", "primary": "#E8935C", "accent": "#D9B36A", "text": "#EAE4D8", "secondary": "#B5AA9A", "is_dark": true}
 }
 
 var current_theme_name := "amber"

@@ -12,6 +12,10 @@
 
 ### 新增
 
+- **UI v3 设计 token 落地** —— 预览稿官方色板接入主题表:`haru`(明昼·
+  奶油木 #F6F1E7/#C96B2E)与 `haru_night`(夜话 #171521/#E8935C)两个新主题,
+  设置面板即可切换;base_theme.tres 注明 token 真身位置
+  (assets/themes/*.tres 为兜底壳,运行时主题由 ThemeManager 逐 token 重建)
 - **二手传闻可见性(heard_from / is_second_hand)** —— 召回结果暴露
   `is_second_hand`;prompt 记忆块对传闻记忆打 `heard_secondhand` 标记
   (角色知道自己只是「听说」,不得当作亲历断言);🕸️ 画布给传闻节点加

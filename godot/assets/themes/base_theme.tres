@@ -3,6 +3,9 @@
 [ext_resource type="FontFile" path="res://assets/fonts/LXGWWenKai-Regular.ttf" id="1_font"]
 
 [resource]
+; 设计 token 的真身在 scripts/autoload/ThemeManager.gd::THEMES
+; (UI v3 官方色板 = haru / haru_night);本文件仅承载默认字体与兜底控件样式,
+; 运行时主题由 ThemeManager._apply_theme_resource 逐 token 重建。
 default_font = ExtResource("1_font")
 default_font_size = 15
 
