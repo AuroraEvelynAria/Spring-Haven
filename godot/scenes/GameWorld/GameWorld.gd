@@ -37,6 +37,8 @@ const UTILITY_RAIL_SIDE_MARGIN := 20.0
 const TITLE_LOCKUP_MIN_WIDTH := 132.0
 const TITLE_LOCKUP_BOTTOM := 106.0
 const TOAST_HEIGHT := 30.0
+# 提示条贴在工具栏下沿：工具栏占 y 20~60。
+const TOAST_TOP := 70.0
 # 舞台列里不随档位缩水的部分(姓名、副标题、心境三行 + 容器间距与内边距)。
 # 预留给得比实测更宽,避免 VBoxContainer 的最小高度反过来撑破算好的偏移量。
 const STAGE_IDENTITY_RESERVE := 84.0
@@ -811,13 +813,13 @@ func _build_log_bar(parent: Control) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_log_bar = PanelContainer.new()
 	_log_bar.name = "TransientToast"
-	# 贴在标题锁定卡下方的短暂提示。底部整条已经交给视觉小说阅读层，
-	# 从中窄屏起阅读层还会横向铺满，左下角再放常驻条必然被压住。
-	_log_bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_log_bar.offset_left = 24.0
-	_log_bar.offset_top = TITLE_LOCKUP_BOTTOM + 8.0
-	_log_bar.offset_right = 380.0
-	_log_bar.offset_bottom = TITLE_LOCKUP_BOTTOM + 8.0 + TOAST_HEIGHT
+	# 贴在工具栏下方的短暂提示。底部整条已经交给视觉小说阅读层；放回左下角
+	# 会压住阅读层，放标题锁定卡下方会压住庭院窗，所以与工具栏同列。
+	_log_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_log_bar.offset_left = -360.0
+	_log_bar.offset_top = TOAST_TOP
+	_log_bar.offset_right = -UTILITY_RAIL_SIDE_MARGIN
+	_log_bar.offset_bottom = TOAST_TOP + TOAST_HEIGHT
 	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 12, 7))
 	_log_bar.material = _glass_material(data, 1.4)
 	parent.add_child(_log_bar)
@@ -2776,7 +2778,10 @@ func _apply_utility_rail_layout(width: float, icon_side: float) -> void:
 			rail_left - 12.0, 24.0 + TITLE_LOCKUP_MIN_WIDTH, 24.0 + 306.0
 		)
 	if is_instance_valid(_log_bar):
-		_log_bar.offset_right = clampf(width * 0.42, 24.0 + 140.0, 380.0)
+		# 与工具栏同列、同宽上限：宁可窄一点也不越过角色舞台。
+		_log_bar.offset_left = (
+			-clampf(width * 0.34, 160.0, 340.0) - UTILITY_RAIL_SIDE_MARGIN
+		)
 
 # 阅读层与角色舞台的实际占位。宽屏水平并排,中窄屏纵向上下分离;两段预算都
 # 从视口高度反算,所以 956~1259px 这段既不会再重叠,也不会把舞台压没。
@@ -2826,6 +2831,12 @@ func _apply_scene_layout(width: float, height: float, tier: String) -> void:
 			STAGE_PORTRAIT_MAX
 		)
 	)
+	if is_instance_valid(_portrait_rig):
+		# 立绘高度必须跟着形象区走。写死 314px 时，窄屏形象区只有 ~168px，
+		# 角色会整个向上溢出到标题锁定卡与工具栏上面去。
+		_portrait_rig.offset_top = -maxf(
+			_stage_portrait_holder.custom_minimum_size.y - 16.0, 96.0
+		)
 	if wide:
 		_chat_area.offset_left = -548.0
 		_chat_area.offset_right = 200.0

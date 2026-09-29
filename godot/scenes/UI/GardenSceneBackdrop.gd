@@ -5,7 +5,9 @@ extends Control
 ## 必须作为页面的第一个子节点，且始终忽略鼠标输入。
 
 const PARTICLE_COUNT := 32
-const WINDOW_RATIO := Vector2(0.23, 0.10)
+# 窗口是角落氛围而不是主角:它必须让开标题锁定卡(左上)、双角色选择(左中)、
+# 阅读层(下)与角色舞台(右下),所以落在上中那条唯一空出来的横带里。
+const WINDOW_RATIO := Vector2(0.34, 0.05)
 const FLOOR_START := 0.80
 
 var _particles: Array[Dictionary] = []
@@ -50,6 +52,10 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
+	if size.x < 8.0 or size.y < 8.0:
+		# 布局尚未落定时 size 可能是 0;此时叶影的锚点会退化成原点，在屏幕左上
+		# 角闪出一片垃圾图形。宁可这一帧什么都不画。
+		return
 	var data := ThemeMgr.get_current_theme_data()
 	var viewport_size := size.max(Vector2(1.0, 1.0))
 	var background := Color(str(data.get("bg", "#F6F1E7")))
@@ -72,7 +78,9 @@ func _draw() -> void:
 	draw_circle(viewport_size * Vector2(0.18, 0.08), minf(viewport_size.x, viewport_size.y) * 0.34, Color(pane_top, 0.52))
 
 	# 左上庭院窗：纯几何，不依赖任何背景图。
-	var window_size := Vector2(minf(310.0, viewport_size.x * 0.28), minf(350.0, viewport_size.y * 0.53))
+	var window_size := Vector2(
+		minf(220.0, viewport_size.x * 0.17), minf(230.0, viewport_size.y * 0.32)
+	)
 	var window_pos := viewport_size * WINDOW_RATIO + _parallax * 0.22
 	var outer := Rect2(window_pos, window_size)
 	draw_rect(outer.grow(7.0), Color(wood, 0.82), true)

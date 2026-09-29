@@ -313,8 +313,18 @@ func _expect_overlay_covers_world(world: Node, failures: Array[String]) -> void:
 		failures.append("心织面板未创建")
 		return
 	panel.call("show_panel")
-	await get_tree().process_frame
-	await get_tree().process_frame
+	# show_panel 把 modulate.a 从 0 淡入到 1，只等两帧的话截图会停在几乎全透明
+	# 的状态上——那正是"覆层装作不存在"的假象，必须等淡入走完再判定。headless
+	# 没有垂直同步，帧率远高于 60，固定等 N 帧并不可靠，所以等到位为止。
+	var waited := 0
+	while waited < 600 and not is_equal_approx(panel.modulate.a, 1.0):
+		await get_tree().process_frame
+		waited += 1
+	if not is_equal_approx(panel.modulate.a, 1.0):
+		failures.append("心织面板淡入没有完成：modulate.a=%s" % panel.modulate.a)
+	if not _is_headless():
+		# 这份合成数据截图就是"心织覆层到底有没有被打穿"的证据。
+		await _save_viewport_screenshot("user://gameworld_heartloom_overlay.png")
 	var viewport_rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
 	var scrim := panel.get("_background") as ColorRect
 	var covers := is_instance_valid(scrim) and viewport_rect.encloses(scrim.get_global_rect())
@@ -387,7 +397,9 @@ func _expect_scene_layout_matrix(failures: Array[String]) -> void:
 func _expect_scene_layout_for_size(size: Vector2i, failures: Array[String]) -> void:
 	var viewport := SubViewport.new()
 	viewport.size = size
-	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	viewport.render_target_update_mode = (
+		SubViewport.UPDATE_DISABLED if _is_headless() else SubViewport.UPDATE_ALWAYS
+	)
 	get_tree().root.add_child(viewport)
 	var world := GAME_WORLD_SCENE.instantiate() as Control
 	world.set("_suppress_exit_persistence", true)
@@ -450,6 +462,14 @@ func _expect_scene_layout_for_size(size: Vector2i, failures: Array[String]) -> v
 			failures.append("%s 的阅读层高度 %s 与目标 %s 不一致" % [label, area_height, target])
 		if area_height < floor_height - 1.0:
 			failures.append("%s 的阅读层高度 %s 低于页脚下限 %s" % [label, area_height, floor_height])
+	if not _is_headless():
+		# 每档留一张实拍图:三档构图是"是否重叠/是否被压没"的最终证据。
+		# 多等两帧让 SubViewport 的尺寸与布局都落定，否则会拍到退化帧。
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_save_subviewport_screenshot(
+			viewport, "user://gameworld_scene_%dx%d.png" % [size.x, size.y]
+		)
 	world.free()
 	viewport.free()
 
@@ -458,6 +478,24 @@ func _offset_rect(control: Control, origin: Vector2) -> Rect2:
 	var rect := control.get_global_rect()
 	rect.position -= origin
 	return rect
+
+
+func _save_viewport_screenshot(path: String) -> void:
+	var image := get_viewport().get_texture().get_image()
+	if image == null or image.is_empty():
+		printerr("GAMEWORLD_UI_RENDER_CHECK 截图失败：", path)
+		return
+	image.save_png(path)
+	print("GAMEWORLD_UI_RENDER_CHECK 截图 %s" % ProjectSettings.globalize_path(path))
+
+
+func _save_subviewport_screenshot(viewport: SubViewport, path: String) -> void:
+	var image := viewport.get_texture().get_image()
+	if image == null or image.is_empty():
+		printerr("GAMEWORLD_UI_RENDER_CHECK 分档截图失败：", path)
+		return
+	image.save_png(path)
+	print("GAMEWORLD_UI_RENDER_CHECK 分档截图 %s" % ProjectSettings.globalize_path(path))
 
 
 # "巨大的空对话板"的直接回归守卫：把已有对白隐藏后，阅读面必须收到内容大小
