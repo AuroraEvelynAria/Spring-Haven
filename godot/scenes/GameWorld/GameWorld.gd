@@ -43,6 +43,16 @@ const STAGE_IDENTITY_RESERVE := 84.0
 const STAGE_PORTRAIT_FLOOR := 96.0
 const STAGE_PORTRAIT_MAX := 330.0
 const WIDE_STAGE_BOTTOM := 78.0
+# 阅读层:历史面只包住已经发生的对白,页脚(动作栏+输入行)单独一块。
+# 两块各自成形,不再一起糊成一整张占满整列的大板。
+const READING_PLATE_ALPHA := 0.80
+const READING_PLATE_CORNER := 14
+const READING_FOOTER_CORNER := 14
+const READING_FOOTER_GAP := 8
+const READING_HISTORY_MIN_HEIGHT := 72.0
+# 历史面的上下内边距(plate_margin 8+8 与 chat_margin 14+8),算内容高度时要加回去。
+const READING_HISTORY_PADDING := 38.0
+const TITLE_LOCKUP_ALPHA := 0.72
 const STAT_TWEEN_DURATION := 0.58
 const TYPEWRITER_MIN_CPS := 42.0
 const TYPEWRITER_MAX_SECONDS := 4.8
@@ -139,6 +149,8 @@ var _main_layout: Control
 var _chat_area: VBoxContainer
 var _chat_scroll: ScrollContainer
 var _chat_list: VBoxContainer
+var _reading_plate: PanelContainer
+var _layout_refreshing := false
 var _input_panel: PanelContainer
 var _input_panel_style: StyleBoxFlat
 var _thinking_strip: ColorRect
@@ -429,7 +441,8 @@ func _build_nav(parent: Control) -> void:
 	_nav.offset_right = 330.0
 	_nav.offset_bottom = 106.0
 	_nav.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_nav.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", Color.WHITE)), Color.TRANSPARENT, 14, 10))
+	_nav.add_theme_stylebox_override("panel", _title_lockup_style(data))
+	_nav.material = _glass_material(data, 1.2)
 	parent.add_child(_nav)
 	var lockup := VBoxContainer.new()
 	lockup.add_theme_constant_override("separation", 2)
@@ -454,7 +467,7 @@ func _build_nav(parent: Control) -> void:
 	_memory_status.text = "心织 · 待命"
 	_memory_status.tooltip_text = "独立 Heartloom SQLite 记忆状态"
 	_memory_status.add_theme_font_size_override("font_size", 10)
-	_memory_status.add_theme_color_override("font_color", Color(data.secondary, 0.76))
+	_memory_status.add_theme_color_override("font_color", Color(data.secondary, 0.88))
 	for label in [_life_mini_status, _connection_status, _memory_status]:
 		# 中窄屏会把锁定卡收窄，长文案必须裁切而不是溢出到工具栏上。
 		(label as Label).clip_text = true
@@ -550,30 +563,28 @@ func _build_chat_area(parent: Control) -> void:
 	_chat_area.offset_right = 390.0
 	_chat_area.offset_top = -344.0
 	_chat_area.offset_bottom = -28.0
-	_chat_area.add_theme_constant_override("separation", 0)
+	_chat_area.add_theme_constant_override("separation", READING_FOOTER_GAP)
 	parent.add_child(_chat_area)
 	var conversation_plate := PanelContainer.new()
-	conversation_plate.name = "ConversationPlate"
+	conversation_plate.name = "ReadingPlate"
+	conversation_plate.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	conversation_plate.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	conversation_plate.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 20, 0))
-	conversation_plate.material = _glass_material(data, 2.0)
+	conversation_plate.add_theme_stylebox_override("panel", _reading_layer_style(data))
+	conversation_plate.material = _glass_material(data, 1.2)
 	_chat_area.add_child(conversation_plate)
+	_reading_plate = conversation_plate
 	var plate_margin := MarginContainer.new()
 	plate_margin.add_theme_constant_override("margin_left", 12)
 	plate_margin.add_theme_constant_override("margin_right", 12)
 	plate_margin.add_theme_constant_override("margin_top", 8)
-	plate_margin.add_theme_constant_override("margin_bottom", 0)
+	plate_margin.add_theme_constant_override("margin_bottom", 8)
 	conversation_plate.add_child(plate_margin)
-	var chat_stack := VBoxContainer.new()
-	chat_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	chat_stack.add_theme_constant_override("separation", 0)
-	plate_margin.add_child(chat_stack)
 	_chat_scroll = ScrollContainer.new()
 	_chat_scroll.name = "ChatScroll"
 	_chat_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_chat_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	chat_stack.add_child(_chat_scroll)
+	plate_margin.add_child(_chat_scroll)
 	var chat_margin := MarginContainer.new()
 	chat_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	chat_margin.add_theme_constant_override("margin_left", 18)
@@ -586,14 +597,18 @@ func _build_chat_area(parent: Control) -> void:
 	_chat_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_list.add_theme_constant_override("separation", 12)
 	chat_margin.add_child(_chat_list)
+	# 气泡高度会被打字机、换行和角色名长度改变,阅读面必须跟着走。
+	_chat_list.minimum_size_changed.connect(_refresh_reading_layer_height)
 	_build_input_area()
 
 func _build_input_area() -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_input_panel = PanelContainer.new()
-	_input_panel_style = _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0)
+	_input_panel.name = "ReadingFooter"
+	_input_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_input_panel_style = _reading_layer_style(data)
 	_input_panel.add_theme_stylebox_override("panel", _input_panel_style)
-	_input_panel.material = _glass_material(data, 1.8)
+	_input_panel.material = _glass_material(data, 1.2)
 	_chat_area.add_child(_input_panel)
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 18)
@@ -2703,8 +2718,9 @@ func _apply_responsive_layout() -> void:
 	var viewport := get_viewport_rect().size
 	var width := viewport.x
 	var height := viewport.y
-	var narrow := width <= LAYOUT_NARROW_MAX_WIDTH
-	var wide := width >= LAYOUT_WIDE_MIN_WIDTH
+	var tier := _layout_tier(width)
+	var narrow := tier == "narrow"
+	var wide := tier == "wide"
 	_brand.visible = not narrow
 	_connection_status.visible = width > 520.0
 	_memory_status.visible = width > 720.0
@@ -2716,7 +2732,7 @@ func _apply_responsive_layout() -> void:
 		if is_instance_valid(button):
 			button.custom_minimum_size = Vector2(icon_side, icon_side)
 	_apply_utility_rail_layout(width, icon_side)
-	_apply_scene_layout(width, height, narrow, wide)
+	_apply_scene_layout(width, height, tier)
 	_apply_sidebar_layout(width, wide)
 	_glow.position = viewport / 2.0 - _glow.size / 2.0
 	call_deferred("_update_message_bubble_widths")
@@ -2760,13 +2776,13 @@ func _apply_utility_rail_layout(width: float, icon_side: float) -> void:
 # 高度时 Godot 会把实际矩形撑出去,偏移量算得再准也会被撑到对方身上。所以
 # 这里先按"固定身份区 + 形象区下限"给舞台留够,再让阅读层退到自己的下限,
 # 最后才把偏移量写成算出来的值。
-func _apply_scene_layout(width: float, height: float, narrow: bool, wide: bool) -> void:
+func _apply_scene_layout(width: float, height: float, tier: String) -> void:
+	var wide := tier == "wide"
+	var narrow := tier == "narrow"
 	var reading_bottom := 12.0 if narrow else (28.0 if wide else 18.0)
 	var stage_gap := 8.0 if narrow else 10.0
 	var reading_floor := _reading_layer_floor()
-	var reading_height := maxf(
-		_reading_layer_budget(height, narrow, wide), reading_floor
-	)
+	var reading_height := maxf(_reading_layer_budget(height, tier), reading_floor)
 	var reading_top := -(reading_bottom + reading_height)
 	var stage_min := STAGE_IDENTITY_RESERVE + STAGE_PORTRAIT_FLOOR
 	var stage_top_limit := TITLE_LOCKUP_BOTTOM + 8.0
@@ -2806,8 +2822,7 @@ func _apply_scene_layout(width: float, height: float, narrow: bool, wide: bool) 
 		_chat_area.offset_right = 200.0
 		_stage_column.offset_left = -410.0
 		_stage_column.offset_right = -22.0
-		return
-	if narrow:
+	elif narrow:
 		_chat_area.offset_left = -width * 0.5 + 12.0
 		_chat_area.offset_right = width * 0.5 - 12.0
 		_stage_column.offset_left = -width * 0.5 - 150.0
@@ -2819,21 +2834,71 @@ func _apply_scene_layout(width: float, height: float, narrow: bool, wide: bool) 
 		_stage_column.offset_left = -minf(410.0, width * 0.55)
 		_stage_column.offset_right = -22.0
 	_log_bar.visible = not narrow
+	_refresh_reading_layer_height()
+
+func _layout_tier(width: float) -> String:
+	if width >= LAYOUT_WIDE_MIN_WIDTH:
+		return "wide"
+	if width <= LAYOUT_NARROW_MAX_WIDTH:
+		return "narrow"
+	return "medium"
+
 
 # 阅读层的高度上限;实际高度还会受消息内容收缩(见 _refresh_reading_layer_height)。
-func _reading_layer_budget(height: float, narrow: bool, wide: bool) -> float:
-	if narrow:
+func _reading_layer_budget(height: float, tier: String) -> float:
+	if tier == "narrow":
 		return clampf(height * 0.34, 140.0, 240.0)
-	if wide:
+	if tier == "wide":
 		return clampf(height * 0.42, 180.0, 340.0)
 	return clampf(height * 0.34, 150.0, 260.0)
 
-# 页脚(动作栏、输入行、麦克风/发送、提示行)是不能压缩的,阅读层必须至少
-# 容得下它,否则输入框会被挤出视口。
+# 页脚(动作栏、输入行、麦克风/发送、提示行)与最小历史面都不能压缩,
+# 阅读层至少要容得下它们,否则输入框会被挤出视口。
 func _reading_layer_floor() -> float:
+	return (
+		_reading_layer_footer_height() + READING_FOOTER_GAP + READING_HISTORY_MIN_HEIGHT
+	)
+
+
+func _reading_layer_footer_height() -> float:
 	if not is_instance_valid(_input_panel):
 		return 152.0
-	return _input_panel.get_combined_minimum_size().y + 44.0
+	return _input_panel.get_combined_minimum_size().y
+
+
+func _history_content_height() -> float:
+	if not is_instance_valid(_chat_list):
+		return READING_HISTORY_MIN_HEIGHT
+	return _chat_list.get_combined_minimum_size().y + READING_HISTORY_PADDING
+
+
+# 阅读层的目标高度 = 页脚 + 间距 + 历史面。历史面跟着消息内容生长,
+# 只在 [最小可见高度, 预算余额] 之间取值。布局与诊断共用这一个公式,
+# 任何"退回固定高度"的改动都会被诊断直接抓住。
+func _reading_layer_target_height(height: float, tier: String) -> float:
+	var footer := _reading_layer_footer_height()
+	var gap := float(READING_FOOTER_GAP)
+	var budget := maxf(_reading_layer_budget(height, tier), _reading_layer_floor())
+	var history := clampf(
+		_history_content_height(),
+		READING_HISTORY_MIN_HEIGHT,
+		maxf(budget - footer - gap, READING_HISTORY_MIN_HEIGHT)
+	)
+	return footer + gap + history
+
+
+# 阅读面高度跟着消息内容走。只有一两条消息时不再摆一块占满整列的空板,
+# 消息累积后向上生长,到预算上限就把余下的交给滚动条。
+func _refresh_reading_layer_height() -> void:
+	if _layout_refreshing or not is_instance_valid(_chat_area):
+		return
+	_layout_refreshing = true
+	var viewport := get_viewport_rect().size
+	_chat_area.offset_top = (
+		_chat_area.offset_bottom
+		- _reading_layer_target_height(viewport.y, _layout_tier(viewport.x))
+	)
+	_layout_refreshing = false
 
 func _apply_sidebar_layout(width: float, wide: bool) -> void:
 	if not is_instance_valid(_sidebar):
@@ -2865,15 +2930,19 @@ func _apply_chat_input_theme(data: Dictionary) -> void:
 func _on_theme_changed(_data: Dictionary) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_glow.material.set_shader_parameter("glow_color", Color(data.primary, 0.09))
-	_nav.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", Color.WHITE)), Color.TRANSPARENT, 14, 10))
-	_input_panel_style = _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 20, 0)
+	_nav.add_theme_stylebox_override("panel", _title_lockup_style(data))
+	_input_panel_style = _reading_layer_style(data)
 	_input_panel.add_theme_stylebox_override("panel", _input_panel_style)
+	if is_instance_valid(_reading_plate):
+		_reading_plate.add_theme_stylebox_override("panel", _reading_layer_style(data))
 	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 12, 7))
 	_sidebar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass_strong", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 16, 0))
 	_stage_panel.add_theme_stylebox_override("panel", _panel_style(Color(0, 0, 0, 0), Color.TRANSPARENT, 0, 0))
-	_input_panel.material = _glass_material(data, 1.8)
+	_input_panel.material = _glass_material(data, 1.2)
 	_sidebar.material = _glass_material(data, 2.0)
 	_log_bar.material = _glass_material(data, 1.4)
+	if is_instance_valid(_reading_plate):
+		_reading_plate.material = _glass_material(data, 1.2)
 	if _stage_backlight and _stage_backlight.material:
 		(_stage_backlight.material as ShaderMaterial).set_shader_parameter(
 			"glow_color", Color(data.primary, 0.10)
@@ -2933,6 +3002,26 @@ func _open_exploration() -> void:
 		_update_log("3D 探索场景尚未就绪。")
 		return
 	UI.switch_scene(EXPLORATION_SCENE_PATH)
+
+# 阅读面(历史 + 页脚)与标题锁定卡共用一套衬底,主题切换时只改这一处,
+# 避免 _on_theme_changed 和构建函数各写一份色值然后慢慢漂移。
+func _reading_layer_style(data: Dictionary) -> StyleBoxFlat:
+	return _panel_style(
+		Color(data.get("glass_strong", data.bg), READING_PLATE_ALPHA),
+		Color(data.get("line", Color.TRANSPARENT)),
+		READING_PLATE_CORNER,
+		0
+	)
+
+
+func _title_lockup_style(data: Dictionary) -> StyleBoxFlat:
+	return _panel_style(
+		Color(data.get("glass_strong", data.bg), TITLE_LOCKUP_ALPHA),
+		Color(data.get("line", Color.TRANSPARENT)),
+		READING_PLATE_CORNER,
+		10
+	)
+
 
 func _panel_style(background: Color, border: Color, radius: int, margin: int) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

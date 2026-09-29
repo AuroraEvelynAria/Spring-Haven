@@ -54,6 +54,7 @@ func _run() -> void:
 	var failures: Array[String] = []
 	_check_developer_reply_tuning(world, failures)
 	await _expect_scene_layout_matrix(failures)
+	await _expect_short_history_shrinks(failures)
 	var send_button := world.get("_send_button") as Button
 	var chat_input := world.get("_chat_input") as LineEdit
 	var ling_button := world.get("_ling_button") as Button
@@ -336,6 +337,27 @@ func _expect_scene_layout_for_size(size: Vector2i, failures: Array[String]) -> v
 			_offset_rect(title_lockup, shell_origin)
 		):
 			failures.append("%s 的工具栏与标题锁定卡重叠" % label)
+	if is_instance_valid(chat_area):
+		# 阅读层高度必须等于它自己的目标公式（页脚 + 间距 + 内容收敛后的历史面），
+		# 且不低于页脚下限。低于下限会把输入框挤出视口；写死高度或整列铺满
+		# 都会让这条断言失败——那正是"巨大的空对话板"的两种回退方式。
+		var tier := str(world.call("_layout_tier", float(size.x)))
+		var floor_height := float(world.call("_reading_layer_floor"))
+		var target := float(world.call("_reading_layer_target_height", float(size.y), tier))
+		var area_height := chat_area.get_global_rect().size.y
+		print("GAMEWORLD_UI_RENDER_CHECK  %s tier=%s 阅读层=%s 目标=%s 内容=%s 下限=%s 舞台=%s" % [
+			label,
+			tier,
+			area_height,
+			target,
+			float(world.call("_history_content_height")),
+			floor_height,
+			stage.get_global_rect().size.y if is_instance_valid(stage) else -1.0,
+		])
+		if not is_equal_approx(area_height, target):
+			failures.append("%s 的阅读层高度 %s 与目标 %s 不一致" % [label, area_height, target])
+		if area_height < floor_height - 1.0:
+			failures.append("%s 的阅读层高度 %s 低于页脚下限 %s" % [label, area_height, floor_height])
 	world.free()
 	viewport.free()
 
@@ -344,6 +366,49 @@ func _offset_rect(control: Control, origin: Vector2) -> Rect2:
 	var rect := control.get_global_rect()
 	rect.position -= origin
 	return rect
+
+
+# "巨大的空对话板"的直接回归守卫：把已有对白隐藏后，阅读面必须收到内容大小
+# （页脚 + 最小历史面），而不是继续占满整列。旧实现是固定高度，这里必然失败。
+func _expect_short_history_shrinks(failures: Array[String]) -> void:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(1280, 720)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var world := GAME_WORLD_SCENE.instantiate() as Control
+	world.set("_suppress_exit_persistence", true)
+	world.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	viewport.add_child(world)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	world.call("_apply_responsive_layout")
+	await get_tree().process_frame
+	var chat_list := world.get("_chat_list") as VBoxContainer
+	var chat_area := world.get("_chat_area") as Control
+	if not is_instance_valid(chat_list) or not is_instance_valid(chat_area):
+		failures.append("短对白收缩检查缺少对话层")
+		world.free()
+		viewport.free()
+		return
+	var tall := chat_area.get_global_rect().size.y
+	# 隐藏而不是释放，避免打字机等协程持有悬空引用。
+	for child in chat_list.get_children():
+		(child as Control).hide()
+	chat_list.update_minimum_size()
+	await get_tree().process_frame
+	world.call("_refresh_reading_layer_height")
+	await get_tree().process_frame
+	var short := chat_area.get_global_rect().size.y
+	var floor_height := float(world.call("_reading_layer_floor"))
+	print("GAMEWORLD_UI_RENDER_CHECK  对白清空前后阅读层=%s → %s 下限=%s" % [
+		tall, short, floor_height
+	])
+	if short >= tall - 1.0:
+		failures.append("清空对白后阅读层仍占满整列：%s → %s" % [tall, short])
+	if short < floor_height - 1.0:
+		failures.append("清空对白后阅读层低于页脚下限：%s < %s" % [short, floor_height])
+	world.free()
+	viewport.free()
 
 
 func _finish(world: Node, exit_code: int) -> void:
