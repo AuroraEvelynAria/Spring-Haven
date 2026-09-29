@@ -47,6 +47,8 @@ func _run() -> void:
 	await _expect_compact_layout(main_menu)
 	_expect_font_size_stability(menu)
 	_expect_reduced_motion_and_petal_layer(menu)
+	if DisplayServer.get_name() != "headless":
+		await _capture_menu_screenshots(main_menu)
 	if is_instance_valid(journey_library):
 		_expect(is_instance_valid(journey_library.get("_new_dialog")), "旅程档案缺少新建弹窗")
 		_expect(is_instance_valid(journey_library.get("_rename_dialog")), "旅程档案缺少重命名弹窗")
@@ -102,6 +104,38 @@ func _expect(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error(message)
+
+
+# 主菜单是 F5 启动后的第一屏，结构断言全绿不代表"看起来是对的"。逐档留实拍图，
+# 让构图与对比度有据可查 —— GameWorld 那套图正是这样才发现问题的。
+func _capture_menu_screenshots(main_menu: PackedScene) -> void:
+	for size in [
+		Vector2i(1440, 900),
+		Vector2i(1280, 720),
+		Vector2i(1024, 720),
+		Vector2i(800, 600),
+		Vector2i(600, 600),
+	]:
+		var viewport := SubViewport.new()
+		viewport.size = size
+		viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		root.add_child(viewport)
+		var menu := main_menu.instantiate() as Control
+		menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		viewport.add_child(menu)
+		await process_frame
+		await process_frame
+		menu.call("_apply_responsive_layout")
+		# 入场动画会把主菜单推离本位,等它稳定再拍。
+		for _frame in 60:
+			await process_frame
+		var image := viewport.get_texture().get_image()
+		if image != null and not image.is_empty():
+			var path := "user://mainmenu_%dx%d.png" % [size.x, size.y]
+			image.save_png(path)
+			print("MAIN_MENU_STARTUP_CHECK 截图 %s" % ProjectSettings.globalize_path(path))
+		menu.free()
+		viewport.free()
 
 
 # 这个诊断跑在 SceneTree 主循环上,编译期解析不到 Settings 这个 autoload 标识,

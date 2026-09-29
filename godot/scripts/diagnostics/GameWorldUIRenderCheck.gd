@@ -55,6 +55,7 @@ func _run() -> void:
 	_check_developer_reply_tuning(world, failures)
 	await _expect_scene_layout_matrix(failures)
 	await _expect_short_history_shrinks(failures)
+	await _expect_long_history_stays_pinned(failures)
 	var send_button := world.get("_send_button") as Button
 	var chat_input := world.get("_chat_input") as LineEdit
 	var ling_button := world.get("_ling_button") as Button
@@ -478,6 +479,65 @@ func _offset_rect(control: Control, origin: Vector2) -> Rect2:
 	var rect := control.get_global_rect()
 	rect.position -= origin
 	return rect
+
+
+# 真实存档的对话历史远长于两条。这里灌 24 条进去，验证阅读面停在最新一条上 ——
+# 只喂两三条时内容装得下，滚动位置根本不起作用，这类缺陷会被夹具掩盖。
+func _expect_long_history_stays_pinned(failures: Array[String]) -> void:
+	var saved_history = Global.conversation_history
+	# Global.conversation_history 是类型化数组；赋无类型 Array 会直接运行时
+	# 报错并中断本函数（观察到的症状是"既不打印也不报失败"）。
+	var long_history: Array[Dictionary] = []
+	for index in 24:
+		long_history.append({
+			"id": "long-history-%d" % index,
+			"sender": "ai" if index % 2 == 0 else "user",
+			"role": "ling",
+			"text": "第 %d 条对白：窗边的栀子花又开了，你要不要一起来看看。" % (index + 1),
+			"status": "sent",
+			"event_type": "chat",
+			"created_at": int(Time.get_unix_time_from_system()) + index,
+		})
+	Global.conversation_history = long_history
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(1280, 720)
+	viewport.render_target_update_mode = (
+		SubViewport.UPDATE_DISABLED if _is_headless() else SubViewport.UPDATE_ALWAYS
+	)
+	get_tree().root.add_child(viewport)
+	var world := GAME_WORLD_SCENE.instantiate() as Control
+	world.set("_suppress_exit_persistence", true)
+	world.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	viewport.add_child(world)
+	for _frame in 30:
+		await get_tree().process_frame
+	world.call("_apply_responsive_layout")
+	for _frame in 4:
+		await get_tree().process_frame
+	var scroll := world.get("_chat_scroll") as ScrollContainer
+	var chat_list := world.get("_chat_list") as VBoxContainer
+	if not is_instance_valid(scroll) or not is_instance_valid(chat_list):
+		failures.append("长历史检查缺少对话滚动区")
+	else:
+		var bar := scroll.get_v_scroll_bar()
+		var newest := chat_list.get_child(chat_list.get_child_count() - 1) as Control
+		var newest_bottom := newest.get_global_rect().end.y
+		var visible_bottom := scroll.get_global_rect().end.y
+		var at_bottom := bar.value >= bar.max_value - bar.page - 8.0
+		print("GAMEWORLD_UI_RENDER_CHECK 长历史: 滚动=%s/%s 页高=%s 贴底=%s 最新条底部=%.1f 可视底部=%.1f" % [
+			bar.value, bar.max_value, bar.page, at_bottom, newest_bottom, visible_bottom
+		])
+		if not at_bottom:
+			failures.append("长历史下阅读面没有停在最新一条")
+		if newest_bottom > visible_bottom + 1.0:
+			failures.append(
+				"最新一条对白停在可视区下方：%.1f > %.1f" % [newest_bottom, visible_bottom]
+			)
+		if not _is_headless():
+			await _save_subviewport_screenshot(viewport, "user://gameworld_long_history.png")
+	world.free()
+	viewport.free()
+	Global.conversation_history = saved_history
 
 
 func _save_viewport_screenshot(path: String) -> void:
