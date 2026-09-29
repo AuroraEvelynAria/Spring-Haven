@@ -191,6 +191,161 @@ class EntityConstellationTests(unittest.TestCase):
         }
         self.assertEqual(predicates, {"喜欢"})
 
+    def test_private_claim_does_not_supersede_shared_fact(self):
+        """跨 scope 的主张不得互相顶替。
+
+        修复前修订键只有 (subject, predicate),与来源角色无关 —— 小奈的私有主张
+        能顶掉共享记忆写下的事实,读取端再过一遍可见性过滤,共享事实就在小玲视图
+        和「仅共享」视图里静默消失,而且没有任何冲突提示。
+        """
+        self.store.close()
+        self.store = HeartloomStore(":memory:", ["ling", "nai"])
+        shared_memory = self._memory("共享茶事", role_id="*")
+        nai_memory = self._memory("小奈咖啡", role_id="nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "主人", "predicate": "在用", "object": "工夫茶"}],
+            source_memory_id=shared_memory,
+        )
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "主人", "predicate": "在用", "object": "手冲咖啡"}],
+            source_memory_id=nai_memory,
+        )
+        for role_id in ("ling", "*"):
+            page = self.store.graph_page(
+                save_id="s", role_id=role_id, limit=20, include_entities=True
+            )
+            claim_edges = [
+                e for e in page["edges"] if e["link_type"] == "claim"
+            ]
+            self.assertEqual(
+                {e["object_text"] for e in claim_edges},
+                {"工夫茶"},
+                f"{role_id} 视图应只看见共享事实",
+            )
+            # 关键:共享事实必须仍然是"现行"。只查边上的宾语不够 —— 被顶替的
+            # 旧主张同样带着自己的宾语挂在图上,真正的伤害是 world_to 被写上、
+            # 于是它从"当前事实"里消失了。
+            self.assertTrue(
+                all(e["world_to"] is None for e in claim_edges),
+                f"{role_id} 视图里的共享事实不应被标记为已顶替",
+            )
+            counts = {
+                n["name"]: n["claim_count"]
+                for n in page["nodes"]
+                if n["node_type"] == "entity"
+            }
+            self.assertEqual(counts.get("主人"), 1)
+        nai_page = self.store.graph_page(
+            save_id="s", role_id="nai", limit=20, include_entities=True
+        )
+        nai_objects = {
+            e["object_text"] for e in nai_page["edges"] if e["link_type"] == "claim"
+        }
+        # 不同 scope 的主张是不同持有者的信念,并存而不是互相顶替
+        self.assertEqual(nai_objects, {"工夫茶", "手冲咖啡"})
+
+    def test_current_claims_prefers_local_belief_over_shared(self):
+        """同一读者视角里同一 (主语, 谓词) 只留一条当前主张。
+
+        修订按 scope 隔离之后,不同 scope 的信念会并存;但对某一个读者来说,
+        「喜欢工夫茶」和「喜欢手冲咖啡」同时作为"当前事实"会让 prompt 自相矛盾。
+        """
+        self.store.close()
+        self.store = HeartloomStore(":memory:", ["ling", "nai"])
+        shared_memory = self._memory("共享茶事", role_id="*")
+        nai_memory = self._memory("小奈咖啡", role_id="nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "主人", "predicate": "在用", "object": "工夫茶"}],
+            source_memory_id=shared_memory,
+        )
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "主人", "predicate": "在用", "object": "手冲咖啡"}],
+            source_memory_id=nai_memory,
+        )
+        subject_id = str(
+            self.store._connection.execute(
+                "SELECT entity_id FROM entities WHERE save_id = 's' AND name = '主人'"
+            ).fetchone()["entity_id"]
+        )
+        ling_claims = self.store.current_claims(
+            save_id="s", entity_ids=[subject_id], role_id="ling"
+        )
+        self.assertEqual([c["object"] for c in ling_claims], ["工夫茶"])
+        nai_claims = self.store.current_claims(
+            save_id="s", entity_ids=[subject_id], role_id="nai"
+        )
+        # 自己写的信念优先于共享,而不是两条并列
+        self.assertEqual([c["object"] for c in nai_claims], ["手冲咖啡"])
+
+    def test_recent_entity_names_is_scoped_by_role(self):
+        """实体锚定清单会进该角色自己的 organizer 提示词,不能带上别人的私有实体。
+
+        不过滤时,小奈的私有实体名会出现在小玲的提示词里,而 organizer 的输出
+        又写成小玲的私有记忆 —— 正好和隔离目标相反。
+        """
+        self.store.close()
+        self.store = HeartloomStore(":memory:", ["ling", "nai"])
+        ling_memory = self._memory("小玲私物", role_id="ling")
+        nai_memory = self._memory("小奈私物", role_id="nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小玲", "predicate": "收在", "object": "小玲私物"}],
+            source_memory_id=ling_memory,
+        )
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "小奈", "predicate": "收在", "object": "小奈私物"}],
+            source_memory_id=nai_memory,
+        )
+        self.assertIn("小玲私物", self.store.recent_entity_names("s", "ling"))
+        self.assertNotIn("小奈私物", self.store.recent_entity_names("s", "ling"))
+        self.assertIn("小奈私物", self.store.recent_entity_names("s", "nai"))
+        self.assertNotIn("小玲私物", self.store.recent_entity_names("s", "nai"))
+        # 无角色时保留全量,审计视图不受影响
+        audit_names = self.store.recent_entity_names("s")
+        self.assertIn("小玲私物", audit_names)
+        self.assertIn("小奈私物", audit_names)
+
+    def test_entity_visibility_respects_as_of_boundary(self):
+        """实体不能只因为"有一条未来才成立的可见主张"就对过去视角可见。
+
+        修复前实体可见性只查有没有可见来源、不过时间,于是回溯到那一刻会看到一个
+        claim_count 为 0 的孤立实体 —— 名字被越权露出,而且和计数自相矛盾。
+        """
+        self.store.close()
+        self.store = HeartloomStore(":memory:", ["ling", "nai"])
+        private_memory = self._memory("小奈先见", role_id="nai")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "共同的熟人", "predicate": "住在", "object": "城西"}],
+            source_memory_id=private_memory,
+        )
+        self._advance_world_days(10.0)
+        ling_memory = self._memory("小玲后知", role_id="ling")
+        self.store.put_claims(
+            save_id="s",
+            claims=[{"subject": "共同的熟人", "predicate": "住在", "object": "城东"}],
+            source_memory_id=ling_memory,
+        )
+        past = self.store.graph_page(
+            save_id="s", role_id="ling", limit=20, include_entities=True,
+            as_of_world=5.0,
+        )
+        past_names = {n["name"] for n in past["nodes"] if n["node_type"] == "entity"}
+        self.assertNotIn("共同的熟人", past_names)
+        self.assertNotIn("城东", past_names)
+        current = self.store.graph_page(
+            save_id="s", role_id="ling", limit=20, include_entities=True
+        )
+        current_names = {n["name"] for n in current["nodes"] if n["node_type"] == "entity"}
+        self.assertIn("共同的熟人", current_names)
+        self.assertIn("城东", current_names)
+        self.assertNotIn("城西", current_names)
+
 
 if __name__ == "__main__":
     unittest.main()

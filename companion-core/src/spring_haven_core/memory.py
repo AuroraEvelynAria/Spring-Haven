@@ -52,6 +52,16 @@ CONTRADICTION_PAIRS = [
 ]
 SHARED_SCOPE = "*"
 
+# 自主回合的客户端脚手架特征串。写入路径与存量清理工具共用同一份,否则会出现
+# 「清理工具刚删掉,历史回放又把它种回去」的循环。真实主人几乎不可能原样说出这两句。
+AUTONOMOUS_SCAFFOLD_SIGNATURES: tuple[str, ...] = (
+    "后台生活主动联系",
+    "请以你自己的人格",
+)
+# 强指纹:只有客户端主动消息脚手架会整句用到它。不可逆操作(删除事件)只认这一条;
+# 弱指纹单独命中时只报告,因为主人自己也可能打出"请以你自己的人格"这种句子。
+AUTONOMOUS_SCAFFOLD_STRONG_SIGNATURE = "后台生活主动联系"
+
 MEMORY_KINDS = {
     "episodic",
     "semantic",
@@ -1986,6 +1996,18 @@ class HeartloomStore:
             claim_visibility_params: list[Any] = []
             source_scope = ""
             source_scope_params: list[Any] = []
+            # 实体可见性也必须过时间边界:只看"有没有可见来源",不看时间的话,
+            # 某个实体可能因为一条 as_of 之后才成立的主张而对过去视角可见,
+            # 同时它的 claim_count 又是 0 —— 名字被越权露出且自相矛盾。
+            claim_asof = ""
+            claim_asof_params: list[Any] = []
+            if as_of_value is not None:
+                claim_asof = (
+                    "AND visibility_claim.world_from <= ? "
+                    "AND (visibility_claim.world_to IS NULL "
+                    "OR visibility_claim.world_to > ?)"
+                )
+                claim_asof_params = [as_of_value, as_of_value]
             if normalized_role == "*":
                 source_scope = "visibility_memory.scope_role_id = '*'"
             elif normalized_role:
@@ -2006,6 +2028,7 @@ class HeartloomStore:
                           )
                           AND visibility_memory.lifecycle = 'active'
                           AND visibility_memory.enabled = 1
+                          {claim_asof}
                           AND {source_scope}
                     )
                 """
@@ -2024,6 +2047,7 @@ class HeartloomStore:
             if as_of_value is not None:
                 entity_asof = "AND world_created_at <= ?"
                 entity_params.append(as_of_value)
+            entity_params.extend(claim_asof_params)
             entity_params.extend(source_scope_params)
             with self._lock:
                 entity_rows = self._connection.execute(
@@ -3800,21 +3824,74 @@ class HeartloomStore:
             )
             return entity_id
 
-    def recent_entity_names(self, save_id: str, limit: int = 40) -> list[str]:
+    def recent_entity_names(
+        self, save_id: str, role_id: str = "", limit: int = 40
+    ) -> list[str]:
         """组织器实体锚定用:该存档最近活跃的实体名(ADR-009 D2)。
 
         注入 organizer 提示词,让同一人物/事物每轮复用同一名字——
         「林澈/主人」「神经内科/急诊科」各自为政会让修订链接不上。
+
+        必须按角色过滤:这个清单进的是每个角色各自的 organizer 提示词,而
+        organizer 的输出又会写成该角色的私有记忆 —— 不过滤时,小奈的私有实体名
+        会出现在小玲的提示词里,并可能被写进小玲的私有记忆,正好和隔离目标相反。
         """
+        normalized_role = str(role_id or "").strip()
+        visibility = ""
+        params: list[Any] = [save_id]
+        if normalized_role == "*":
+            scope_clause = "anchor_memory.scope_role_id = '*'"
+        elif normalized_role:
+            scope_clause = (
+                "(anchor_memory.scope_role_id = ? OR anchor_memory.scope_role_id = '*')"
+            )
+            params.append(normalized_role)
+        else:
+            scope_clause = ""
+        if scope_clause:
+            visibility = f"""
+                AND EXISTS (
+                    SELECT 1
+                    FROM claims AS anchor_claim
+                    JOIN memory_entries AS anchor_memory
+                      ON anchor_memory.memory_id = anchor_claim.source_memory_id
+                     AND anchor_memory.save_id = anchor_claim.save_id
+                    WHERE anchor_claim.save_id = entities.save_id
+                      AND (
+                          anchor_claim.subject_entity_id = entities.entity_id
+                          OR anchor_claim.object_entity_id = entities.entity_id
+                      )
+                      AND anchor_memory.lifecycle = 'active'
+                      AND anchor_memory.enabled = 1
+                      AND {scope_clause}
+                )
+            """
+        params.append(max(1, min(64, int(limit))))
         with self._lock:
             rows = self._connection.execute(
-                """
-                SELECT name FROM entities WHERE save_id = ?
+                f"""
+                SELECT name FROM entities
+                WHERE save_id = ? {visibility}
                 ORDER BY world_updated_at DESC, name_norm LIMIT ?
                 """,
-                (save_id, max(1, min(64, int(limit)))),
+                params,
             ).fetchall()
         return [str(row["name"]) for row in rows]
+
+    def _memory_scope_role(self, save_id: str, memory_id: str) -> str:
+        """一条记忆的归属 scope;空串 = 没有出处。用于主张修订的 scope 判定。"""
+        cleaned = _clean_text(memory_id, 80)
+        if not cleaned:
+            return ""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT scope_role_id FROM memory_entries
+                WHERE save_id = ? AND memory_id = ?
+                """,
+                (save_id, cleaned),
+            ).fetchone()
+        return str(row["scope_role_id"]) if row is not None else ""
 
     def put_claims(
         self,
@@ -3830,6 +3907,12 @@ class HeartloomStore:
         新旧来源记忆之间补 conflict 边留审计)。
         """
         stats = {"created": 0, "reinforced": 0, "superseded": 0, "skipped": 0}
+
+        # 修订只在同一 scope 内发生。旧实现只看 (subject, predicate),与来源角色
+        # 无关 —— 小奈的私有主张因此能顶掉共享记忆写下的事实,读取端再过一遍
+        # 可见性过滤,共享事实就在小玲视图和"仅共享"视图里静默消失,且没有任何
+        # 冲突提示。不同 scope 的主张是不同持有者的信念,应当并存而非互相顶替。
+        source_scope = self._memory_scope_role(save_id, source_memory_id)
 
         def _safe_confidence(raw: dict[str, Any]) -> float:
             try:
@@ -3865,13 +3948,16 @@ class HeartloomStore:
                     )
                     current = self._connection.execute(
                         """
-                        SELECT claim_id, object_entity_id, confidence, source_memory_id
-                        FROM claims
-                        WHERE save_id = ? AND subject_entity_id = ? AND predicate = ?
-                          AND world_to IS NULL
-                        ORDER BY updated_at DESC LIMIT 1
+                        SELECT c.claim_id, c.object_entity_id, c.confidence, c.source_memory_id
+                        FROM claims AS c
+                        LEFT JOIN memory_entries AS m
+                          ON m.save_id = c.save_id AND m.memory_id = c.source_memory_id
+                        WHERE c.save_id = ? AND c.subject_entity_id = ? AND c.predicate = ?
+                          AND c.world_to IS NULL
+                          AND COALESCE(m.scope_role_id, '') = ?
+                        ORDER BY c.updated_at DESC LIMIT 1
                         """,
-                        (save_id, subject_id, predicate),
+                        (save_id, subject_id, predicate, source_scope),
                     ).fetchone()
                     if current is not None and str(current["object_entity_id"]) == object_id:
                         self._connection.execute(
@@ -4002,12 +4088,16 @@ class HeartloomStore:
             rows = self._connection.execute(
                 f"""
                 SELECT c.claim_id, c.predicate, c.object_text, c.confidence,
-                       c.world_from, c.source_memory_id,
+                       c.world_from, c.source_memory_id, c.subject_entity_id,
+                       COALESCE(visibility_memory.scope_role_id, '') AS source_scope,
                        s.name AS subject_name, s.kind AS subject_kind,
                        o.name AS object_name
                 FROM claims AS c
                 JOIN entities AS s ON s.entity_id = c.subject_entity_id
                 LEFT JOIN entities AS o ON o.entity_id = c.object_entity_id
+                LEFT JOIN memory_entries AS visibility_memory
+                  ON visibility_memory.save_id = c.save_id
+                 AND visibility_memory.memory_id = c.source_memory_id
                 WHERE c.save_id = ? AND c.subject_entity_id IN ({placeholders})
                   AND c.world_to IS NULL
                   {source_visibility}
@@ -4016,7 +4106,35 @@ class HeartloomStore:
                 """,
                 params,
             ).fetchall()
-        return [self._claim_row(row) for row in rows]
+        return self._prefer_local_claims(rows, normalized_role)
+
+    @staticmethod
+    def _prefer_local_claims(
+        rows: list[sqlite3.Row], role_id: str
+    ) -> list[dict[str, Any]]:
+        """同一 (主语, 谓词) 在同一读者的视角里只留一条当前主张。
+
+        主张修订现在按来源 scope 隔离,不同 scope 的信念会并存 —— 这本身是对的
+        (小玲的信念和小奈的信念是两回事)。但对某一个读者来说,视角里同时出现
+        「喜欢工夫茶」和「喜欢手冲咖啡」两条"当前事实",prompt 就自相矛盾了。
+        读者自己的主张优先于共享,其余仍按置信度与更新时间排序。
+        """
+        if not role_id or role_id == "*":
+            return [HeartloomStore._claim_row(row) for row in rows]
+        picked: dict[tuple[str, str], sqlite3.Row] = {}
+        order: list[tuple[str, str]] = []
+        for row in rows:
+            key = (str(row["subject_entity_id"]), str(row["predicate"]))
+            existing = picked.get(key)
+            if existing is None:
+                picked[key] = row
+                order.append(key)
+                continue
+            if str(existing["source_scope"]) == role_id:
+                continue
+            if str(row["source_scope"]) == role_id:
+                picked[key] = row
+        return [HeartloomStore._claim_row(picked[key]) for key in order]
 
     @staticmethod
     def _claim_row(row: sqlite3.Row) -> dict[str, Any]:

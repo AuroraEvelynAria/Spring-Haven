@@ -12,6 +12,7 @@ from spring_haven_core.app import build_app
 from spring_haven_core.config import CoreConfig
 from spring_haven_core.memory import HeartloomStore, MemoryStoreError
 from spring_haven_core.orchestration import ConversationOrchestrator
+from spring_haven_core.organizer import HeartloomOrganizer
 from spring_haven_core.prompting import HEARTLOOM_OPEN
 from spring_haven_core.provider import ProviderReply
 from spring_haven_core.roles import RoleRegistry
@@ -322,6 +323,129 @@ class HeartloomServiceTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await service.wait_for_organizer()
             service.close()
+
+    async def test_autonomous_history_cannot_reseed_scaffolding(self):
+        """自主回合的历史回放不得把脚手架重新种回 conversation_events。
+
+        原修复只堵了 payload["text"] 这一条。旧存档或第三方客户端只要把脚手架当成
+        user 条目放进 history,它就会经 _sync_history 落成主人发言 —— 存量清理
+        工具刚删掉的行会被原样种回去,形成"清完再生"的循环。
+        """
+        provider = SequenceProvider(["（主动消息）主人~今天阳光很好呀。"])
+        service = CompanionService(
+            self.roles,
+            provider,
+            HeartloomStore(self.root / "autonomous-history.sqlite3", self.roles.ids()),
+            memory_organizer_enabled=True,
+        )
+        try:
+            autonomous = payload(
+                "auto-h1",
+                "这是你的后台生活主动联系时刻。请以你自己的人格，主动给主人发一条简短自然的中文消息。",
+            )
+            autonomous["state"]["autonomous_event"] = {
+                "kind": "proactive_message",
+                "reason": "missing_player",
+                "occurred_at_unix": 1_800_000_000,
+            }
+            autonomous["history"] = [
+                {
+                    "id": "legacy-scaffold-1",
+                    "sender": "user",
+                    "role_id": "ling",
+                    "text": (
+                        "这是你的后台生活主动联系时刻。请以你自己的人格，"
+                        "主动给主人发一条简短自然的中文消息。"
+                    ),
+                    "status": "sent",
+                    "event_type": "chat",
+                    "created_at": 1_799_999_000,
+                },
+                {
+                    "id": "legit-user-1",
+                    "sender": "user",
+                    "role_id": "ling",
+                    "text": "晚上我们一起泡茶吧。",
+                    "status": "sent",
+                    "event_type": "chat",
+                    "created_at": 1_799_999_500,
+                },
+            ]
+            await service.chat(autonomous)
+            events = service.memory.recent_events("heartloom-test", "ling", limit=8)
+            self.assertFalse(
+                any("后台生活主动联系" in event["text"] for event in events),
+                "自主回合的历史回放不得把脚手架落成主人发言",
+            )
+            self.assertTrue(
+                any(
+                    event["sender"] == "user" and "泡茶" in event["text"]
+                    for event in events
+                ),
+                "历史里真实的主人发言不应被一并丢弃",
+            )
+        finally:
+            service.close()
+
+    async def test_organizer_skips_claims_without_a_source_memory(self):
+        """没有可验证出处的主张不写。
+
+        角色过滤视图用"claim 必须有一条该角色可见的来源记忆"做隐私兜底,所以无出处
+        的主张在对话 prompt 里永远读不到 —— 写进去只是死数据,而修复前它们是可见的,
+        等于悄悄把事实弄丢。organizer 少写一条主张,好过写一条永远读不到的死数据。
+        """
+        empty_reply = json.dumps(
+            {
+                "memories": [{"kind": "semantic", "title": "空壳", "content": ""}],
+                "claims": [{"subject": "主人", "predicate": "在用", "object": "工夫茶"}],
+            },
+            ensure_ascii=False,
+        )
+        role = self.roles.get("ling")
+        await HeartloomOrganizer(
+            SequenceProvider([empty_reply]), self.service.memory
+        ).organize(
+            save_id="heartloom-test",
+            role=role,
+            request_id="org-empty",
+            user_text="我最近开始喝工夫茶了，你可以记住。",
+            reply_text="好呀，那我记下来。",
+            fallback_memory_id="",
+        )
+        claim_rows = self.service.memory._connection.execute(
+            "SELECT COUNT(*) AS n FROM claims"
+        ).fetchone()
+        self.assertEqual(int(claim_rows["n"]), 0)
+
+        # 对照:本轮有有效记忆时主张照常写入,免得"跳过"变成"永远不写"
+        working_reply = json.dumps(
+            {
+                "memories": [
+                    {
+                        "kind": "semantic",
+                        "title": "主人开始喝工夫茶",
+                        "content": "主人最近开始喝工夫茶。",
+                        "trigger_terms": ["工夫茶"],
+                    }
+                ],
+                "claims": [{"subject": "主人", "predicate": "在用", "object": "手冲咖啡"}],
+            },
+            ensure_ascii=False,
+        )
+        await HeartloomOrganizer(
+            SequenceProvider([working_reply]), self.service.memory
+        ).organize(
+            save_id="heartloom-test",
+            role=role,
+            request_id="org-with-memory",
+            user_text="我最近改喝手冲咖啡了，你可以记住。",
+            reply_text="好呀，那我记下来。",
+            fallback_memory_id="",
+        )
+        claim_rows = self.service.memory._connection.execute(
+            "SELECT COUNT(*) AS n FROM claims"
+        ).fetchone()
+        self.assertEqual(int(claim_rows["n"]), 1)
 
     async def test_idempotency_survives_service_restart(self):
         first = await self.service.chat(payload("persistent-request", "晚安。"))

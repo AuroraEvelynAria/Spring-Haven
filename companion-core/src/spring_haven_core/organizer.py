@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from .memory import HeartloomStore, MEMORY_KINDS
 from .provider import ChatProvider
 from .roles import RoleDefinition
+
+LOGGER = logging.getLogger(__name__)
 
 
 ORGANIZER_CONTRACT = """
@@ -105,8 +108,9 @@ class HeartloomOrganizer:
                 "display_name": role.display_name,
                 "full_name": role.full_name,
             },
-            # ADR-009:实体锚定——已知实体名原样复用,防「林澈/主人」各表
-            "known_entities": self.store.recent_entity_names(save_id),
+            # ADR-009:实体锚定——已知实体名原样复用,防「林澈/主人」各表。
+            # 必须按角色过滤:这个清单会进该角色自己的 organizer 提示词。
+            "known_entities": self.store.recent_entity_names(save_id, role.role_id),
             "exchange": {
                 "user": str(user_text).replace("\x00", " ").strip()[:4_000],
                 "character": str(reply_text).replace("\x00", " ").strip()[:4_000],
@@ -146,6 +150,17 @@ class HeartloomOrganizer:
         # ADR-009:实体-主张抽取(尽力而为,失败不影响记忆主流程)
         if claims:
             source_memory_id = str(result[0]["memory_id"]) if result else ""
+            if not source_memory_id:
+                # 没有可验证出处的主张在角色视图里永远不可见(隐私优先会把它排除,
+                # 见 current_claims 的 source_visibility),写进去只是死数据;
+                # 而修复前它们在 prompt 里是可见的,等于悄悄把事实弄丢。
+                # 本轮记忆全被判无效时,宁可不写主张。
+                LOGGER.info(
+                    "claims skipped: no source memory in this batch (count=%d)",
+                    len(claims),
+                )
+                claims = []
+        if claims:
             try:
                 self.store.put_claims(
                     save_id=save_id,
@@ -153,9 +168,7 @@ class HeartloomOrganizer:
                     source_memory_id=source_memory_id,
                 )
             except Exception as exc:  # 主张写入失败静默降级,记忆主流程不受影响
-                import logging
-
-                logging.getLogger(__name__).warning(
+                LOGGER.warning(
                     "claims write degraded: %s: %s | claims=%s",
                     type(exc).__name__,
                     exc,

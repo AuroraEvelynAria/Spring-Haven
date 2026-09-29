@@ -10,7 +10,11 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from .memory import HeartloomStore, MemoryStoreError
+from .memory import (
+    AUTONOMOUS_SCAFFOLD_SIGNATURES,
+    HeartloomStore,
+    MemoryStoreError,
+)
 from .maintenance import StorageMaintenance
 from .organizer import HeartloomOrganizer
 from .prompting import PromptComposer, mood_words
@@ -23,6 +27,15 @@ from .scene_actions import extract_scene_actions
 SAVE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 LOGGER = logging.getLogger("spring_haven_core.service")
+
+
+def _is_autonomous_scaffold(text: str) -> bool:
+    """客户端在自主回合里代替"用户"发出的提示词脚手架。
+
+    与存量清理工具共用 AUTONOMOUS_SCAFFOLD_SIGNATURES,保证写入路径和清理路径
+    认的是同一批指纹。
+    """
+    return any(signature in text for signature in AUTONOMOUS_SCAFFOLD_SIGNATURES)
 
 
 class RequestValidationError(ValueError):
@@ -219,7 +232,7 @@ class CompanionService:
         autonomous = bool(local_state.get("autonomous_event"))
         source_message_id = self._source_message_id(request_id, state)
         audience_roles = self._audience_roles(state)
-        self._sync_history(save_id, payload["history"])
+        self._sync_history(save_id, payload["history"], autonomous)
         if not autonomous:
             self.memory.record_event(
                 save_id=save_id,
@@ -1938,13 +1951,20 @@ class CompanionService:
             raise RequestValidationError("save_id is invalid")
         return normalized
 
-    def _sync_history(self, save_id: str, history: list[Any]) -> None:
+    def _sync_history(
+        self, save_id: str, history: list[Any], autonomous: bool = False
+    ) -> None:
         for index, item in enumerate(history[-64:]):
             if not isinstance(item, dict):
                 continue
             sender = str(item.get("sender", ""))
             text = str(item.get("text", "")).replace("\x00", " ").strip()
             if sender not in {"user", "ai"} or not text:
+                continue
+            # 自主回合里夹带的 user 条目只可能是客户端脚手架:真主人说的话不会
+            # 在角色主动搭话这一轮才第一次出现。不过滤的话,存量清理工具刚删掉的
+            # 脚手架会被旧存档或第三方客户端的历史回放重新种进 conversation_events。
+            if autonomous and sender == "user" and _is_autonomous_scaffold(text):
                 continue
             raw_id = str(item.get("id", ""))
             if not raw_id:
