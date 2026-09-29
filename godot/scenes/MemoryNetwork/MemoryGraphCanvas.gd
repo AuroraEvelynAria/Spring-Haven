@@ -18,12 +18,12 @@ const MAX_ZOOM := 2.4
 # 每帧模拟直至能量沉降:库仑斥力(全对,半径感知)+ 弹簧(可见边)+
 # 向心 + 阻尼 + 软边界。拖拽把光标速度传给节点,松手后惯性滑行,
 # 弹簧拖着邻居弹性跟随 —— 「弹弓」手感来自连续模拟,而非固定步数。
-const REPULSION_K := 11000.0
+const REPULSION_K := 14000.0
 const REPULSION_FLOOR := 0.08
-const REPULSION_CUTOFF_SQ := 160000.0
+const REPULSION_CUTOFF_SQ := 190000.0
 const LINK_SPRING_K := 0.03
-const LINK_LEN_STRONG := 95.0
-const LINK_LEN_WEAK := 140.0
+const LINK_LEN_STRONG := 112.0
+const LINK_LEN_WEAK := 165.0
 const CENTER_PULL := 0.012
 const DAMPING := 0.865
 const MAX_SPEED := 26.0
@@ -33,7 +33,7 @@ const FLING_MAX := 22.0
 const SIM_COOL_PER_FRAME := 0.004
 const SIM_ALPHA_MIN := 0.01
 const SIM_ALPHA_DRAG := 0.5
-const COLLISION_PAD := 6.0
+const COLLISION_PAD := 8.0
 # 标签 LOD:≥LABEL_ZOOM 时全量画名字;更远的远景只画实体/枢纽/高重要度
 # (LABEL_PRIORITY_ZOOM 门槛),避免几十个标签糊成一团。阈值实测:自适应视角
 # 通常落在 0.6~1.15 之间,旧的 1.2 门槛等于"打开永远没有名字"——
@@ -42,6 +42,11 @@ const LABEL_ZOOM := 0.72
 const LABEL_PRIORITY_ZOOM := 0.45
 const LABEL_FONT_SIZE := 12
 const FOCUS_DIM := 0.10
+# 悬停/聚焦的亮度过渡:指数趋入速率(1/s),12/s ≈ 0.19s 到 90% ——
+# 「放上来渐显」不闪不抢;焦点圈与因聚焦展开的边按 FOCUS_GLOW_RISE 渐入,
+# 焦点一挪开瞬间清零(移开突灭,用户点名的要求)。
+const EMPHASIS_RISE_SPEED := 12.0
+const FOCUS_GLOW_RISE := 0.16
 # 数值兜底半径（世界单位）：只在极端斥力下生效，正常布局碰不到。
 # 它必须远大于任何正常云团，否则又会变成一堵墙。
 const HARD_BOUNDARY := 4000.0
@@ -73,10 +78,9 @@ var _pane_stretch := 1.0
 var _pan := Vector2.ZERO
 ## 度数上限(Obsidian「毛线球」对策):每个节点默认只绘制最强的 K 条边,
 ## 其余边在聚焦/悬停/选中时展开 —— 高连接节点不再喷成"蜘蛛"
-# 每节点默认常显的边数上限。原先 3 —— 实测 77 条关系只显示 43 条、
-# 真实存档 119 条只显示 37 条，作为「关系图谱」藏掉了三分之二的联系。
-# 布局已经散开，度数十限只需要拦住病态枢纽，不需要拦正常结构。
-const EDGE_KEEP_PER_NODE := 6
+# 每节点默认常显的边数上限。6 在密集存档下整张图像铁丝网(用户原话),
+# 4 配合更散的斥力布局能把线量压下来;被藏起的联系在悬停/选中时完整展开。
+const EDGE_KEEP_PER_NODE := 4
 
 var _min_strength := 0.55
 var _primary_edge_ids: Dictionary = {}
@@ -98,6 +102,10 @@ var _time_fade_days := GHOST_FADE_DAYS_DEFAULT
 # 悬停聚焦(Obsidian 式):聚焦节点的邻域保持明亮,其余淡出
 var _focus_id := ""
 var _focus_neighbors: Dictionary = {}
+# 亮度过渡的动画量:emphasis = 每节点/边在聚焦态下的亮度(1=常态),
+# focus_glow = 当前焦点节点的「在场程度」—— 悬停圈、因聚焦展开的边随它渐入。
+var _emphasis: Dictionary = {}
+var _focus_glow: Dictionary = {}
 var _palette := {
 	"background": Color("#100E0D"),
 	"grid": Color(1, 1, 1, 0.045),
@@ -142,6 +150,8 @@ func set_graph(graph: Dictionary) -> void:
 	_dragged_id = ""
 	_focus_id = ""
 	_focus_neighbors.clear()
+	_emphasis.clear()
+	_focus_glow.clear()
 	# 沉降结束后自动套住整张图：静置的图会缩成中间一小团，
 	# 默认视角必须自己跟上去，用户不该手动缩放去找。
 	_auto_fit_pending = true
@@ -178,6 +188,11 @@ func set_graph(graph: Dictionary) -> void:
 					index,
 				]
 			_edges.append(edge)
+	# 亮度动画量从常态起步:不初始化的话首次悬停的渐入会从默认值起跳
+	for node in _nodes:
+		_emphasis["n:%s" % str(node.id)] = 1.0
+	for edge in _edges:
+		_emphasis["e:%s" % str(edge.get("link_id", ""))] = 1.0
 	_compute_primary_edges()
 	_compute_degrees()
 	var reused := _apply_cached_layout()
@@ -396,6 +411,62 @@ func _edge_ghost_amount(edge: Dictionary) -> float:
 	return float(_ghost_amounts.get("e:%s" % str(edge.get("link_id", "")), _ghost_target_for_edge(edge)))
 
 
+# ── 悬停/聚焦亮度过渡 ─────────────────────────────────────────
+# 目标亮度与 _draw 的聚焦判据同源:焦点邻域 1,其余 FOCUS_DIM。
+# 上下两个方向都按 EMPHASIS_RISE_SPEED 指数趋入,聚焦切换不再硬切;
+# 焦点节点的 focus_glow 单独渐入、挪开瞬间清零 —— 「放上来渐显,移开突灭」。
+func _emphasis_target_for_node(node: Dictionary) -> float:
+	if _focus_id == "":
+		return 1.0
+	var node_id := str(node.id)
+	if node_id == _focus_id or _focus_neighbors.has(node_id):
+		return 1.0
+	return FOCUS_DIM
+
+
+func _emphasis_target_for_edge(edge: Dictionary) -> float:
+	if _focus_id == "":
+		return 1.0
+	for endpoint in [str(edge.get("source", "")), str(edge.get("target", ""))]:
+		if endpoint == _focus_id:
+			return 1.0
+	return FOCUS_DIM
+
+
+func _advance_emphasis_animation(delta: float) -> bool:
+	var k := clampf(delta * EMPHASIS_RISE_SPEED, 0.0, 1.0)
+	var animating := false
+	for node in _nodes:
+		var key := "n:%s" % str(node.id)
+		var target := _emphasis_target_for_node(node)
+		var updated := lerpf(float(_emphasis.get(key, 1.0)), target, k)
+		_emphasis[key] = updated
+		if absf(updated - target) > 0.004:
+			animating = true
+	for edge in _edges:
+		var key := "e:%s" % str(edge.get("link_id", ""))
+		var target := _emphasis_target_for_edge(edge)
+		var updated := lerpf(float(_emphasis.get(key, 1.0)), target, k)
+		_emphasis[key] = updated
+		if absf(updated - target) > 0.004:
+			animating = true
+	if _focus_id != "":
+		var glow := clampf(
+			float(_focus_glow.get(_focus_id, 0.0)) + delta / FOCUS_GLOW_RISE, 0.0, 1.0
+		)
+		_focus_glow[_focus_id] = glow
+		if glow < 1.0:
+			animating = true
+	return animating
+
+
+# 当前焦点节点的「在场程度」:悬停圈与因聚焦展开的弱边随它渐入渐灭
+func _focus_presence() -> float:
+	if _focus_id == "":
+		return 1.0
+	return clampf(float(_focus_glow.get(_focus_id, 0.0)), 0.0, 1.0)
+
+
 func get_visible_edge_count() -> int:
 	var count := 0
 	for edge in _edges:
@@ -504,6 +575,8 @@ func _process(delta: float) -> void:
 		_auto_fit_pending = false
 		fit_to_content()
 	var animating := _advance_ghost_animation(delta)
+	if _advance_emphasis_animation(delta):
+		animating = true
 	if _sim_alpha > SIM_ALPHA_MIN or _dragged_id != "":
 		_simulate(delta)
 		animating = true
@@ -614,6 +687,9 @@ func _simulate(delta: float) -> void:
 func _update_focus(focus_id: String) -> void:
 	if focus_id == _focus_id:
 		return
+	# 焦点挪走的瞬间,旧焦点的"在场程度"清零:悬停圈与展开边立即熄灭
+	if _focus_id != "":
+		_focus_glow[_focus_id] = 0.0
 	_focus_id = focus_id
 	_focus_neighbors.clear()
 	if focus_id != "":
@@ -678,7 +754,6 @@ func _draw() -> void:
 		var render_strength := strength if not touches_focus else maxf(strength, 0.45)
 		var ghost_amount := clampf(_edge_ghost_amount(edge), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
-		var focused := focus_active and not touches_focus
 		var highlighted := (source == _selected_id or target == _selected_id) and lit_amount > 0.5
 		# ADR-015:claim 边(实体↔实体)/claim_source 边(记忆→实体);
 		# 游标越过 world_to 的失效主张压暗 —— 「过去相信过」仍可见
@@ -690,13 +765,20 @@ func _draw() -> void:
 			if world_to_variant != null and _time_cursor >= 0.0 and _time_cursor >= float(world_to_variant):
 				dead_damp = 0.32
 		var hovered_endpoint := (source == _hovered_id or target == _hovered_id) and lit_amount > 0.5
-		var focus_mul := FOCUS_DIM if focused else 1.0
+		# 聚焦亮度经动画量过渡:悬停切换邻域时整片渐暗渐亮,不再硬切
+		var focus_mul := float(_emphasis.get("e:%s" % str(edge.get("link_id", "")), 1.0))
+		# 只因聚焦而存在的展开边(弱关联/非主边):随焦点节点的在场程度渐入
+		var expansion_only := touches_focus and not touches_light and (
+			float(edge.get("strength", 0.0)) < _min_strength
+			or not _primary_edge_ids.has(str(edge.get("link_id", "")))
+		)
 		var edge_color: Color
 		var edge_width: float
 		# ADR-010:亮度经动画量平滑过渡 —— 游标拨过时边"渐亮"
 		if is_claim_edge:
 			var claim_base := Color("#8A8078") if link_type == "claim_source" else Color("#D8B26A")
-			var claim_alpha := 0.14 if link_type == "claim_source" else 0.26 + render_strength * 0.40
+			# claim 底网再压一档:满图的金色细线是「铁丝网」观感的另一半来源
+			var claim_alpha := 0.10 if link_type == "claim_source" else 0.22 + render_strength * 0.38
 			if highlighted or hovered_endpoint or touches_focus:
 				claim_alpha += 0.22
 			edge_color = Color(claim_base, lerpf(GHOST_EDGE_ALPHA, claim_alpha, lit_amount) * focus_mul * dead_damp)
@@ -709,6 +791,8 @@ func _draw() -> void:
 			# 底网要看得见:0.08 起步在浅色主题的近白底上等于没画,整张图只剩孤点。
 			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.22 + render_strength * 0.26, lit_amount) * focus_mul)
 			edge_width = lerpf(0.4, 0.7 + render_strength * 0.7, lit_amount)
+		if expansion_only:
+			edge_color.a *= _focus_presence()
 		draw_line(
 			_world_to_screen(_positions[source]),
 			_world_to_screen(_positions[target]),
@@ -745,7 +829,9 @@ func _draw() -> void:
 		var ghost_amount := clampf(_node_ghost_amount(node), 0.0, 1.0)
 		var lit_amount := 1.0 - ghost_amount
 		var in_focus := not focus_active or node_id == _focus_id or _focus_neighbors.has(node_id)
-		var focus_mul := 1.0 if in_focus else FOCUS_DIM
+		# 聚焦亮度经动画量过渡;glow 是悬停圈的「在场程度」(渐入、移开瞬灭)
+		var focus_mul := float(_emphasis.get("n:%s" % node_id, 1.0))
+		var glow := clampf(float(_focus_glow.get(node_id, 0.0)), 0.0, 1.0)
 		var selected := node_id == _selected_id and lit_amount > 0.5
 		var hovered := node_id == _hovered_id and lit_amount > 0.5
 		if is_entity:
@@ -755,7 +841,7 @@ func _draw() -> void:
 				draw_circle(screen_position, radius + 6.0, Color(color, 0.14 * lit_amount * focus_mul))
 				draw_arc(screen_position, radius + 4.0, 0.0, TAU, 32, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
 			elif hovered:
-				draw_arc(screen_position, radius + 3.0, 0.0, TAU, 32, Color(color, 0.6 * lit_amount), 1.4, true)
+				draw_arc(screen_position, radius + 3.0, 0.0, TAU, 32, Color(color, 0.6 * lit_amount * glow), 1.4, true)
 			draw_arc(screen_position, radius, 0.0, TAU, 32, Color(color, ring_alpha), 1.6, true)
 			if lit_amount > 0.02 and in_focus:
 				draw_circle(screen_position, maxf(1.5, radius * 0.28), Color(color, ring_alpha))
@@ -764,7 +850,7 @@ func _draw() -> void:
 				draw_circle(screen_position, radius + 5.0, Color(color, 0.14 * lit_amount * focus_mul))
 				draw_arc(screen_position, radius + 3.5, 0.0, TAU, 28, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
 			elif hovered:
-				draw_circle(screen_position, radius + 4.0, Color(color, 0.16 * lit_amount))
+				draw_circle(screen_position, radius + 4.0, Color(color, 0.16 * lit_amount * glow))
 			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
 			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
 			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
@@ -814,7 +900,14 @@ func _draw() -> void:
 				continue
 			occupied_label_rects.append(label_rect)
 			# 文字底下垫一层背景色描影:标签压在连线上时仍能读清(Obsidian 同款)
-			var label_alpha := 0.95 if selected or hovered else 0.82
+			var label_alpha := 0.82
+			if selected:
+				label_alpha = 0.95
+			elif hovered:
+				label_alpha = lerpf(0.82, 0.95, glow)
+			else:
+				# 邻域标签随亮度动画量一起渐入(聚焦切换时不再成片蹦出)
+				label_alpha = 0.82 * clampf(focus_mul, 0.0, 1.0)
 			draw_string(
 				font,
 				label_position + Vector2(1.0, 1.0),

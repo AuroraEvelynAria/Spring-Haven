@@ -40,6 +40,11 @@ var _status: Label
 var _empty_state: Label
 var _detail_title: Label
 var _detail_meta: Label
+var _stat_row: HBoxContainer
+var _stat_value_labels: Array[Label] = []
+var _stat_caption_labels: Array[Label] = []
+var _decay_title: Label
+var _last_retention := -1.0
 var _detail_content: RichTextLabel
 var _detail_keywords: Label
 var _related_title: Label
@@ -291,13 +296,45 @@ func _build_interface() -> void:
 	_detail_title = Label.new()
 	_detail_title.text = "选择一条记忆"
 	_detail_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_detail_title.add_theme_font_size_override("font_size", 17)
+	_detail_title.add_theme_font_size_override("font_size", 19)
 	detail.add_child(_detail_title)
 	_detail_meta = Label.new()
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
 	_detail_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_detail_meta.add_theme_font_size_override("font_size", 12)
 	detail.add_child(_detail_meta)
+	# 记忆强度统计条:留存率 / 回想加固 / 有效半衰期。遗忘曲线是本项目的
+	# 招牌特性(ADR-014),值得在详情卡里常驻一块数值面板
+	_stat_row = HBoxContainer.new()
+	_stat_row.add_theme_constant_override("separation", 10)
+	_stat_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail.add_child(_stat_row)
+	_stat_value_labels.clear()
+	_stat_caption_labels.clear()
+	for index in 3:
+		var cell := VBoxContainer.new()
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.add_theme_constant_override("separation", 0)
+		_stat_row.add_child(cell)
+		var value := Label.new()
+		value.add_theme_font_size_override("font_size", 19)
+		cell.add_child(value)
+		var caption := Label.new()
+		caption.add_theme_font_size_override("font_size", 10)
+		cell.add_child(caption)
+		_stat_value_labels.append(value)
+		_stat_caption_labels.append(caption)
+	_stat_row.visible = false
+	_decay_title = Label.new()
+	_decay_title.text = "遗忘曲线 · 记忆强度"
+	_decay_title.add_theme_font_size_override("font_size", 12)
+	_decay_title.visible = false
+	detail.add_child(_decay_title)
+	# ADR-014 消费侧:所选记忆的艾宾浩斯 R(t) 曲线(仅记忆节点显示)
+	_decay_curve = MemoryDecayCurve.new()
+	_decay_curve.custom_minimum_size = Vector2(0, 104)
+	_decay_curve.visible = false
+	detail.add_child(_decay_curve)
 	var separator := HSeparator.new()
 	detail.add_child(separator)
 	_detail_content = RichTextLabel.new()
@@ -309,11 +346,6 @@ func _build_interface() -> void:
 	for font_size_key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
 		_detail_content.add_theme_font_size_override(font_size_key, 13)
 	detail.add_child(_detail_content)
-	# ADR-014 消费侧:所选记忆的艾宾浩斯 R(t) 曲线(仅记忆节点显示)
-	_decay_curve = MemoryDecayCurve.new()
-	_decay_curve.custom_minimum_size = Vector2(0, 58)
-	_decay_curve.visible = false
-	detail.add_child(_decay_curve)
 	_detail_keywords = Label.new()
 	_detail_keywords.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_detail_keywords.add_theme_font_size_override("font_size", 12)
@@ -612,6 +644,9 @@ func _show_node_details(node: Dictionary) -> void:
 		float(detail.get("world_updated_at", 0.0)),
 		member_note,
 	]
+	_fill_memory_stats(detail)
+	_stat_row.visible = true
+	_decay_title.visible = true
 	_detail_content.text = str(detail.get("content", ""))
 	var keywords: Array[String] = []
 	for item in detail.get("keywords", []):
@@ -629,6 +664,49 @@ func _show_node_details(node: Dictionary) -> void:
 	})
 	_decay_curve.visible = true
 	_rebuild_related_memories(_selected_node_id)
+
+
+# 记忆强度统计条:R(t) 与遗忘曲线同一条公式(ADR-014 双参数),
+# 留存率按语义色分级 —— 醒目但不花哨。
+func _fill_memory_stats(detail: Dictionary) -> void:
+	var half_life := float(detail.get("half_life_days", 0.0))
+	var intrinsic := maxf(0.05, float(detail.get("intrinsic", 1.0)))
+	var age := maxf(0.0, _world_now - float(detail.get("world_updated_at", 0.0)))
+	if half_life <= 0.0:
+		# ADR-001 语义:half_life = 0 是常驻记忆
+		_last_retention = 1.0
+		(_stat_value_labels[0] as Label).text = "常驻"
+		(_stat_caption_labels[0] as Label).text = "不随时间衰减"
+	else:
+		_last_retention = pow(0.5, age / (half_life * intrinsic))
+		(_stat_value_labels[0] as Label).text = "%d%%" % roundi(_last_retention * 100.0)
+		(_stat_caption_labels[0] as Label).text = "当前留存 R(t)"
+	(_stat_value_labels[0] as Label).add_theme_color_override(
+		"font_color", _retention_color(_last_retention)
+	)
+	(_stat_value_labels[1] as Label).text = "%d 次" % int(detail.get("recall_count", 0))
+	(_stat_caption_labels[1] as Label).text = "回想加固"
+	(_stat_value_labels[2] as Label).text = (
+		"常驻" if half_life <= 0.0 else "%.1f 天" % (half_life * intrinsic)
+	)
+	(_stat_caption_labels[2] as Label).text = "有效半衰期"
+
+
+func _retention_color(retention: float) -> Color:
+	if retention >= 0.6:
+		return ThemeMgr.SEMANTIC_SUCCESS
+	if retention >= 0.3:
+		return ThemeMgr.SEMANTIC_WARNING
+	return ThemeMgr.SEMANTIC_DANGER
+
+
+# 主题切换会把所有 Label 的颜色刷成正文色,留存率的语义色必须随后补回
+func _apply_stat_colors() -> void:
+	if _stat_value_labels.is_empty():
+		return
+	var value := _stat_value_labels[0] as Label
+	if is_instance_valid(value) and _last_retention >= 0.0:
+		value.add_theme_color_override("font_color", _retention_color(_last_retention))
 
 
 func _rebuild_related_memories(node_id: String) -> void:
@@ -685,6 +763,8 @@ func _rebuild_related_memories(node_id: String) -> void:
 
 func _show_entity_details(node: Dictionary) -> void:
 	_decay_curve.visible = false
+	_decay_title.visible = false
+	_stat_row.visible = false
 	var kind_names := {"person": "人物", "object": "器物", "place": "地点", "event": "事件", "concept": "概念"}
 	_detail_title.text = str(node.get("name", "未名实体"))
 	var claim_total := _visible_claim_count(str(node.get("id", "")))
@@ -885,6 +965,10 @@ func _clear_details() -> void:
 	_apply_detail_focus()
 	_detail_title.text = "选择一条记忆"
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
+	_stat_row.visible = false
+	_decay_title.visible = false
+	_decay_curve.visible = false
+	_last_retention = -1.0
 	_detail_content.text = ""
 	_detail_keywords.text = ""
 	_related_title.text = "关联记忆"
@@ -1075,6 +1159,10 @@ func _apply_theme() -> void:
 	var gesture_hint := _canvas.get_node_or_null("GestureHint") as Label
 	if gesture_hint != null:
 		gesture_hint.add_theme_color_override("font_color", Color(secondary, 0.66))
+	for caption in _stat_caption_labels:
+		if is_instance_valid(caption):
+			caption.add_theme_color_override("font_color", Color(secondary, 0.78))
+	_apply_stat_colors()
 	_canvas.set_palette(data)
 	if _time_pins != null:
 		_time_pins.set_palette(data)

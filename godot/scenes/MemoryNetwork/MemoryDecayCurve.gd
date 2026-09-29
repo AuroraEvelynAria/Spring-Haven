@@ -29,39 +29,50 @@ func _draw() -> void:
 	var intrinsic := maxf(0.05, float(_params.get("intrinsic", 1.0)))
 	var updated := float(_params.get("world_updated_at", 0.0))
 	var now := maxf(float(_params.get("world_now", updated)), updated)
-	var pad_left := 8.0
-	var pad_right := 52.0
-	var pad_top := 8.0
-	var pad_bottom := 13.0
+	var pad_left := 10.0
+	var pad_right := 60.0
+	var pad_top := 12.0
+	var pad_bottom := 18.0
 	var plot := Rect2(
 		Vector2(pad_left, pad_top),
 		Vector2(maxf(40.0, size.x - pad_left - pad_right), maxf(16.0, size.y - pad_top - pad_bottom))
 	)
 	var font := get_theme_default_font()
-	# 极简坐标:左轴 + 底轴 + R=0.5 半衰参考线
+	# 横向参考线:R=25/50/75/100,右轴直接标百分比 —— 曲线不用猜刻度
+	for level_variant in [0.25, 0.5, 0.75, 1.0]:
+		var level := float(level_variant)
+		var grid_y := plot.end.y - level * plot.size.y
+		draw_line(
+			Vector2(plot.position.x, grid_y), Vector2(plot.end.x, grid_y),
+			Color(_muted, 0.26 if level == 0.5 else 0.14), 1.0
+		)
+		draw_string(
+			font, Vector2(plot.end.x + 5.0, grid_y + 3.5),
+			"%d%%" % roundi(level * 100.0),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(_muted, 0.8)
+		)
+	draw_line(
+		Vector2(plot.position.x, plot.position.y - 4.0), Vector2(plot.position.x, plot.end.y),
+		Color(_muted, 0.35), 1.0
+	)
 	draw_line(
 		Vector2(plot.position.x, plot.end.y), Vector2(plot.end.x, plot.end.y),
 		Color(_muted, 0.35), 1.0
 	)
-	draw_line(
-		Vector2(plot.position.x, plot.position.y), Vector2(plot.position.x, plot.end.y),
-		Color(_muted, 0.35), 1.0
-	)
-	var half_y := plot.end.y - 0.5 * plot.size.y
-	draw_line(
-		Vector2(plot.position.x, half_y), Vector2(plot.end.x, half_y),
-		Color(_muted, 0.2), 1.0
-	)
 	if half_life <= 0.0:
 		# half_life = 0:常驻记忆,不随时间衰减(ADR-001 语义)
+		draw_rect(
+			Rect2(plot.position, Vector2(plot.size.x, plot.size.y)),
+			Color(_primary, 0.10)
+		)
 		draw_line(
 			Vector2(plot.position.x, plot.position.y), Vector2(plot.end.x, plot.position.y),
-			Color(_primary, 0.9), 1.6
+			Color(_primary, 0.9), 1.8
 		)
 		draw_string(
-			font, Vector2(plot.position.x + 6.0, plot.position.y + 12.0),
+			font, Vector2(plot.position.x + 6.0, plot.position.y + 14.0),
 			"常驻记忆 · 不随时间衰减",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(_text, 0.85)
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(_text, 0.88)
 		)
 		return
 	var effective := half_life * intrinsic
@@ -78,26 +89,47 @@ func _draw() -> void:
 		))
 		if half_cross_x < 0.0 and r <= 0.5:
 			half_cross_x = plot.position.x + (t / span) * plot.size.x
-	draw_polyline(points, Color(_primary, 0.92), 1.6, true)
+	# 曲线下方垫一层面积:这块记忆「还剩多少」一眼有体量感
+	var area := PackedVector2Array(points)
+	area.append(Vector2(plot.end.x, plot.end.y))
+	area.append(Vector2(plot.position.x, plot.end.y))
+	draw_colored_polygon(area, Color(_primary, 0.12))
+	draw_polyline(points, Color(_primary, 0.95), 2.0, true)
 	if half_cross_x > 0.0 and half_cross_x < plot.end.x:
+		var half_y := plot.end.y - 0.5 * plot.size.y
 		draw_line(
-			Vector2(half_cross_x, half_y - 3.0), Vector2(half_cross_x, half_y + 3.0),
-			Color(_primary, 0.8), 1.2
+			Vector2(half_cross_x, half_y - 4.0), Vector2(half_cross_x, half_y + 4.0),
+			Color(_primary, 0.85), 1.4
 		)
 		draw_string(
-			font, Vector2(half_cross_x + 4.0, half_y + 3.5),
+			font, Vector2(half_cross_x + 5.0, half_y + 4.0),
 			"半衰",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(_muted, 0.9)
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(_muted, 0.95)
 		)
-	# 「现在」点:当下可提取性
+	# 「现在」点:当下可提取性 —— 光环圆点,与统计条的大数字互相印证
 	var age := maxf(0.0, now - updated)
 	var r_now := pow(0.5, age / effective)
 	var now_x := plot.position.x + (minf(age, span) / span) * plot.size.x
 	var now_y := plot.end.y - r_now * plot.size.y
-	draw_circle(Vector2(now_x, now_y), 3.0, Color(_primary, 1.0))
-	var label_position := Vector2(minf(now_x + 6.0, plot.end.x - 52.0), clampf(now_y + 4.0, pad_top + 11.0, plot.end.y))
+	draw_circle(Vector2(now_x, now_y), 7.0, Color(_primary, 0.22))
+	draw_circle(Vector2(now_x, now_y), 3.5, Color(_primary, 1.0))
+	var label_position := Vector2(
+		minf(now_x + 10.0, plot.end.x - 62.0),
+		clampf(now_y + 4.0, pad_top + 12.0, plot.end.y)
+	)
 	draw_string(
 		font, label_position,
 		"现在 R=%d%%" % roundi(r_now * 100.0),
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(_text, 0.92)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(_text, 0.95)
+	)
+	# 横轴刻度:起点 0,右端是投射跨度(世界日)
+	draw_string(
+		font, Vector2(plot.position.x, plot.end.y + 13.0),
+		"0 天",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(_muted, 0.8)
+	)
+	draw_string(
+		font, Vector2(plot.end.x - 30.0, plot.end.y + 13.0),
+		"%d 天" % roundi(span),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(_muted, 0.8)
 	)

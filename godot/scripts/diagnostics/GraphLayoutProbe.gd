@@ -66,6 +66,18 @@ func _run() -> void:
 			break
 	var failure := _report(canvas, payload)
 	if not headless:
+		# 截图前选中「最新」的一条记忆:实拍里同时验收详情卡、统计条、
+		# 遗忘曲线和「选中锚定」的邻域高亮 —— 可读性要看的就是这个状态
+		var probe_memory: Dictionary = {}
+		for node in canvas.get("_nodes"):
+			if str((node as Dictionary).get("node_type", "memory")) != "memory":
+				continue
+			if probe_memory.is_empty() or float(node.get("world_updated_at", 0.0)) > float(probe_memory.get("world_updated_at", 0.0)):
+				probe_memory = node
+		if not probe_memory.is_empty():
+			canvas.select_node_by_id(str(probe_memory.get("id", "")), false)
+			for _settle_index in 40:
+				await process_frame
 		var image := viewport.get_texture().get_image()
 		if image != null and not image.is_empty():
 			var path := "user://graph_layout_probe.png"
@@ -173,7 +185,10 @@ func _memory_node(index: int) -> Dictionary:
 		"importance": 0.4 + float(index % 7) * 0.08,
 		"keywords": ["主题%d" % (index % 11)],
 		"recall_count": index % 5,
+		"half_life_days": 6.0 + float(index % 7) * 4.0,
+		"intrinsic": 1.0,
 		"world_created_at": float(index) * 1.7,
+		"world_updated_at": float(index) * 1.7,
 		"created_at": 1_700_000_000 + index * 3600,
 		"updated_at": 1_700_000_000 + index * 3600,
 		"enabled": true,
