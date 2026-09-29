@@ -21,6 +21,10 @@ const GARDEN_BACKDROP := preload("res://scenes/UI/GardenSceneBackdrop.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 const SHARED_HISTORY_LIMIT := 24
 const UI_MESSAGE_LIMIT := 72
+# 遮罩面板住在自己的 CanvasLayer 上。SceneShell 只是普通 Control，
+# 同层里任何正 z_index 或后添加的兄弟节点都会把遮罩压到下面，所以层级
+# 必须由 CanvasLayer 显式表达，而不是依赖添加顺序。
+const MODAL_LAYER_INDEX := 10
 const STAT_TWEEN_DURATION := 0.58
 const TYPEWRITER_MIN_CPS := 42.0
 const TYPEWRITER_MAX_SECONDS := 4.8
@@ -145,6 +149,7 @@ var _life_status_cadence: Label
 var _life_status_elapsed := 0.0
 var _log_bar: PanelContainer
 var _log_label: Label
+var _modal_layer: CanvasLayer
 var _settings: Control
 var _life_mini_status: Label
 var _life_mini_elapsed := 0.0
@@ -162,16 +167,7 @@ func _ready() -> void:
 	_current_role = Global.current_character if ROLE_DATA.has(Global.current_character) else "ling"
 	_build_background_fx()
 	_build_interface()
-	_settings = SETTINGS_SCENE.instantiate()
-	add_child(_settings)
-	_archive_panel = ARCHIVE_SCENE.instantiate()
-	add_child(_archive_panel)
-	_memory_network_panel = MEMORY_NETWORK_SCENE.instantiate()
-	add_child(_memory_network_panel)
-	_life_review_panel = LIFE_REVIEW_SCRIPT.new()
-	add_child(_life_review_panel)
-	_house_editor = HOUSE_EDITOR_SCRIPT.new()
-	add_child(_house_editor)
+	_build_modal_layer()
 	Global.theme_changed.connect(_on_theme_changed)
 	Global.font_size_changed.connect(_on_font_size_changed)
 	CompanionCore.reply_received.connect(_on_core_reply)
@@ -353,13 +349,29 @@ func _build_interface() -> void:
 	_main_layout.name = "SceneShell"
 	_main_layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_main_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_main_layout.z_index = 1
 	add_child(_main_layout)
 	_build_nav(_main_layout)
 	_build_presence_stack(_main_layout)
 	_build_sidebar(_main_layout)
 	_build_chat_area(_main_layout)
 	_build_log_bar(_main_layout)
+
+func _build_modal_layer() -> void:
+	_modal_layer = CanvasLayer.new()
+	_modal_layer.name = "ModalLayer"
+	_modal_layer.layer = MODAL_LAYER_INDEX
+	add_child(_modal_layer)
+	_settings = SETTINGS_SCENE.instantiate()
+	_modal_layer.add_child(_settings)
+	_archive_panel = ARCHIVE_SCENE.instantiate()
+	_modal_layer.add_child(_archive_panel)
+	_memory_network_panel = MEMORY_NETWORK_SCENE.instantiate()
+	_modal_layer.add_child(_memory_network_panel)
+	_life_review_panel = LIFE_REVIEW_SCRIPT.new()
+	_modal_layer.add_child(_life_review_panel)
+	_house_editor = HOUSE_EDITOR_SCRIPT.new()
+	_modal_layer.add_child(_house_editor)
+
 func _refresh_life_mini_status() -> void:
 	#Update the one-line weather + money status in the nav bar.
 	if not is_instance_valid(_life_mini_status):

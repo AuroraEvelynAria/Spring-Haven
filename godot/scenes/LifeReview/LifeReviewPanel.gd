@@ -26,6 +26,7 @@ func _ready() -> void:
 func show_panel() -> void:
 	_refresh()
 	show()
+	move_to_front()
 	modulate.a = 0.0
 	_panel.scale = Vector2(0.98, 0.98)
 	_panel.pivot_offset = _panel.size * 0.5

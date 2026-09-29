@@ -105,6 +105,7 @@ func show_panel(initial_category: String = "") -> void:
 	_category_drafts.clear()
 	_rebuild_content()
 	show()
+	move_to_front()
 	_provider.refresh_status.call_deferred()
 	modulate.a = 0.0
 	_panel.scale = Vector2(0.97, 0.97)
