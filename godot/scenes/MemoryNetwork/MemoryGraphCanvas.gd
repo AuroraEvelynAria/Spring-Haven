@@ -61,6 +61,10 @@ var _drag_velocity := Vector2.ZERO
 var _physics_awake := true
 var _sim_alpha := 1.0
 var _panning := false
+# 空白处按下手势的行程记录:松手时行程几乎为零 = 干净点击 = 取消选中。
+var _press_position := Vector2.ZERO
+var _press_travel := 0.0
+var _press_was_blank := false
 var _zoom := 1.0
 # 图装载后等力导向沉降完，再把视角套到内容上（Obsidian 的重置视角即此）
 var _auto_fit_pending := false
@@ -119,10 +123,11 @@ func _notification(what: int) -> void:
 		# 鼠标离开后悬停与聚焦必须清掉：聚焦态会让整图"除邻域外全部变暗"，
 		# 不清的话人早就离开图了、图却一直维持那个样子 —— 和"平移甩不掉"是
 		# 同一种"卡住了"的体感。拖拽过程中不清，否则拖到控件外会中断拖拽。
+		# 但若此时有选中节点，焦点锚在选中上（_effective_focus_id 兜底）。
 		if _dragged_id == "" and _hovered_id != "":
 			_hovered_id = ""
 			tooltip_text = ""
-			_update_focus("")
+			_update_focus(_effective_focus_id())
 		queue_redraw()
 
 
@@ -288,7 +293,7 @@ func set_time_cursor(world_day: float) -> void:
 	if _selected_id != "" and not is_node_selectable(_selected_id):
 		_selected_id = ""
 		invalidated = true
-	_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+	_update_focus(_effective_focus_id())
 	if invalidated:
 		selection_invalidated.emit()
 	queue_redraw()
@@ -455,6 +460,8 @@ func select_node_by_id(node_id: String, center_node := true) -> void:
 	_selected_id = node_id
 	if center_node and _positions.has(node_id):
 		_pan = -(_positions[node_id] as Vector2) * _zoom
+	# 选中即锚定邻域高亮:从关联列表跳转时鼠标不在画布上,焦点也必须跟上
+	_update_focus(node_id)
 	node_selected.emit((_node_by_id[node_id] as Dictionary).duplicate(true))
 	queue_redraw()
 
@@ -617,6 +624,30 @@ func _update_focus(focus_id: String) -> void:
 				_focus_neighbors[target] = true
 			elif target == focus_id:
 				_focus_neighbors[source] = true
+	queue_redraw()
+
+
+# 焦点锚定优先级:拖拽 > 悬停 > 选中。选中必须把"只亮邻域"钉住 ——
+# 高亮只跟悬停走的话,点开一条记忆后手一挪开整图就重新点亮,
+# "只看这段关系"的意图就断了。悬停仍可临时接管(移开回到选中锚点),
+# 与 Obsidian 的手感一致。
+func _effective_focus_id() -> String:
+	if _dragged_id != "":
+		return _dragged_id
+	if _hovered_id != "":
+		return _hovered_id
+	return _selected_id
+
+
+# 用户在空白处的干净点击 = 取消选中:面板详情卡经 selection_invalidated
+# 一并回退,高亮恢复全图。
+func _deselect() -> void:
+	if _selected_id == "":
+		return
+	_selected_id = ""
+	tooltip_text = ""
+	_update_focus(_effective_focus_id())
+	selection_invalidated.emit()
 	queue_redraw()
 
 
@@ -824,22 +855,35 @@ func _gui_input(event: InputEvent) -> void:
 					_dragged_id = hit
 					_drag_target = _positions[hit]
 					_drag_velocity = Vector2.ZERO
+					_press_was_blank = false
 					_wake_physics()
 					_update_focus(hit)
 					select_node_by_id(hit, false)
 				else:
 					_panning = true
+					_press_was_blank = true
+					_press_position = mouse_event.position
+					_press_travel = 0.0
 			else:
 				# 弹弓松手:把手上的速度交给节点,带着邻居惯性滑行
 				if _dragged_id != "":
 					_velocities[_dragged_id] = _drag_velocity.limit_length(FLING_MAX)
 					_wake_physics()
 					_dragged_id = ""
-					_update_focus(_hovered_id)
+					_update_focus(_effective_focus_id())
 				# 平移必须无条件结束。它由"空白处按下"开启,而那条路径不会设置
 				# _dragged_id —— 放进上面的 if 里会让松手后画布一直跟着鼠标跑,
 				# 用户看到的是"鼠标一进图里就甩不掉"。
 				_panning = false
+				# 空白处的"干净点击"(按下到松手几乎没动) = 取消选中。
+				# 选中会把邻域高亮锚定住,必须给一条回到全图的出路,
+				# 否则点开一条记忆后就只能永远盯着那一团。
+				if (
+					_press_was_blank
+					and _press_travel < 6.0
+					and _press_position.distance_to(mouse_event.position) < 6.0
+				):
+					_deselect()
 
 			accept_event()
 			return
@@ -852,8 +896,8 @@ func _gui_input(event: InputEvent) -> void:
 			_panning = false
 			if _dragged_id != "":
 				_dragged_id = ""
-				_update_focus(_hovered_id)
-		_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+				_update_focus(_effective_focus_id())
+		_update_focus(_effective_focus_id())
 		if _dragged_id != "" and _positions.has(_dragged_id):
 			var world_position := _screen_to_world(motion.position)
 			# 手速采样(指数平滑):松手时作为初速度,形成惯性
@@ -864,11 +908,12 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 		elif _panning:
 			_pan += motion.relative
+			_press_travel += motion.relative.length()
 			accept_event()
 		var previous_hover := _hovered_id
 		_hovered_id = _hit_test(motion.position)
 		if previous_hover != _hovered_id:
-			_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+			_update_focus(_effective_focus_id())
 			var hovered_node: Dictionary = _node_by_id.get(_hovered_id, {})
 			tooltip_text = str(
 				(hovered_node as Dictionary).get(

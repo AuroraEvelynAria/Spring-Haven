@@ -48,6 +48,10 @@ func _run() -> void:
 	if not hover_failure.is_empty():
 		_finish(18, hover_failure)
 		return
+	var anchor_failure := await _expect_selection_anchors_focus()
+	if not anchor_failure.is_empty():
+		_finish(20, anchor_failure)
+		return
 	var contract_failure := await _expect_edge_contract_mapping()
 	if not contract_failure.is_empty():
 		_finish(19, contract_failure)
@@ -530,4 +534,73 @@ func _expect_hover_clears_on_mouse_exit() -> String:
 			hovered_after_exit, focus_after_exit
 		]
 	print("MEMORY_NETWORK_CHECK 离开画布: 悬停与聚焦已清空（命中点 %s）" % hit_position)
+	return ""
+
+
+# 点开一条记忆 = 邻域高亮被锚定:鼠标挪开、甚至离开画布,其余记忆仍保持压暗,
+# 只有相连的亮着。高亮只跟悬停走的话,鼠标一挪整图复亮,"只看这段关系"就断了。
+# 同时验证出路:空白处干净点击必须取消选中(否则高亮锚永远解不开)。
+func _expect_selection_anchors_focus() -> String:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(900, 640)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var panel := PANEL_SCENE.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	if not is_instance_valid(canvas):
+		panel.free()
+		viewport.free()
+		return "选中锚定检查找不到画布"
+	canvas.set_graph({
+		"nodes": [
+			_node("memory-anchor-a", "锚定甲", "ling", 0.7, ["锚定"]),
+			_node("memory-anchor-b", "锚定乙", "nai", 0.7, ["锚定"]),
+		],
+		"edges": [{
+			"link_id": "anchor-edge",
+			"source": "memory-anchor-a",
+			"target": "memory-anchor-b",
+			"strength": 0.8,
+		}],
+	})
+	canvas.set_time_cursor(-1.0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	canvas.select_node_by_id("memory-anchor-a", false)
+	await get_tree().process_frame
+	var message := ""
+	if str(canvas.get("_focus_id")) != "memory-anchor-a":
+		message = "选中节点后没有聚焦到它：%s" % str(canvas.get("_focus_id"))
+	elif not (canvas.get("_focus_neighbors") as Dictionary).has("memory-anchor-b"):
+		message = "选中节点的邻居没有进入高亮邻域"
+	if message.is_empty():
+		# 鼠标彻底离开画布:悬停清空,但焦点必须仍锚在选中的节点上
+		canvas.notification(Control.NOTIFICATION_MOUSE_EXIT)
+		await get_tree().process_frame
+		if str(canvas.get("_focus_id")) != "memory-anchor-a":
+			message = "鼠标离开画布后选中锚点丢失了邻域高亮：%s" % str(canvas.get("_focus_id"))
+	if message.is_empty():
+		var invalidated := {"hit": false}
+		canvas.selection_invalidated.connect(func(): invalidated["hit"] = true)
+		var blank := _find_local_spot(canvas, "")
+		if blank.x < 0.0:
+			message = "锚定检查找不到空白位置"
+		else:
+			canvas.call("_gui_input", _mouse_button(blank, true))
+			canvas.call("_gui_input", _mouse_button(blank, false))
+			await get_tree().process_frame
+			if not bool(invalidated["hit"]):
+				message = "空白处干净点击没有取消选中"
+			elif not (canvas.get("_selected_id") as String).is_empty():
+				message = "取消选中后 _selected_id 没有清空"
+			elif str(canvas.get("_focus_id")) != "":
+				message = "取消选中后焦点没有释放：%s" % str(canvas.get("_focus_id"))
+	panel.free()
+	viewport.free()
+	if message.is_empty():
+		print("MEMORY_NETWORK_CHECK 选中锚定: 邻域高亮随选中保留、空白点击取消 通过")
 	return ""
