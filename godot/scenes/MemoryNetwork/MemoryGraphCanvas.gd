@@ -2,6 +2,9 @@ class_name MemoryGraphCanvas
 extends Control
 
 signal node_selected(node: Dictionary)
+# 时间游标把当前选中/悬停的节点拨成幽灵时必须广播出去:画布只负责亮度,
+# 右侧详情卡属于面板 —— 不发信号的话详情会继续展示未来的标题与正文。
+signal selection_invalidated
 
 const DEFAULT_SCOPE_COLORS := {
 	"*": Color("#E8C97A"),
@@ -247,9 +250,18 @@ func set_time_cursor(world_day: float) -> void:
 	"""ADR-010:客户端时间调光。只改亮度目标,不重置布局;
 	实际亮度经 _process 逐帧趋近 —— 拖动全程节点不动、过渡平滑。"""
 	_time_cursor = world_day
+	var invalidated := false
+	if _hovered_id != "" and not is_node_selectable(_hovered_id):
+		_hovered_id = ""
+		tooltip_text = ""
+	if _dragged_id != "" and not is_node_selectable(_dragged_id):
+		_dragged_id = ""
 	if _selected_id != "" and not is_node_selectable(_selected_id):
 		_selected_id = ""
-		_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+		invalidated = true
+	_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+	if invalidated:
+		selection_invalidated.emit()
 	queue_redraw()
 
 
@@ -257,6 +269,18 @@ func is_node_selectable(node_id: String) -> bool:
 	if not _node_by_id.has(node_id):
 		return false
 	return not _is_ghost_node(_node_by_id[node_id] as Dictionary)
+
+
+# 某条边在当前游标下是否"存在且有效":还没诞生的不算,当时已经作废的也不算。
+# 面板的生命线、主张计数都按这个口径走,避免把未来透露给看过去的人。
+func is_edge_visible_now(edge: Dictionary) -> bool:
+	if _is_ghost_edge(edge):
+		return false
+	var world_to_variant = edge.get("world_to")
+	if _time_cursor >= 0.0 and world_to_variant != null:
+		if float(world_to_variant) <= _time_cursor:
+			return false
+	return true
 
 
 func set_time_fade_days(days: float) -> void:
@@ -346,6 +370,26 @@ func get_visible_edge_count() -> int:
 		if not _primary_edge_ids.has(str(edge.get("link_id", ""))):
 			continue
 		count += 1
+	return count
+
+
+# 孤立主题数必须与画布自己的显示口径一致:同一套主边 Top-K、同一套幽灵过滤。
+# 用后端 summary.isolated_count 会漏掉被 Top-K 剪掉的辐条(枢纽图能少报一大截),
+# 而且它是加载时的快照,滑杆与游标动过之后就对不上了。
+func get_isolated_node_count() -> int:
+	var connected: Dictionary = {}
+	for edge in _edges:
+		if not _is_primary_layout_edge(edge) or _is_ghost_edge(edge):
+			continue
+		connected[str(edge.get("source", ""))] = true
+		connected[str(edge.get("target", ""))] = true
+	var count := 0
+	for node in _nodes:
+		var node_id := str(node.id)
+		if _is_ghost_node(node):
+			continue
+		if not connected.has(node_id):
+			count += 1
 	return count
 
 
@@ -652,47 +696,41 @@ func _draw() -> void:
 				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount * focus_mul)
 				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
 				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount * focus_mul), 1.1, true)
-			# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
-			# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
-			var should_label := false
-			if focus_active:
-				should_label = in_focus
-			else:
-				should_label = selected or hovered or _zoom >= 0.55
-			should_label = should_label and lit_amount > 0.5
-			if should_label:
-				var member_count := _visible_member_count(node)
-				var label := _short_title(
-					str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
-					14
-				)
-				if member_count > 1:
-					label += " ×%d" % member_count
-				# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
-				var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
-				var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
-				var label_rect := Rect2(
-					label_position - Vector2(3.0, 12.0),
-					Vector2(text_size.x + 6.0, 18.0)
-				)
-				var overlaps := false
-				if not selected and not hovered:
-					for occupied in occupied_label_rects:
-						if occupied.intersects(label_rect, true):
-							overlaps = true
-							break
-				if overlaps:
-					continue
-				occupied_label_rects.append(label_rect)
-				draw_string(
-					font,
-					label_position,
-					label,
-					HORIZONTAL_ALIGNMENT_LEFT,
-					-1,
-					11,
-					Color(_palette.text, 0.95 if selected or hovered else 0.72)
-				)
+		# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
+		# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
+		var should_label := false
+		if focus_active:
+			should_label = in_focus
+		else:
+			should_label = selected or hovered or _zoom >= 0.55
+		should_label = should_label and lit_amount > 0.5
+		if should_label:
+			var label := label_text_for(node)
+			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
+			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
+			var label_rect := Rect2(
+				label_position - Vector2(3.0, 12.0),
+				Vector2(text_size.x + 6.0, 18.0)
+			)
+			var overlaps := false
+			if not selected and not hovered:
+				for occupied in occupied_label_rects:
+					if occupied.intersects(label_rect, true):
+						overlaps = true
+						break
+			if overlaps:
+				continue
+			occupied_label_rects.append(label_rect)
+			draw_string(
+				font,
+				label_position,
+				label,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				11,
+				Color(_palette.text, 0.95 if selected or hovered else 0.72)
+			)
 
 
 
@@ -821,6 +859,22 @@ func _is_weave_node(node: Dictionary) -> bool:
 func _is_entity_node(node: Dictionary) -> bool:
 	# ADR-015:实体星座节点(细环 + 中心点)
 	return str(node.get("node_type", "")) == "entity"
+
+
+# 绘制与诊断共用同一份标签文案。抽出来的原因很实际:标签块曾经被多缩进一层
+# 落进记忆分支,实体节点整类不再绘制名字,而这类"不画了"只能靠肉眼在截图里
+# 发现 —— 现在诊断可以直接断言实体节点也有标签。
+func label_text_for(node: Dictionary) -> String:
+	var label := _short_title(
+		str(node.get("name", ""))
+		if _is_entity_node(node)
+		else str(node.get("display_title", node.get("title", "未命名记忆"))),
+		14
+	)
+	var member_count := _visible_member_count(node)
+	if member_count > 1:
+		label += " ×%d" % member_count
+	return label
 
 
 func _entity_color(node: Dictionary) -> Color:

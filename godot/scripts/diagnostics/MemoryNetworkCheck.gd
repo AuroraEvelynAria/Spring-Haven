@@ -28,6 +28,18 @@ func _run() -> void:
 	if not focus_failure.is_empty():
 		_finish(13, focus_failure)
 		return
+	var label_failure := _expect_entity_labels(canvas)
+	if not label_failure.is_empty():
+		_finish(14, label_failure)
+		return
+	var rollback_failure := await _expect_cursor_rollback_clears_details(canvas, panel)
+	if not rollback_failure.is_empty():
+		_finish(15, rollback_failure)
+		return
+	var pin_failure := await _expect_pin_cursor_keeps_its_day(canvas, panel)
+	if not pin_failure.is_empty():
+		_finish(16, pin_failure)
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -210,6 +222,87 @@ func _expect_narrow_detail_focus() -> String:
 	if message.is_empty():
 		print("MEMORY_NETWORK_CHECK 窄屏聚焦切换: 画布→详情→画布 通过")
 	return message
+
+
+# 实体节点必须也有标签。标签块曾经被多缩进一层落进记忆分支,实体整类不再
+# 绘制名字,而"不画了"只能靠人眼看截图发现。
+func _expect_entity_labels(canvas: MemoryGraphCanvas) -> String:
+	var entity := {
+		"id": "entity-master",
+		"node_type": "entity",
+		"name": "主人",
+		"kind": "person",
+		"claim_count": 2,
+		"world_created_at": 1.0,
+	}
+	var entity_label := canvas.label_text_for(entity)
+	if entity_label.is_empty():
+		return "实体节点没有标签文案"
+	if entity_label != "主人":
+		return "实体标签没有使用实体名：%s" % entity_label
+	var memory := _node("memory-label", "餐桌边的栀子花", "ling", 0.7, ["栀子花"])
+	var memory_label := canvas.label_text_for(memory)
+	if memory_label != "餐桌边的栀子花":
+		return "记忆标签文案异常：%s" % memory_label
+	print("MEMORY_NETWORK_CHECK 标签: 实体=%s 记忆=%s" % [entity_label, memory_label])
+	return ""
+
+
+# 游标拨回过去之后,详情卡必须跟着失效 —— 画布只是把它淡成幽灵,
+# 详情卡归面板管,不发信号的话它会继续展示未来节点的标题与正文。
+func _expect_cursor_rollback_clears_details(
+	canvas: MemoryGraphCanvas, panel: Node
+) -> String:
+	var node := _node("memory-rollback", "会被拨回过去的记忆", "ling", 0.7, ["回拨"])
+	node["world_created_at"] = 9.0
+	canvas.set_graph({"nodes": [node], "edges": []})
+	canvas.set_time_cursor(-1.0)
+	canvas.select_node_by_id("memory-rollback", false)
+	await get_tree().process_frame
+	var detail := panel.get("_detail_panel") as Control
+	if not is_instance_valid(detail) or not detail.visible:
+		return "选中记忆后详情卡没有显示"
+	canvas.set_time_cursor(4.0)
+	await get_tree().process_frame
+	if not (panel.get("_selected_node_id") as String).is_empty():
+		return "游标拨回后仍记录着未来节点"
+	if detail.visible:
+		return "游标拨回后详情卡仍显示未来节点的内容"
+	print("MEMORY_NETWORK_CHECK 游标回拨: 详情卡已清空")
+	return ""
+
+
+# 点章节钉必须把游标拨到"那一天结束",而不是当天 0 点 —— 幽灵判据是
+# created >= cursor,拨到 0 点会把这一整天(包括这根钉自己)全变成幽灵。
+func _expect_pin_cursor_keeps_its_day(canvas: MemoryGraphCanvas, panel: Node) -> String:
+	var slider := panel.get("_time_slider") as HSlider
+	if not is_instance_valid(slider):
+		return "章节钉检查缺少时间滑杆"
+	slider.min_value = 0.0
+	slider.max_value = 20.0
+	var pin_node := _node("memory-pin", "夜织出来的章节", "ling", 0.6, ["夜织"])
+	pin_node["source"] = "consolidation_nightly"
+	pin_node["world_created_at"] = 5.6
+	canvas.set_graph({"nodes": [pin_node], "edges": []})
+	canvas.set_time_cursor(-1.0)
+	# 章节钉读的是面板自己那份图,不是画布那份 —— 两边都要给。
+	panel.set("_graph", {"nodes": [pin_node], "edges": [], "summary": {}})
+	var pins: Array = panel.call("_collect_chapter_pins")
+	if pins.is_empty():
+		return "夜织记忆没有生成章节钉"
+	var time_pins := panel.get("_time_pins") as MemoryTimePins
+	if not is_instance_valid(time_pins):
+		return "章节钉检查缺少时间钉条"
+	time_pins.set_range(0.0, 20.0)
+	time_pins.set_pins(pins)
+	panel.call("_on_pin_selected", float((pins[0] as Dictionary).get("cursor", 0.0)))
+	await get_tree().process_frame
+	if not canvas.is_node_selectable("memory-pin"):
+		return "点击章节钉把它自己那一天的事件变成了幽灵"
+	print("MEMORY_NETWORK_CHECK 章节钉: 落点游标=%s 事件=%s" % [
+		slider.value, canvas.is_node_selectable("memory-pin")
+	])
+	return ""
 
 
 func _finish(code: int, message: String) -> void:

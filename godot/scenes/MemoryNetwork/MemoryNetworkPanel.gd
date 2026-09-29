@@ -242,6 +242,7 @@ func _build_interface() -> void:
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_canvas.custom_minimum_size = Vector2(460, 360)
 	_canvas.node_selected.connect(_show_node_details)
+	_canvas.selection_invalidated.connect(_clear_details)
 	_canvas_plate.add_child(_canvas)
 	_empty_state = Label.new()
 	_empty_state.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -622,6 +623,10 @@ func _rebuild_related_memories(node_id: String) -> void:
 			if source != node_id and target != node_id:
 				continue
 			var other_id := target if source == node_id else source
+			# 关联列表是"这条记忆在当时跟谁有关"。游标拨回过去之后,
+			# 还没诞生的邻居不能出现在列表里。
+			if not _canvas.is_node_selectable(other_id):
+				continue
 			var other := _canvas.get_node_by_id(other_id)
 			if other.is_empty():
 				continue
@@ -659,10 +664,16 @@ func _show_entity_details(node: Dictionary) -> void:
 	_decay_curve.visible = false
 	var kind_names := {"person": "人物", "object": "器物", "place": "地点", "event": "事件", "concept": "概念"}
 	_detail_title.text = str(node.get("name", "未名实体"))
-	_detail_meta.text = "%s · 首次相遇 世界第 %.1f 天\n现行主张 %d 条" % [
+	var claim_total := _visible_claim_count(str(node.get("id", "")))
+	var claim_label := (
+		"现行主张 %d 条" % claim_total
+		if _current_cursor_value() < 0.0
+		else "当时主张 %d 条" % claim_total
+	)
+	_detail_meta.text = "%s · 首次相遇 世界第 %.1f 天\n%s" % [
 		str(kind_names.get(str(node.get("kind", "concept")), "概念")),
 		float(node.get("world_created_at", 0.0)),
-		int(node.get("claim_count", 0)),
+		claim_label,
 	]
 	var aliases: Array[String] = []
 	for item in node.get("aliases", []):
@@ -673,6 +684,28 @@ func _show_entity_details(node: Dictionary) -> void:
 	_detail_keywords.text = "生命线：点下方条目可在图谱中跳转"
 	_related_title.text = "生命线 · 主张与出处"
 	_rebuild_entity_lifeline(_selected_node_id)
+
+
+# 主张条数按当前游标重算。直接用后端返回的 claim_count 会把未来才出现、
+# 或者当时已经作废的主张算进来。
+func _visible_claim_count(entity_id: String) -> int:
+	var count := 0
+	var raw_edges = _graph.get("edges", [])
+	if raw_edges is Array:
+		for edge_variant in raw_edges:
+			if not edge_variant is Dictionary:
+				continue
+			var edge: Dictionary = edge_variant
+			if str(edge.get("link_type", "")) != "claim":
+				continue
+			var source := str(edge.get("source", ""))
+			var target := str(edge.get("target", ""))
+			if source != entity_id and target != entity_id:
+				continue
+			if not _canvas.is_edge_visible_now(edge):
+				continue
+			count += 1
+	return count
 
 
 func _rebuild_entity_lifeline(entity_id: String) -> void:
@@ -692,6 +725,9 @@ func _rebuild_entity_lifeline(entity_id: String) -> void:
 				continue
 			var link_type := str(edge.get("link_type", ""))
 			var other_id := target if source == entity_id else source
+			# 生命线同样是"当时这张星座长什么样":没诞生的主张与出处不进列表。
+			if not _canvas.is_node_selectable(other_id):
+				continue
 			var other := _canvas.get_node_by_id(other_id)
 			if other.is_empty():
 				continue
@@ -708,11 +744,20 @@ func _rebuild_entity_lifeline(entity_id: String) -> void:
 		_related_list.add_child(empty)
 		return
 	var text := Color(ThemeMgr.get_current_theme_data().text)
+	var cursor := _current_cursor_value()
 	for item in claims:
 		var other: Dictionary = item.node
 		var edge: Dictionary = item.edge
 		var world_to_variant = edge.get("world_to")
-		var state_label := "现行" if world_to_variant == null else "已于第 %d 天改变" % int(float(world_to_variant))
+		# 回溯态下"当时还没被改写"的主张必须显示为现行,否则等于把未来
+		# 才发生的改写提前告诉了看过去的人。
+		var state_label := "现行"
+		if world_to_variant != null:
+			var world_to := float(world_to_variant)
+			if cursor >= 0.0 and world_to > cursor:
+				state_label = "现行"
+			else:
+				state_label = "已于第 %d 天改变" % int(world_to)
 		var button := Button.new()
 		button.text = "〔主张〕%s → %s · %s" % [
 			str(edge.get("predicate", "")),
@@ -781,9 +826,18 @@ func _collect_chapter_pins() -> Array[Dictionary]:
 					"title": str(record.get("display_title", record.get("title", ""))),
 					"kind": pin_kind,
 					"count": 0,
+					# 点击时要把游标拨到「这一天结束」,而不是当天 0 点:
+					# 幽灵判据是 created >= cursor,拨到 0 点会把这一整天
+					# (包括这根钉自己)全变成幽灵,和 tooltip 的承诺相反。
+					"cursor": float(day) + 1.0,
+					# 回溯态下"当时已发生几个事件"要按成员逐个过滤,不能沿用总数。
+					"member_days": [],
 				}
 			var bin: Dictionary = bins[key]
 			bin["count"] = int(bin.get("count", 0)) + 1
+			(bin["member_days"] as Array).append(
+				float(record.get("world_created_at", 0.0))
+			)
 			bins[key] = bin
 	var pins: Array[Dictionary] = []
 	for bin_variant in bins.values():
@@ -797,8 +851,9 @@ func _collect_chapter_pins() -> Array[Dictionary]:
 	return pins
 
 
-func _on_pin_selected(day: float) -> void:
-	_time_slider.set_value(day)
+func _on_pin_selected(cursor_day: float) -> void:
+	# 章节钉给的是「那一天结束」的时刻,不是当天 0 点。见 _collect_chapter_pins。
+	_time_slider.set_value(cursor_day)
 
 
 func _clear_details() -> void:
@@ -818,6 +873,9 @@ func _clear_details() -> void:
 func _on_strength_changed(value: float) -> void:
 	_strength_label.text = "关联 ≥ %.2f" % value
 	_canvas.set_min_strength(value)
+	# 加载失败时 _graph 是空的;此时动滑杆不能把"加载失败"覆盖成 0 个主题 · 0/0。
+	if _graph.is_empty():
+		return
 	_update_summary_status(_graph.get("summary", {}))
 
 
@@ -847,6 +905,8 @@ func _on_time_value_changed(value: float) -> void:
 		_canvas.set_time_cursor(_current_cursor_value())
 	if _time_pins != null:
 		_time_pins.set_cursor(_current_cursor_value())
+	if not _graph.is_empty():
+		_update_summary_status(_graph.get("summary", {}))
 
 
 func _snap_time_to_now() -> void:
@@ -891,8 +951,14 @@ func _update_summary_status(summary_variant: Variant) -> void:
 	var raw_memories := int(summary.get("raw_memory_count", visual_nodes))
 	var raw_entities := int(summary.get("raw_entity_count", 0))
 	var edge_count := int(summary.get("edge_count", 0))
-	var isolated := int(summary.get("isolated_count", 0))
 	var visible_edges := _canvas.get_visible_edge_count() if is_instance_valid(_canvas) else edge_count
+	# 孤立主题数用画布自己的显示口径重算:后端 summary 用的是未剪枝的度数,
+	# 而且只在加载时算过一次,滑杆与游标动过之后就和旁边的 visible_edges 打架。
+	var isolated := (
+		_canvas.get_isolated_node_count()
+		if is_instance_valid(_canvas)
+		else int(summary.get("isolated_count", 0))
+	)
 	var node_label := "%d 个主题" % visual_nodes
 	if raw_memories > visual_nodes:
 		node_label = "%d 个主题 / %d 条记忆" % [visual_nodes, raw_memories]
