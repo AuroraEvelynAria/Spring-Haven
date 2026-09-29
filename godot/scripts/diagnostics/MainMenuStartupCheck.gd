@@ -45,6 +45,8 @@ func _run() -> void:
 			]
 		)
 	await _expect_compact_layout(main_menu)
+	_expect_font_size_stability(menu)
+	_expect_reduced_motion_and_petal_layer(menu)
 	if is_instance_valid(journey_library):
 		_expect(is_instance_valid(journey_library.get("_new_dialog")), "旅程档案缺少新建弹窗")
 		_expect(is_instance_valid(journey_library.get("_rename_dialog")), "旅程档案缺少重命名弹窗")
@@ -100,3 +102,67 @@ func _expect(condition: bool, message: String) -> void:
 		return
 	_failed = true
 	push_error(message)
+
+
+# 这个诊断跑在 SceneTree 主循环上,编译期解析不到 Settings 这个 autoload 标识,
+# 只能运行时从 root 取。
+func _settings_ui_value(key: String, fallback: Variant) -> Variant:
+	var settings := root.get_node_or_null("/root/Settings")
+	if settings == null:
+		return fallback
+	var ui: Dictionary = settings.settings.get("ui", {})
+	return ui.get(key, fallback)
+
+
+# 标题/副标题的构建初值与字号缩放公式必须是同一组。旧代码标题初值 30、公式却是
+# maxi(42, size + 41)：用户第一次改字号时标题会从 30 直接跳到 56。
+func _expect_font_size_stability(menu: Node) -> void:
+	var title := menu.get("_title") as Label
+	var subtitle := menu.get("_subtitle") as Label
+	if not is_instance_valid(title) or not is_instance_valid(subtitle):
+		_expect(false, "主菜单缺少标题或副标题")
+		return
+	var default_size := int(_settings_ui_value("font_size", 15))
+	var title_before := title.get_theme_font_size("font_size")
+	var subtitle_before := subtitle.get_theme_font_size("font_size")
+	menu.call("_on_font_size_changed", default_size)
+	var title_after := title.get_theme_font_size("font_size")
+	var subtitle_after := subtitle.get_theme_font_size("font_size")
+	_expect(
+		title_before == title_after,
+		"以默认字号重算时标题字号发生跳变：%d → %d" % [title_before, title_after]
+	)
+	_expect(
+		subtitle_before == subtitle_after,
+		"以默认字号重算时副标题字号发生跳变：%d → %d" % [subtitle_before, subtitle_after]
+	)
+	print("MAIN_MENU_STARTUP_CHECK 字号稳定: 标题=%d 副标题=%d" % [
+		title_after, subtitle_after
+	])
+
+
+# 两个开箱即坏的设置：减少动态效果必须在 _ready 里主动应用一次(连接信号不会
+# 补发历史值)，以及底板必须压到父节点自己的绘制之下，否则落花每帧照跑但看不见。
+func _expect_reduced_motion_and_petal_layer(menu: Node) -> void:
+	var backdrop := menu.get("_scene_backdrop") as Control
+	if not is_instance_valid(backdrop):
+		_expect(false, "主菜单缺少庭院底板")
+		return
+	_expect(
+		backdrop.z_index < 0,
+		"庭院底板没有压到负层级,父节点的落花会被它整屏盖住"
+	)
+	var reduced := bool(_settings_ui_value("reduced_motion", false))
+	_expect(
+		menu.is_processing() != reduced,
+		"减少动态效果没有在启动时生效(processing=%s reduced=%s)" % [
+			menu.is_processing(), reduced
+		]
+	)
+	_expect(
+		not bool(backdrop.is_processing()) == reduced,
+		"庭院底板没有跟随减少动态效果设置"
+	)
+	print("MAIN_MENU_STARTUP_CHECK 动态效果: reduced=%s 菜单processing=%s 底板processing=%s z=%d" % [
+		reduced, menu.is_processing(), backdrop.is_processing(), backdrop.z_index
+	])

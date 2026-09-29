@@ -144,6 +144,9 @@ func _run() -> void:
 		await get_tree().process_frame
 		if sidebar.visible:
 			failures.append("状态抽屉关闭失败")
+	_expect_modal_layer(world, failures)
+	await _expect_overlay_covers_world(world, failures)
+	_expect_reduced_motion(world, failures)
 	if not is_instance_valid(portrait_rig):
 		failures.append("角色表现层未创建")
 	else:
@@ -269,6 +272,95 @@ func _run() -> void:
 	for failure in failures:
 		printerr("GAMEWORLD_UI_RENDER_CHECK failure=", failure)
 	await _finish(world, 1)
+
+# 层级契约。改坏的那次就是在这里翻车的：SceneShell 被设成 z_index = 1，而五个
+# 遮罩面板还是 GameWorld 的普通兄弟节点（z_index 0）。Godot 的 z_index 优先于
+# 树序，于是 move_to_front() 再也压不上去 —— 心织被 GameWorld 的标题、角色切换、
+# 对话层和角色舞台整个打穿，而从未调用 move_to_front 的设置、生活回顾、家の地图
+# 连显示都做不到。
+func _expect_modal_layer(world: Node, failures: Array[String]) -> void:
+	var shell := world.get("_main_layout") as Control
+	if not is_instance_valid(shell):
+		failures.append("场景外壳未创建")
+	elif shell.z_index > 0:
+		failures.append("场景外壳不应有正 z_index，否则会盖住遮罩面板：%d" % shell.z_index)
+	var modal_layer := world.get_node_or_null("ModalLayer") as CanvasLayer
+	if not is_instance_valid(modal_layer) or modal_layer.layer <= 0:
+		failures.append("缺少高于场景外壳的遮罩画布层")
+		return
+	for key in [
+		"_settings",
+		"_archive_panel",
+		"_memory_network_panel",
+		"_life_review_panel",
+		"_house_editor",
+	]:
+		var panel := world.get(key) as Control
+		if not is_instance_valid(panel):
+			failures.append("遮罩面板未创建：%s" % key)
+			continue
+		if panel.get_parent() != modal_layer:
+			failures.append("遮罩面板不在模态画布层上：%s" % key)
+	print("GAMEWORLD_UI_RENDER_CHECK 层级: shell.z=%d modal.layer=%d" % [
+		shell.z_index if is_instance_valid(shell) else -1, modal_layer.layer
+	])
+
+
+# 打开心织后必须真正盖住 GameWorld：遮罩铺满视口并且吃掉鼠标输入。
+func _expect_overlay_covers_world(world: Node, failures: Array[String]) -> void:
+	var panel := world.get("_memory_network_panel") as Control
+	if not is_instance_valid(panel):
+		failures.append("心织面板未创建")
+		return
+	panel.call("show_panel")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var viewport_rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+	var scrim := panel.get("_background") as ColorRect
+	var covers := is_instance_valid(scrim) and viewport_rect.encloses(scrim.get_global_rect())
+	var blocks := is_instance_valid(scrim) and scrim.mouse_filter == Control.MOUSE_FILTER_STOP
+	if not covers:
+		failures.append("心织遮罩没有铺满视口")
+	if not blocks:
+		failures.append("心织遮罩没有拦截鼠标输入")
+	panel.call("close_panel")
+	for _frame in 24:
+		await get_tree().process_frame
+	if panel.visible:
+		failures.append("心织面板无法关闭")
+	print("GAMEWORLD_UI_RENDER_CHECK 心织覆层: 遮罩铺满=%s 拦截=%s 关闭=%s" % [
+		covers, blocks, not panel.visible
+	])
+
+
+# Settings 在自己的 _ready 里就发过一次 visual_accessibility_changed，早于
+# GameWorld 连接它 —— 连接信号不会补发历史值，所以必须在 _ready 里主动应用一次，
+# 否则"减少动态效果"完全不影响 GameWorld 的庭院底板与立绘呼吸。
+func _expect_reduced_motion(world: Node, failures: Array[String]) -> void:
+	var backdrop := world.get("_background_fx") as Control
+	if not is_instance_valid(backdrop):
+		failures.append("庭院底板未创建")
+		return
+	var portrait := world.get("_portrait_rig") as Control
+	world.call("_on_visual_accessibility_changed", true)
+	var stopped_backdrop := not backdrop.is_processing()
+	var frozen_portrait := (
+		is_instance_valid(portrait)
+		and is_zero_approx(float(portrait.get("motion_strength")))
+	)
+	world.call("_on_visual_accessibility_changed", false)
+	var resumed_backdrop := backdrop.is_processing()
+	var resumed_portrait := (
+		is_instance_valid(portrait) and float(portrait.get("motion_strength")) > 0.0
+	)
+	if not stopped_backdrop or not resumed_backdrop:
+		failures.append("减少动态效果没有停掉庭院底板")
+	if is_instance_valid(portrait) and (not frozen_portrait or not resumed_portrait):
+		failures.append("减少动态效果没有收掉立绘呼吸")
+	print("GAMEWORLD_UI_RENDER_CHECK 减少动态效果: 底板 停=%s 恢复=%s 立绘 停=%s 恢复=%s" % [
+		stopped_backdrop, resumed_backdrop, frozen_portrait, resumed_portrait
+	])
+
 
 # 视口矩阵：宽屏（>=1280）阅读层在左、舞台在右；中屏（641~1279）纵向上下
 # 分离；窄屏（<=640）压缩舞台并堆叠。956~1259px 是旧二分法（>940 即宽屏）
