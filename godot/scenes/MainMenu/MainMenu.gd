@@ -5,7 +5,6 @@ const SETTINGS_PANEL_SCRIPT := preload("res://scenes/Settings/SettingsPanel.gd")
 const JOURNEY_LIBRARY_SCENE := preload("res://scenes/JourneyLibrary/JourneyLibraryPanel.tscn")
 const GLOW_SHADER := preload("res://shaders/glow.gdshader")
 const TITLE_SHADER := preload("res://shaders/gradient_text.gdshader")
-const BACKGROUND_SHADER := preload("res://shaders/menu_background.gdshader")
 const UIBREATH := preload("res://scripts/domain/UIBreath.gd")
 const GARDEN_BACKDROP := preload("res://scenes/UI/GardenSceneBackdrop.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
@@ -25,7 +24,6 @@ var _life_lab_button: Button
 var _settings_button: Button
 var _version: Label
 var _glow: ColorRect
-var _background: ColorRect
 var _settings: SETTINGS_PANEL_SCRIPT
 var _journey_library: JourneyLibraryPanel
 var _new_game_confirmation: ConfirmationDialog
@@ -48,6 +46,14 @@ func _ready() -> void:
 	_build_menu()
 	_apply_responsive_layout()
 	_apply_responsive_layout.call_deferred()
+	# 连接信号不会补发历史值：Settings 的 apply_all 在 Settings autoload 的
+	# _ready 里就发过 visual_accessibility_changed 了，早于本节点连接它。
+	# 所以"减少动态效果"必须在 _ready 里主动应用一次，否则要等用户去设置里
+	# 手动切换那一栏才生效（重启后翻车）。
+	_apply_font_sizes(int(Settings.settings.ui.get("font_size", 15)))
+	_on_visual_accessibility_changed(
+		bool(Settings.settings.ui.get("reduced_motion", false))
+	)
 	Settings.visual_accessibility_changed.connect(_on_visual_accessibility_changed)
 	_settings = SETTINGS_SCENE.instantiate() as SETTINGS_PANEL_SCRIPT
 	add_child(_settings)
@@ -119,6 +125,9 @@ func now_spin() -> float:
 func _build_background() -> void:
 	_scene_backdrop = GARDEN_BACKDROP.new()
 	_scene_backdrop.name = "GardenSceneBackdrop"
+	# 落花画在本节点自己的 _draw 上，而子节点恒在父节点之上 —— 底板要压到
+	# 负层级，否则它的整屏不透明底色会把 26 片花瓣整个盖掉（每帧照跑但看不见）。
+	_scene_backdrop.z_index = -1
 	add_child(_scene_backdrop)
 
 func _build_glow() -> void:
@@ -552,21 +561,26 @@ func _on_visual_accessibility_changed(reduced_motion: bool) -> void:
 		_scene_backdrop.set_animating(not reduced_motion)
 
 func _on_font_size_changed(size: int) -> void:
-	if _title:
-		_title.add_theme_font_size_override("font_size", maxi(42, size + 41))
-	if _subtitle:
-		_subtitle.add_theme_font_size_override("font_size", size + 1)
-	if _start_button:
-		_start_button.add_theme_font_size_override("font_size", size + 1)
-	if _new_game_button:
-		_new_game_button.add_theme_font_size_override("font_size", size + 1)
-	if _journey_library_button:
-		_journey_library_button.add_theme_font_size_override("font_size", size + 1)
-	if _settings_button:
-		_settings_button.add_theme_font_size_override("font_size", size + 1)
-	if _life_lab_button:
-		_life_lab_button.add_theme_font_size_override("font_size", size + 1)
+	_apply_font_sizes(size)
 	_apply_responsive_layout()
+
+# 字号缩放的唯一来源。构建时的初值与 _on_font_size_changed 必须走同一组公式:
+# 旧代码标题初值 30、公式却是 maxi(42, size + 41),用户第一次改字号时标题会从
+# 30 直接跳到 56;副标题初值 13、公式 size + 1 同理跳到 16。
+func _apply_font_sizes(size: int) -> void:
+	if _title:
+		_title.add_theme_font_size_override("font_size", maxi(22, size + 15))
+	if _subtitle:
+		_subtitle.add_theme_font_size_override("font_size", maxi(10, size - 2))
+	for button in [
+		_start_button,
+		_new_game_button,
+		_journey_library_button,
+		_settings_button,
+		_life_lab_button,
+	]:
+		if is_instance_valid(button):
+			(button as Button).add_theme_font_size_override("font_size", size + 1)
 
 func _update_visuals() -> void:
 	if not _title:
@@ -577,12 +591,6 @@ func _update_visuals() -> void:
 	if material:
 		material.set_shader_parameter("color_a", Color(data.primary))
 		material.set_shader_parameter("color_b", Color(data.accent))
-	if _background and _background.material is ShaderMaterial:
-		var background_material := _background.material as ShaderMaterial
-		var bg := Color(data.bg)
-		background_material.set_shader_parameter("color_top", bg.lightened(0.055 if bool(data.is_dark) else 0.025))
-		background_material.set_shader_parameter("color_bottom", bg.darkened(0.055 if bool(data.is_dark) else 0.025))
-		background_material.set_shader_parameter("color_glow", Color(data.primary))
 	if _glow and _glow.material is ShaderMaterial:
 		var glow_material := _glow.material as ShaderMaterial
 		glow_material.set_shader_parameter("glow_color", Color(data.primary, 0.14))

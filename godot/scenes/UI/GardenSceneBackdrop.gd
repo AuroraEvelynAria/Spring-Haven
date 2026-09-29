@@ -55,13 +55,16 @@ func _draw() -> void:
 	var background := Color(str(data.get("bg", "#F6F1E7")))
 	var text := Color(str(data.get("text", "#33291F")))
 	var primary := Color(str(data.get("primary", "#C96B2E")))
-	var accent := Color(str(data.get("accent", "#9E4E1B")))
 	var dark := bool(data.get("is_dark", false))
-	var pane_top := background.lightened(0.10 if not dark else 0.06)
-	var pane_bottom := Color(primary, 0.16).lerp(background, 0.62)
-	var wood := accent.darkened(0.18 if not dark else 0.05)
-	var leaf := primary.darkened(0.40 if not dark else 0.15)
-	var line := Color(text, 0.10 if not dark else 0.14)
+	# 底板配色一律走 ThemeManager 的场景 token。以前这里自己重算一套(公式还和
+	# token 不一样),结果是那些 token 没有任何消费者、改主题也调不到底板。
+	var pane_top: Color = data.get("scene_pane_a", background.lightened(0.10))
+	var pane_bottom: Color = data.get(
+		"scene_pane_b", Color(primary, 0.16).lerp(background, 0.62)
+	)
+	var wood: Color = data.get("wood", primary.darkened(0.18))
+	var leaf: Color = data.get("leaf", primary.darkened(0.40))
+	var line: Color = data.get("line", Color(text, 0.10))
 
 	draw_rect(Rect2(Vector2.ZERO, viewport_size), background)
 	# 柔和的天光与舞台焦点。

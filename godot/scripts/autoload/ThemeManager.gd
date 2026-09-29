@@ -83,12 +83,13 @@ func _with_scene_tokens(base: Dictionary) -> Dictionary:
 	data["glass"] = Color(text, 0.075 if dark else 0.42)
 	data["glass_strong"] = Color(bg.lightened(0.08 if dark else 0.02), 0.84 if dark else 0.78)
 	data["line"] = Color(text, 0.14 if dark else 0.12)
-	data["accent_soft"] = Color(primary, 0.18 if dark else 0.12)
-	data["accent_glow"] = Color(primary, 0.30 if dark else 0.24)
-	data["wood"] = accent.darkened(0.24 if dark else 0.16)
-	data["scene_pane_a"] = bg.lightened(0.14 if dark else 0.10)
-	data["scene_pane_b"] = primary.lerp(bg, 0.78)
-	data["leaf"] = primary.darkened(0.30 if dark else 0.42)
+	# 场景底板 token:窗棂木色、格玻璃、叶影。公式必须与 GardenSceneBackdrop
+	# 的绘制一致 —— 两边各算一套(而且结果不同)时,这些 token 就成了没人看的
+	# 死定义,改主题也调不到底板。
+	data["wood"] = accent.darkened(0.05 if dark else 0.18)
+	data["scene_pane_a"] = bg.lightened(0.06 if dark else 0.10)
+	data["scene_pane_b"] = Color(primary, 0.16).lerp(bg, 0.62)
+	data["leaf"] = primary.darkened(0.15 if dark else 0.40)
 	return data
 
 
@@ -167,8 +168,13 @@ func get_theme_keys() -> Array:
 
 func get_theme_data(theme_name: String) -> Dictionary:
 	if theme_name == "custom":
-		return current_theme_data
-	return THEMES.get(theme_name, THEMES.amber)
+		return get_current_theme_data()
+	# 与 get_current_theme_data 返回同一种形状:两个 API 一个带场景 token、
+	# 一个不带,是留给后续调用者的陷阱。
+	return _with_scene_tokens(
+		THEMES.get(theme_name, THEMES.amber).duplicate(true)
+	)
+
 
 func get_current_theme_data() -> Dictionary:
 	return current_theme_data if not current_theme_data.is_empty() else THEMES.amber

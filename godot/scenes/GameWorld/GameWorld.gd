@@ -176,6 +176,7 @@ var _hud_diary_plate: PanelContainer
 var _sidebar: ScrollContainer
 var _sidebar_content: VBoxContainer
 var _portrait_rig: Control
+var _portrait_motion_strength := 1.0
 var _life_status_clock: Label
 var _life_status_cadence: Label
 var _life_status_elapsed := 0.0
@@ -202,6 +203,12 @@ func _ready() -> void:
 	_build_modal_layer()
 	Global.theme_changed.connect(_on_theme_changed)
 	Global.font_size_changed.connect(_on_font_size_changed)
+	# 连接信号不会补发历史值(Settings 在自己的 _ready 里就发过),所以先在
+	# _ready 主动应用一次;否则 GameWorld 的庭院底板与立绘呼吸完全不受该设置影响。
+	_on_visual_accessibility_changed(
+		bool(Settings.settings.ui.get("reduced_motion", false))
+	)
+	Settings.visual_accessibility_changed.connect(_on_visual_accessibility_changed)
 	CompanionCore.reply_received.connect(_on_core_reply)
 	CompanionCore.request_failed.connect(_on_core_request_failed)
 	CompanionCore.health_changed.connect(_on_core_health_changed)
@@ -750,6 +757,8 @@ func _build_sidebar(parent: Control) -> void:
 	_portrait_rig.offset_top = -314.0
 	_portrait_rig.offset_bottom = -10.0
 	_portrait_rig.set("stage_mode", true)
+	# 记下立绘自己的呼吸强度,减少动态效果时只把它归零再还原。
+	_portrait_motion_strength = float(_portrait_rig.get("motion_strength"))
 	_stage_portrait_holder.add_child(_portrait_rig)
 	_portrait_rig.call("set_role", _current_role)
 	_portrait_rig.call("set_body_state", LifeSim.build_role_state(_current_role))
@@ -2926,6 +2935,17 @@ func _apply_chat_input_theme(data: Dictionary) -> void:
 		Color.WHITE if bool(data.is_dark) else Color(data.text)
 	)
 	_chat_input.add_theme_constant_override("caret_width", 3)
+
+# 减少动态效果:庭院底板的漂浮与立绘的呼吸一起收掉。立绘眨限与视线保留 ——
+# 完全停 _process 会让眼睛冻在半睁状态,比有动效更难受。
+func _on_visual_accessibility_changed(reduced_motion: bool) -> void:
+	if is_instance_valid(_background_fx):
+		_background_fx.call("set_animating", not reduced_motion)
+	if is_instance_valid(_portrait_rig):
+		_portrait_rig.set(
+			"motion_strength", 0.0 if reduced_motion else _portrait_motion_strength
+		)
+
 
 func _on_theme_changed(_data: Dictionary) -> void:
 	var data := ThemeMgr.get_current_theme_data()

@@ -8,8 +8,6 @@ extends Button
 @export var icon_stroke := 1.7
 @export var icon_only := true
 
-var _icon_color := Color.WHITE
-
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(38, 38) if icon_only else custom_minimum_size
@@ -33,6 +31,9 @@ func _draw() -> void:
 	var box := Rect2(Vector2.ZERO, size)
 	var center := box.get_center()
 	var radius := minf(icon_size, minf(size.x, size.y) * 0.56) * 0.5
+	# flat 按钮不会画 pressed 样式框,所以按下反馈必须自己画。
+	if is_pressed():
+		draw_circle(center, radius + 4.0, Color(color, 0.16))
 	_draw_icon(center, radius, color)
 
 
@@ -41,7 +42,9 @@ func _resolve_icon_color() -> Color:
 	var base := Color(str(data.get("secondary", "#A79B90")))
 	if disabled:
 		return Color(base, 0.38)
-	if button_pressed:
+	# 用 is_pressed() 而不是 button_pressed:后者是 toggle 状态,而所有调用点
+	# 都不是 toggle_mode,那个分支从来没生效过。
+	if is_pressed():
 		return Color(str(data.get("accent", data.get("primary", "#C96B2E"))))
 	if is_hovered() or has_focus():
 		return Color(str(data.get("primary", "#C96B2E")))

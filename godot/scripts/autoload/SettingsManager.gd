@@ -51,11 +51,10 @@ var settings: Dictionary = {
 	"display": {"view_mode": "2d", "resolution": DEFAULT_RESOLUTION, "fullscreen": false, "vsync": true},
 	"audio": {"master": 0.8, "music": 0.7, "voice": 1.0},
 	"tts": {"voice_ling": "", "voice_nai": ""},
-		"ui": {
-			"theme": "amber",
-			"reduced_motion": false,
-			"font_size": 15,
-
+	"ui": {
+		"theme": "amber",
+		"reduced_motion": false,
+		"font_size": 15,
 		"font_family": "system",
 		"language": "zh_CN",
 		"custom_bg": "#1A120E",
