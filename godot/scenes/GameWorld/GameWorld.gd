@@ -25,6 +25,24 @@ const UI_MESSAGE_LIMIT := 72
 # 同层里任何正 z_index 或后添加的兄弟节点都会把遮罩压到下面，所以层级
 # 必须由 CanvasLayer 显式表达，而不是依赖添加顺序。
 const MODAL_LAYER_INDEX := 10
+# 构图档位。宽屏让阅读层与角色舞台水平分离；中屏高度不足，改纵向上下分离；
+# 窄屏再压缩舞台高度并把两者居中堆叠。三档都以"实际高度预算"算偏移，
+# 不再假设"够宽就不会撞"——956~1259px 这段正是旧二分法漏掉的区间。
+const LAYOUT_WIDE_MIN_WIDTH := 1280.0
+const LAYOUT_NARROW_MAX_WIDTH := 640.0
+# 工具栏最小宽度 = 图标数 × 边长 + 间距；标题锁定卡必须停在它左侧。
+const UTILITY_RAIL_ICON_COUNT := 8
+const UTILITY_RAIL_SEPARATION := 5.0
+const UTILITY_RAIL_SIDE_MARGIN := 20.0
+const TITLE_LOCKUP_MIN_WIDTH := 132.0
+const TITLE_LOCKUP_BOTTOM := 106.0
+const TOAST_HEIGHT := 30.0
+# 舞台列里不随档位缩水的部分(姓名、副标题、心境三行 + 容器间距与内边距)。
+# 预留给得比实测更宽,避免 VBoxContainer 的最小高度反过来撑破算好的偏移量。
+const STAGE_IDENTITY_RESERVE := 84.0
+const STAGE_PORTRAIT_FLOOR := 96.0
+const STAGE_PORTRAIT_MAX := 330.0
+const WIDE_STAGE_BOTTOM := 78.0
 const STAT_TWEEN_DURATION := 0.58
 const TYPEWRITER_MIN_CPS := 42.0
 const TYPEWRITER_MAX_SECONDS := 4.8
@@ -112,6 +130,8 @@ var _nai_button: Button
 var _explore_button: Button
 var _archive_button: Button
 var _memory_network_button: Button
+var _life_review_button: Button
+var _house_editor_button: Button
 var _settings_button: Button
 var _menu_button: Button
 var _role_switch_panel: PanelContainer
@@ -435,6 +455,9 @@ func _build_nav(parent: Control) -> void:
 	_memory_status.tooltip_text = "独立 Heartloom SQLite 记忆状态"
 	_memory_status.add_theme_font_size_override("font_size", 10)
 	_memory_status.add_theme_color_override("font_color", Color(data.secondary, 0.76))
+	for label in [_life_mini_status, _connection_status, _memory_status]:
+		# 中窄屏会把锁定卡收窄，长文案必须裁切而不是溢出到工具栏上。
+		(label as Label).clip_text = true
 	lockup.add_child(_memory_status)
 
 	_utility_rail = HBoxContainer.new()
@@ -463,9 +486,11 @@ func _build_nav(parent: Control) -> void:
 	var life_review_button := _scene_icon_button("leaf", "生活回顾")
 	life_review_button.pressed.connect(func(): _life_review_panel.show_panel())
 	_utility_rail.add_child(life_review_button)
+	_life_review_button = life_review_button
 	var house_editor_button := _scene_icon_button("home", "家の地图编辑器")
 	house_editor_button.pressed.connect(func(): _house_editor.show_panel())
 	_utility_rail.add_child(house_editor_button)
+	_house_editor_button = house_editor_button
 	_settings_button = _scene_icon_button("settings", "设置与开发者选项")
 	_settings_button.pressed.connect(func(): _settings.show_panel())
 	_utility_rail.add_child(_settings_button)
@@ -762,11 +787,13 @@ func _build_log_bar(parent: Control) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_log_bar = PanelContainer.new()
 	_log_bar.name = "TransientToast"
-	_log_bar.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	# 贴在标题锁定卡下方的短暂提示。底部整条已经交给视觉小说阅读层，
+	# 从中窄屏起阅读层还会横向铺满，左下角再放常驻条必然被压住。
+	_log_bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_log_bar.offset_left = 24.0
-	_log_bar.offset_top = -88.0
+	_log_bar.offset_top = TITLE_LOCKUP_BOTTOM + 8.0
 	_log_bar.offset_right = 380.0
-	_log_bar.offset_bottom = -56.0
+	_log_bar.offset_bottom = TITLE_LOCKUP_BOTTOM + 8.0 + TOAST_HEIGHT
 	_log_bar.add_theme_stylebox_override("panel", _panel_style(Color(data.get("glass", data.bg)), Color(data.get("line", Color.TRANSPARENT)), 12, 7))
 	_log_bar.material = _glass_material(data, 1.4)
 	parent.add_child(_log_bar)
@@ -2673,63 +2700,154 @@ func _on_viewport_size_changed() -> void:
 func _apply_responsive_layout() -> void:
 	if not is_instance_valid(_main_layout):
 		return
-	var width := get_viewport_rect().size.x
-	var compact := width <= 940.0
-	var narrow := width <= 640.0
+	var viewport := get_viewport_rect().size
+	var width := viewport.x
+	var height := viewport.y
+	var narrow := width <= LAYOUT_NARROW_MAX_WIDTH
+	var wide := width >= LAYOUT_WIDE_MIN_WIDTH
 	_brand.visible = not narrow
 	_connection_status.visible = width > 520.0
 	_memory_status.visible = width > 720.0
 	_explore_button.visible = width > 560.0
 	_ling_button.custom_minimum_size = Vector2(108 if not narrow else 86, 32)
 	_nai_button.custom_minimum_size = Vector2(108 if not narrow else 86, 32)
-	for button in [_settings_button, _archive_button, _memory_network_button, _menu_button, _explore_button, _status_toggle_button]:
+	var icon_side := 32.0 if narrow else 38.0
+	for button in _utility_rail_buttons():
 		if is_instance_valid(button):
-			button.custom_minimum_size = Vector2(32 if narrow else 38, 32 if narrow else 38)
-	if compact:
-		_stage_column.offset_left = -310.0
-		_stage_column.offset_top = -400.0
-		_stage_column.offset_right = -12.0
-		_stage_column.offset_bottom = -112.0
-		_stage_portrait_holder.custom_minimum_size = Vector2(0, 240)
-		_chat_area.offset_left = -minf(360.0, width * 0.46)
-		_chat_area.offset_right = minf(360.0, width * 0.46)
-		_chat_area.offset_top = -320.0
-		_chat_area.offset_bottom = -18.0
-		_sidebar.offset_left = -minf(350.0, width - 28.0)
-		_sidebar.offset_right = -14.0
-		_sidebar.offset_top = 74.0
-		_sidebar.offset_bottom = -74.0
-		_log_bar.visible = not narrow
+			button.custom_minimum_size = Vector2(icon_side, icon_side)
+	_apply_utility_rail_layout(width, icon_side)
+	_apply_scene_layout(width, height, narrow, wide)
+	_apply_sidebar_layout(width, wide)
+	_glow.position = viewport / 2.0 - _glow.size / 2.0
+	call_deferred("_update_message_bubble_widths")
+
+func _utility_rail_buttons() -> Array[Button]:
+	return [
+		_memory_network_button,
+		_archive_button,
+		_status_toggle_button,
+		_explore_button,
+		_life_review_button,
+		_house_editor_button,
+		_settings_button,
+		_menu_button,
+	]
+
+# 工具栏钉在右上角,标题锁定卡只能收到它左侧。两者宽度都按当前档位的真实
+# 图标边长算,不再共用写死的 359px —— 窄屏换成 32px 图标后工具栏会变窄,
+# 锁定卡却仍按宽屏预留,中间那段空白正是两卡叠在一起的来源。
+func _apply_utility_rail_layout(width: float, icon_side: float) -> void:
+	if not is_instance_valid(_utility_rail):
+		return
+	var rail_width := (
+		icon_side * float(UTILITY_RAIL_ICON_COUNT)
+		+ UTILITY_RAIL_SEPARATION * float(UTILITY_RAIL_ICON_COUNT - 1)
+	)
+	_utility_rail.offset_left = -rail_width - UTILITY_RAIL_SIDE_MARGIN
+	_utility_rail.offset_right = -UTILITY_RAIL_SIDE_MARGIN
+	if is_instance_valid(_nav):
+		var rail_left := width - rail_width - UTILITY_RAIL_SIDE_MARGIN
+		_nav.offset_right = clampf(
+			rail_left - 12.0, 24.0 + TITLE_LOCKUP_MIN_WIDTH, 24.0 + 306.0
+		)
+	if is_instance_valid(_log_bar):
+		_log_bar.offset_right = clampf(width * 0.42, 24.0 + 140.0, 380.0)
+
+# 阅读层与角色舞台的实际占位。宽屏水平并排,中窄屏纵向上下分离;两段预算都
+# 从视口高度反算,所以 956~1259px 这段既不会再重叠,也不会把舞台压没。
+#
+# 关键约束:舞台列和阅读层都是 VBoxContainer。分配高度小于它们自身的最小
+# 高度时 Godot 会把实际矩形撑出去,偏移量算得再准也会被撑到对方身上。所以
+# 这里先按"固定身份区 + 形象区下限"给舞台留够,再让阅读层退到自己的下限,
+# 最后才把偏移量写成算出来的值。
+func _apply_scene_layout(width: float, height: float, narrow: bool, wide: bool) -> void:
+	var reading_bottom := 12.0 if narrow else (28.0 if wide else 18.0)
+	var stage_gap := 8.0 if narrow else 10.0
+	var reading_floor := _reading_layer_floor()
+	var reading_height := maxf(
+		_reading_layer_budget(height, narrow, wide), reading_floor
+	)
+	var reading_top := -(reading_bottom + reading_height)
+	var stage_min := STAGE_IDENTITY_RESERVE + STAGE_PORTRAIT_FLOOR
+	var stage_top_limit := TITLE_LOCKUP_BOTTOM + 8.0
+	var stage_bottom := reading_top - stage_gap
+	if wide:
+		# 宽屏水平并排:舞台与阅读层共享垂直空间,只受上下限约束,不必缩水。
+		stage_bottom = -WIDE_STAGE_BOTTOM
 	else:
-		_stage_column.offset_left = -410.0
-		_stage_column.offset_top = -500.0
-		_stage_column.offset_right = -22.0
-		_stage_column.offset_bottom = -118.0
-		_stage_portrait_holder.custom_minimum_size = Vector2(0, 330)
-		# 宽屏时让阅读区停在角色舞台左侧，避免视觉小说文本与角色身份牌相互遮挡。
+		var available := height + stage_bottom - stage_top_limit
+		if available < stage_min:
+			reading_height = maxf(
+				reading_floor, reading_height - (stage_min - available)
+			)
+			reading_top = -(reading_bottom + reading_height)
+			stage_bottom = reading_top - stage_gap
+	var stage_height := maxf(
+		minf(
+			height + stage_bottom - stage_top_limit,
+			STAGE_IDENTITY_RESERVE + STAGE_PORTRAIT_MAX
+		),
+		stage_min
+	)
+	_chat_area.offset_bottom = -reading_bottom
+	_chat_area.offset_top = reading_top
+	_stage_column.offset_bottom = stage_bottom
+	_stage_column.offset_top = stage_bottom - stage_height
+	_stage_portrait_holder.custom_minimum_size = Vector2(
+		0,
+		clampf(
+			stage_height - STAGE_IDENTITY_RESERVE,
+			STAGE_PORTRAIT_FLOOR,
+			STAGE_PORTRAIT_MAX
+		)
+	)
+	if wide:
 		_chat_area.offset_left = -548.0
-		_chat_area.offset_right = 220.0
-		_chat_area.offset_top = -344.0
-		_chat_area.offset_bottom = -28.0
+		_chat_area.offset_right = 200.0
+		_stage_column.offset_left = -410.0
+		_stage_column.offset_right = -22.0
+		return
+	if narrow:
+		_chat_area.offset_left = -width * 0.5 + 12.0
+		_chat_area.offset_right = width * 0.5 - 12.0
+		_stage_column.offset_left = -width * 0.5 - 150.0
+		_stage_column.offset_right = -width * 0.5 + 150.0
+	else:
+		var half := minf(width * 0.5 - 12.0, 460.0)
+		_chat_area.offset_left = -half
+		_chat_area.offset_right = half
+		_stage_column.offset_left = -minf(410.0, width * 0.55)
+		_stage_column.offset_right = -22.0
+	_log_bar.visible = not narrow
+
+# 阅读层的高度上限;实际高度还会受消息内容收缩(见 _refresh_reading_layer_height)。
+func _reading_layer_budget(height: float, narrow: bool, wide: bool) -> float:
+	if narrow:
+		return clampf(height * 0.34, 140.0, 240.0)
+	if wide:
+		return clampf(height * 0.42, 180.0, 340.0)
+	return clampf(height * 0.34, 150.0, 260.0)
+
+# 页脚(动作栏、输入行、麦克风/发送、提示行)是不能压缩的,阅读层必须至少
+# 容得下它,否则输入框会被挤出视口。
+func _reading_layer_floor() -> float:
+	if not is_instance_valid(_input_panel):
+		return 152.0
+	return _input_panel.get_combined_minimum_size().y + 44.0
+
+func _apply_sidebar_layout(width: float, wide: bool) -> void:
+	if not is_instance_valid(_sidebar):
+		return
+	if wide:
 		_sidebar.offset_left = -350.0
 		_sidebar.offset_right = -22.0
 		_sidebar.offset_top = 86.0
 		_sidebar.offset_bottom = -86.0
-		_log_bar.visible = true
-	if narrow:
-		# StageColumn 保持右下锚点；窄屏时先换算为相对偏移，
-		# 再让其 305px 最小高度恰好止于对话阅读区上方。
-		_stage_column.offset_left = -width * 0.5 - 150.0
-		_stage_column.offset_right = -width * 0.5 + 150.0
-		_stage_column.offset_top = -530.0
-		_stage_column.offset_bottom = -225.0
-		_stage_portrait_holder.custom_minimum_size = Vector2(0, 210)
-		_chat_area.offset_left = -width * 0.5 + 12.0
-		_chat_area.offset_right = width * 0.5 - 12.0
-		_chat_area.offset_top = -225.0
-		_chat_area.offset_bottom = -12.0
-	_glow.position = get_viewport_rect().size / 2.0 - _glow.size / 2.0
-	call_deferred("_update_message_bubble_widths")
+	else:
+		_sidebar.offset_left = -minf(350.0, width - 28.0)
+		_sidebar.offset_right = -14.0
+		_sidebar.offset_top = 74.0
+		_sidebar.offset_bottom = -74.0
 
 func _apply_chat_input_theme(data: Dictionary) -> void:
 	if not is_instance_valid(_chat_input):

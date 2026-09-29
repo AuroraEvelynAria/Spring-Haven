@@ -53,7 +53,7 @@ func _run() -> void:
 
 	var failures: Array[String] = []
 	_check_developer_reply_tuning(world, failures)
-	await _expect_compact_scene_layout(failures)
+	await _expect_scene_layout_matrix(failures)
 	var send_button := world.get("_send_button") as Button
 	var chat_input := world.get("_chat_input") as LineEdit
 	var ling_button := world.get("_ling_button") as Button
@@ -269,9 +269,31 @@ func _run() -> void:
 		printerr("GAMEWORLD_UI_RENDER_CHECK failure=", failure)
 	await _finish(world, 1)
 
-func _expect_compact_scene_layout(failures: Array[String]) -> void:
+# 视口矩阵：宽屏（>=1280）阅读层在左、舞台在右；中屏（641~1279）纵向上下
+# 分离；窄屏（<=640）压缩舞台并堆叠。956~1259px 是旧二分法（>940 即宽屏）
+# 漏掉的区间，必须逐档验证，不能只测默认尺寸与 600×600。
+const SCENE_LAYOUT_VIEWPORTS := [
+	Vector2i(1440, 900),
+	Vector2i(1280, 720),
+	Vector2i(1152, 720),
+	Vector2i(1024, 720),
+	Vector2i(800, 600),
+	Vector2i(600, 600),
+]
+
+
+func _expect_scene_layout_matrix(failures: Array[String]) -> void:
+	var before := failures.size()
+	for size in SCENE_LAYOUT_VIEWPORTS:
+		await _expect_scene_layout_for_size(size, failures)
+	print("GAMEWORLD_UI_RENDER_CHECK 视口矩阵: %d 档, 新增失败 %d" % [
+		SCENE_LAYOUT_VIEWPORTS.size(), failures.size() - before
+	])
+
+
+func _expect_scene_layout_for_size(size: Vector2i, failures: Array[String]) -> void:
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(600, 600)
+	viewport.size = size
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	get_tree().root.add_child(viewport)
 	var world := GAME_WORLD_SCENE.instantiate() as Control
@@ -282,35 +304,46 @@ func _expect_compact_scene_layout(failures: Array[String]) -> void:
 	await get_tree().process_frame
 	world.call("_apply_responsive_layout")
 	await get_tree().process_frame
-	var viewport_rect := Rect2(Vector2.ZERO, Vector2(viewport.size))
+	var label := "%d×%d" % [size.x, size.y]
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(size))
 	var shell := world.get("_main_layout") as Control
 	var shell_origin := shell.get_global_rect().position if is_instance_valid(shell) else Vector2.ZERO
+	var title_lockup := world.get("_nav") as Control
 	var utility_rail := world.get("_utility_rail") as Control
 	var chat_area := world.get("_chat_area") as Control
 	var chat_input := world.get("_chat_input") as Control
 	var stage := world.get("_stage_column") as Control
 	for entry in [
-		[utility_rail, "紧凑工具栏"],
-		[chat_area, "紧凑对话层"],
-		[chat_input, "紧凑输入框"],
-		[stage, "紧凑角色舞台"],
+		[title_lockup, "标题锁定卡"],
+		[utility_rail, "工具栏"],
+		[chat_area, "对话阅读层"],
+		[chat_input, "输入框"],
+		[stage, "角色舞台"],
 	]:
 		var control := entry[0] as Control
-		var rect := Rect2()
-		if is_instance_valid(control):
-			var global_rect := control.get_global_rect()
-			rect = Rect2(global_rect.position - shell_origin, global_rect.size)
-		if not is_instance_valid(control) or not viewport_rect.encloses(rect):
-			failures.append("%s超出 600×600 视口：%s" % [str(entry[1]), rect])
+		if not is_instance_valid(control):
+			failures.append("%s 缺少%s" % [label, str(entry[1])])
+			continue
+		var global_rect := control.get_global_rect()
+		var rect := Rect2(global_rect.position - shell_origin, global_rect.size)
+		if not viewport_rect.encloses(rect):
+			failures.append("%s 的%s超出视口：%s" % [label, str(entry[1]), rect])
 	if is_instance_valid(chat_area) and is_instance_valid(stage):
-		var chat_rect := chat_area.get_global_rect()
-		chat_rect.position -= shell_origin
-		var stage_rect := stage.get_global_rect()
-		stage_rect.position -= shell_origin
-		if chat_rect.intersects(stage_rect):
-			failures.append("紧凑对话层与角色舞台重叠")
+		if _offset_rect(chat_area, shell_origin).intersects(_offset_rect(stage, shell_origin)):
+			failures.append("%s 的对话阅读层与角色舞台重叠" % label)
+	if is_instance_valid(utility_rail) and is_instance_valid(title_lockup):
+		if _offset_rect(utility_rail, shell_origin).intersects(
+			_offset_rect(title_lockup, shell_origin)
+		):
+			failures.append("%s 的工具栏与标题锁定卡重叠" % label)
 	world.free()
 	viewport.free()
+
+
+func _offset_rect(control: Control, origin: Vector2) -> Rect2:
+	var rect := control.get_global_rect()
+	rect.position -= origin
+	return rect
 
 
 func _finish(world: Node, exit_code: int) -> void:
