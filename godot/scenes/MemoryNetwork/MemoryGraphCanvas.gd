@@ -2,6 +2,9 @@ class_name MemoryGraphCanvas
 extends Control
 
 signal node_selected(node: Dictionary)
+# 时间游标把当前选中/悬停的节点拨成幽灵时必须广播出去:画布只负责亮度,
+# 右侧详情卡属于面板 —— 不发信号的话详情会继续展示未来的标题与正文。
+signal selection_invalidated
 
 const DEFAULT_SCOPE_COLORS := {
 	"*": Color("#E8C97A"),
@@ -124,14 +127,27 @@ func set_graph(graph: Dictionary) -> void:
 			_node_by_id[node_id] = node
 	var raw_edges = graph.get("edges", [])
 	if raw_edges is Array:
-		for edge_variant in raw_edges:
+		for index in raw_edges.size():
+			var edge_variant = raw_edges[index]
 			if not edge_variant is Dictionary:
 				continue
 			var edge: Dictionary = (edge_variant as Dictionary).duplicate(true)
-			if _node_by_id.has(str(edge.get("source", ""))) and _node_by_id.has(str(edge.get("target", ""))):
-				_edges.append(edge)
-	_compute_degrees()
+			var source := str(edge.get("source", ""))
+			var target := str(edge.get("target", ""))
+			if not _node_by_id.has(source) or not _node_by_id.has(target):
+				continue
+			# 生产 API 会提供 link_id；诊断/mock 省略时也必须按边独立计数、
+			# 幽灵化和 Top-K 筛选，不能把所有空 id 折成同一条边。
+			if str(edge.get("link_id", "")).is_empty():
+				edge["link_id"] = "fallback:%s:%s:%s:%d" % [
+					source,
+					target,
+					str(edge.get("link_type", "association")),
+					index,
+				]
+			_edges.append(edge)
 	_compute_primary_edges()
+	_compute_degrees()
 	var reused := _apply_cached_layout()
 	if not reused:
 		_initialize_positions()
@@ -174,10 +190,19 @@ func _compute_primary_edges() -> void:
 func _compute_degrees() -> void:
 	_degrees.clear()
 	for edge in _edges:
+		if not _is_primary_layout_edge(edge):
+			continue
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
 		_degrees[source] = int(_degrees.get(source, 0)) + 1
 		_degrees[target] = int(_degrees.get(target, 0)) + 1
+
+
+func _is_primary_layout_edge(edge: Dictionary) -> bool:
+	return (
+		float(edge.get("strength", 0.0)) >= _min_strength
+		and _primary_edge_ids.has(str(edge.get("link_id", "")))
+	)
 
 
 func _apply_cached_layout() -> bool:
@@ -216,6 +241,7 @@ func set_palette(theme_data: Dictionary) -> void:
 
 func set_min_strength(value: float) -> void:
 	_min_strength = clampf(value, 0.0, 1.0)
+	_compute_degrees()
 	_wake_physics()
 	queue_redraw()
 
@@ -224,7 +250,37 @@ func set_time_cursor(world_day: float) -> void:
 	"""ADR-010:客户端时间调光。只改亮度目标,不重置布局;
 	实际亮度经 _process 逐帧趋近 —— 拖动全程节点不动、过渡平滑。"""
 	_time_cursor = world_day
+	var invalidated := false
+	if _hovered_id != "" and not is_node_selectable(_hovered_id):
+		_hovered_id = ""
+		tooltip_text = ""
+	if _dragged_id != "" and not is_node_selectable(_dragged_id):
+		_dragged_id = ""
+	if _selected_id != "" and not is_node_selectable(_selected_id):
+		_selected_id = ""
+		invalidated = true
+	_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
+	if invalidated:
+		selection_invalidated.emit()
 	queue_redraw()
+
+
+func is_node_selectable(node_id: String) -> bool:
+	if not _node_by_id.has(node_id):
+		return false
+	return not _is_ghost_node(_node_by_id[node_id] as Dictionary)
+
+
+# 某条边在当前游标下是否"存在且有效":还没诞生的不算,当时已经作废的也不算。
+# 面板的生命线、主张计数都按这个口径走,避免把未来透露给看过去的人。
+func is_edge_visible_now(edge: Dictionary) -> bool:
+	if _is_ghost_edge(edge):
+		return false
+	var world_to_variant = edge.get("world_to")
+	if _time_cursor >= 0.0 and world_to_variant != null:
+		if float(world_to_variant) <= _time_cursor:
+			return false
+	return true
 
 
 func set_time_fade_days(days: float) -> void:
@@ -317,6 +373,26 @@ func get_visible_edge_count() -> int:
 	return count
 
 
+# 孤立主题数必须与画布自己的显示口径一致:同一套主边 Top-K、同一套幽灵过滤。
+# 用后端 summary.isolated_count 会漏掉被 Top-K 剪掉的辐条(枢纽图能少报一大截),
+# 而且它是加载时的快照,滑杆与游标动过之后就对不上了。
+func get_isolated_node_count() -> int:
+	var connected: Dictionary = {}
+	for edge in _edges:
+		if not _is_primary_layout_edge(edge) or _is_ghost_edge(edge):
+			continue
+		connected[str(edge.get("source", ""))] = true
+		connected[str(edge.get("target", ""))] = true
+	var count := 0
+	for node in _nodes:
+		var node_id := str(node.id)
+		if _is_ghost_node(node):
+			continue
+		if not connected.has(node_id):
+			count += 1
+	return count
+
+
 func reset_view() -> void:
 	_zoom = 1.0
 	_pan = Vector2.ZERO
@@ -324,7 +400,7 @@ func reset_view() -> void:
 
 
 func select_node_by_id(node_id: String, center_node := true) -> void:
-	if not _node_by_id.has(node_id):
+	if not is_node_selectable(node_id):
 		return
 	_selected_id = node_id
 	if center_node and _positions.has(node_id):
@@ -401,10 +477,13 @@ func _simulate(delta: float) -> void:
 				push += overlap * 0.55
 			forces[left_id] = (forces[left_id] as Vector2) - direction * push
 			forces[right_id] = (forces[right_id] as Vector2) + direction * push
-	# 2) 弹簧(可见边):偏软,允许受力振荡 —— 甩动回弹的手感来源
+	# 2) 弹簧只使用默认可见的主边。否则不可见关系仍会暗中把节点
+	# 拉成团，用户看见的结构与实际布局原因就会脱节。
 	for edge in _edges:
-		if float(edge.get("strength", 0.0)) < _min_strength:
+
+		if not _is_primary_layout_edge(edge):
 			continue
+
 		var source := str(edge.get("source", ""))
 		var target := str(edge.get("target", ""))
 		if not _positions.has(source) or not _positions.has(target):
@@ -626,13 +705,7 @@ func _draw() -> void:
 			should_label = selected or hovered or _zoom >= 0.55
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
-			var member_count := int(node.get("member_count", 1))
-			var label := _short_title(
-				str(node.get("name", "")) if is_entity else str(node.get("display_title", node.get("title", "未命名记忆"))),
-				14
-			)
-			if member_count > 1:
-				label += " ×%d" % member_count
+			var label := label_text_for(node)
 			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
 			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
@@ -658,6 +731,7 @@ func _draw() -> void:
 				11,
 				Color(_palette.text, 0.95 if selected or hovered else 0.72)
 			)
+
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -689,8 +763,10 @@ func _gui_input(event: InputEvent) -> void:
 				if _dragged_id != "":
 					_velocities[_dragged_id] = _drag_velocity.limit_length(FLING_MAX)
 					_wake_physics()
-				_dragged_id = ""
-				_panning = false
+					_dragged_id = ""
+					_panning = false
+					_update_focus(_hovered_id)
+
 			accept_event()
 			return
 	if event is InputEventMouseMotion:
@@ -724,6 +800,9 @@ func _gui_input(event: InputEvent) -> void:
 func _hit_test(screen_position: Vector2) -> String:
 	for index in range(_nodes.size() - 1, -1, -1):
 		var node: Dictionary = _nodes[index]
+		# 历史快照中的未来节点只是视觉提示，不应截获点击、被拖动或泄露详情。
+		if _is_ghost_node(node):
+			continue
 		var node_id := str(node.id)
 		if not _positions.has(node_id):
 			continue
@@ -750,6 +829,19 @@ func _base_radius(node: Dictionary) -> float:
 	return 4.5 + importance * 3.5 + recall_boost
 
 
+func _visible_member_count(node: Dictionary) -> int:
+	var members_variant = node.get("member_records", [])
+	if not members_variant is Array:
+		return int(node.get("member_count", 1))
+	if _time_cursor < 0.0:
+		return (members_variant as Array).size()
+	var visible := 0
+	for member_variant in members_variant:
+		if member_variant is Dictionary and float((member_variant as Dictionary).get("world_created_at", 0.0)) <= _time_cursor:
+			visible += 1
+	return visible
+
+
 func _node_radius(node: Dictionary) -> float:
 	return _base_radius(node)
 
@@ -767,6 +859,22 @@ func _is_weave_node(node: Dictionary) -> bool:
 func _is_entity_node(node: Dictionary) -> bool:
 	# ADR-015:实体星座节点(细环 + 中心点)
 	return str(node.get("node_type", "")) == "entity"
+
+
+# 绘制与诊断共用同一份标签文案。抽出来的原因很实际:标签块曾经被多缩进一层
+# 落进记忆分支,实体节点整类不再绘制名字,而这类"不画了"只能靠肉眼在截图里
+# 发现 —— 现在诊断可以直接断言实体节点也有标签。
+func label_text_for(node: Dictionary) -> String:
+	var label := _short_title(
+		str(node.get("name", ""))
+		if _is_entity_node(node)
+		else str(node.get("display_title", node.get("title", "未命名记忆"))),
+		14
+	)
+	var member_count := _visible_member_count(node)
+	if member_count > 1:
+		label += " ×%d" % member_count
+	return label
 
 
 func _entity_color(node: Dictionary) -> Color:
