@@ -23,6 +23,7 @@ release/
 
 # Dev working directory only (never published)
 .zcode/
+.zcodeignore
 CHANGES.md
 HANDOFF_DSH.md
 WORKLOG.md
