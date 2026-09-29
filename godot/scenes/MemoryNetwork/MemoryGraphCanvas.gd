@@ -764,13 +764,24 @@ func _gui_input(event: InputEvent) -> void:
 					_velocities[_dragged_id] = _drag_velocity.limit_length(FLING_MAX)
 					_wake_physics()
 					_dragged_id = ""
-					_panning = false
 					_update_focus(_hovered_id)
+				# 平移必须无条件结束。它由"空白处按下"开启,而那条路径不会设置
+				# _dragged_id —— 放进上面的 if 里会让松手后画布一直跟着鼠标跑,
+				# 用户看到的是"鼠标一进图里就甩不掉"。
+				_panning = false
 
 			accept_event()
 			return
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
+		# 自愈:左键已经抬起却还停在拖拽/平移态(松手事件没送达,例如在窗口外松手),
+		# 按按钮位掩码纠正,避免画布之后一直跟着鼠标跑。
+		var left_held := (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+		if not left_held:
+			_panning = false
+			if _dragged_id != "":
+				_dragged_id = ""
+				_update_focus(_hovered_id)
 		_update_focus(_hovered_id if _hovered_id != "" else _dragged_id)
 		if _dragged_id != "" and _positions.has(_dragged_id):
 			var world_position := _screen_to_world(motion.position)
