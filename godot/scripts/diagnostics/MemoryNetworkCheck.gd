@@ -48,6 +48,10 @@ func _run() -> void:
 	if not hover_failure.is_empty():
 		_finish(18, hover_failure)
 		return
+	var contract_failure := await _expect_edge_contract_mapping()
+	if not contract_failure.is_empty():
+		_finish(19, contract_failure)
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -311,6 +315,69 @@ func _expect_pin_cursor_keeps_its_day(canvas: MemoryGraphCanvas, panel: Node) ->
 		slider.value, canvas.is_node_selectable("memory-pin")
 	])
 	return ""
+
+
+# API 发的是 src/dst，画布读的是 source/target。这层映射一旦错位，图会安静地
+# 一条线都不画（不是报错，是"看起来没有关系"）—— 属于最该被断言钉住的契约。
+func _expect_edge_contract_mapping() -> String:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(900, 640)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var panel := PANEL_SCENE.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	panel.call("_apply_graph_payload", {
+		"nodes": [
+			{
+				"node_id": "memory-a", "memory_id": "memory-a", "node_type": "memory",
+				"title": "契约甲", "summary": "甲", "scope_role_id": "ling",
+				"kind": "episodic", "importance": 0.6, "world_created_at": 1.0,
+			},
+			{
+				"node_id": "memory-b", "memory_id": "memory-b", "node_type": "memory",
+				"title": "契约乙", "summary": "乙", "scope_role_id": "ling",
+				"kind": "episodic", "importance": 0.6, "world_created_at": 2.0,
+			},
+		],
+		"edges": [{
+			"link_id": "contract-edge",
+			"src": "memory-a",
+			"dst": "memory-b",
+			"link_type": "association",
+			"link_strength": 0.8,
+			"reason": "契约",
+		}],
+		"world_now": 10.0,
+		"world_range": {"earliest": 0.0, "latest": 10.0},
+		"memory_node_count": 2,
+	})
+	await get_tree().process_frame
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	var message := ""
+	if not is_instance_valid(canvas):
+		message = "契约检查找不到画布"
+	else:
+		var edges: Array = canvas.get("_edges")
+		if edges.is_empty():
+			message = "src/dst 没有映射成 source/target：画布一条边都没有"
+		else:
+			var edge: Dictionary = edges[0]
+			if str(edge.get("source", "")) != "memory-a" or str(edge.get("target", "")) != "memory-b":
+				message = "src/dst 映射结果不对：source=%s target=%s" % [
+					edge.get("source", ""), edge.get("target", "")
+				]
+			elif not is_equal_approx(float(edge.get("strength", 0.0)), 0.8):
+				message = "link_strength 没有映射成 strength：%s" % edge.get("strength")
+			elif not (edge.get("reasons") as Array).has("契约"):
+				message = "reason 没有映射成 reasons 列表"
+	panel.free()
+	viewport.free()
+	if message.is_empty():
+		print("MEMORY_NETWORK_CHECK 契约映射: src/dst→source/target、link_strength→strength、reason→reasons 通过")
+	return message
 
 
 func _finish(code: int, message: String) -> void:

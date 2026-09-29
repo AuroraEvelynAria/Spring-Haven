@@ -11,7 +11,7 @@ const DEFAULT_SCOPE_COLORS := {
 	"ling": Color("#72C7B8"),
 	"nai": Color("#E6A4BD"),
 }
-const MIN_ZOOM := 0.42
+const MIN_ZOOM := 0.2
 const MAX_ZOOM := 2.4
 
 # ── Obsidian 式连续力导向(可读性优先)─────────────────────────────
@@ -19,12 +19,12 @@ const MAX_ZOOM := 2.4
 # 向心 + 阻尼 + 软边界。拖拽把光标速度传给节点,松手后惯性滑行,
 # 弹簧拖着邻居弹性跟随 —— 「弹弓」手感来自连续模拟,而非固定步数。
 const REPULSION_K := 11000.0
-const REPULSION_FLOOR := 0.35
-const REPULSION_CUTOFF_SQ := 490000.0
+const REPULSION_FLOOR := 0.08
+const REPULSION_CUTOFF_SQ := 160000.0
 const LINK_SPRING_K := 0.03
 const LINK_LEN_STRONG := 95.0
 const LINK_LEN_WEAK := 140.0
-const CENTER_PULL := 0.007
+const CENTER_PULL := 0.012
 const DAMPING := 0.865
 const MAX_SPEED := 26.0
 const FLING_MAX := 22.0
@@ -34,8 +34,12 @@ const SIM_COOL_PER_FRAME := 0.004
 const SIM_ALPHA_MIN := 0.01
 const SIM_ALPHA_DRAG := 0.5
 const COLLISION_PAD := 6.0
+# 全量标签的缩放门槛:低于它只标悬停/选中与邻域。
+const LABEL_ZOOM := 1.2
 const FOCUS_DIM := 0.10
-const SOFT_BOUNDARY := 0.9
+# 数值兜底半径（世界单位）：只在极端斥力下生效，正常布局碰不到。
+# 它必须远大于任何正常云团，否则又会变成一堵墙。
+const HARD_BOUNDARY := 4000.0
 ## 度数软上限(Obsidian「毛线球」对策):连接数超过它,相关弹簧变软
 const HUB_DEGREE_SOFT_CAP := 7
 
@@ -53,13 +57,19 @@ var _physics_awake := true
 var _sim_alpha := 1.0
 var _panning := false
 var _zoom := 1.0
+# 图装载后等力导向沉降完，再把视角套到内容上（Obsidian 的重置视角即此）
+var _auto_fit_pending := false
+# 云团形状跟随面板长宽比(只由控件尺寸决定,与相机无关,避免反馈环)。
+var _pane_stretch := 1.0
 var _pan := Vector2.ZERO
 ## 度数上限(Obsidian「毛线球」对策):每个节点默认只绘制最强的 K 条边,
 ## 其余边在聚焦/悬停/选中时展开 —— 高连接节点不再喷成"蜘蛛"
-const EDGE_KEEP_PER_NODE := 3
+# 每节点默认常显的边数上限。原先 3 —— 实测 77 条关系只显示 43 条、
+# 真实存档 119 条只显示 37 条，作为「关系图谱」藏掉了三分之二的联系。
+# 布局已经散开，度数十限只需要拦住病态枢纽，不需要拦正常结构。
+const EDGE_KEEP_PER_NODE := 6
 
 var _min_strength := 0.55
-var _aspect_stretch := 1.0
 var _primary_edge_ids: Dictionary = {}
 var _degrees: Dictionary = {}
 # 布局位置缓存(静态,跨面板开关):再次打开直接复用上次沉降结果,开局即稳定
@@ -122,6 +132,9 @@ func set_graph(graph: Dictionary) -> void:
 	_dragged_id = ""
 	_focus_id = ""
 	_focus_neighbors.clear()
+	# 沉降结束后自动套住整张图：静置的图会缩成中间一小团，
+	# 默认视角必须自己跟上去，用户不该手动缩放去找。
+	_auto_fit_pending = true
 	var raw_nodes = graph.get("nodes", [])
 	if raw_nodes is Array:
 		for node_variant in raw_nodes:
@@ -239,7 +252,9 @@ func set_palette(theme_data: Dictionary) -> void:
 	var text := Color(str(theme_data.get("text", "#F2E9DF")))
 	var secondary := Color(str(theme_data.get("secondary", "#A79B90")))
 	_palette = {
-		"background": background.darkened(0.12) if bool(theme_data.get("is_dark", true)) else background.darkened(0.025),
+		# 图区必须是独立的一层表面。浅色主题下只压 0.025 时它与面板几乎同色,
+		# 节点像浮在白纸上的淡点 —— 这是原先最刺眼的问题之一。
+		"background": background.darkened(0.12) if bool(theme_data.get("is_dark", true)) else background.darkened(0.07),
 		"grid": Color(text, 0.045),
 		"edge": Color(secondary, 0.72),
 		"text": text,
@@ -403,8 +418,29 @@ func get_isolated_node_count() -> int:
 
 
 func reset_view() -> void:
-	_zoom = 1.0
-	_pan = Vector2.ZERO
+	# 重置网络视角 = 套住整张图，而不是回到 1 倍缩放 —— 用户点它的意图
+	# 永远是「把图找回来」，而 1 倍缩放对已经缩过的图看起来毫无反应。
+	fit_to_content()
+
+
+func fit_to_content(padding := 0.10) -> void:
+	"""把视角缩放到刚好容纳所有节点（四周留 padding 比例的边距）。"""
+	if _positions.is_empty() or size.x < 8.0 or size.y < 8.0:
+		return
+	var min_point := Vector2.INF
+	var max_point := -Vector2.INF
+	for value in _positions.values():
+		var point: Vector2 = value
+		min_point.x = minf(min_point.x, point.x)
+		min_point.y = minf(min_point.y, point.y)
+		max_point.x = maxf(max_point.x, point.x)
+		max_point.y = maxf(max_point.y, point.y)
+	var span := (max_point - min_point).max(Vector2(160.0, 160.0))
+	var available := size * (1.0 - padding * 2.0)
+	_zoom = clampf(
+		minf(available.x / span.x, available.y / span.y), MIN_ZOOM, 1.15
+	)
+	_pan = -(min_point + max_point) * 0.5 * _zoom
 	queue_redraw()
 
 
@@ -447,6 +483,14 @@ func _initialize_positions() -> void:
 
 
 func _process(delta: float) -> void:
+	if (
+		_auto_fit_pending
+		and _sim_alpha <= SIM_ALPHA_MIN
+		and _dragged_id == ""
+		and not _positions.is_empty()
+	):
+		_auto_fit_pending = false
+		fit_to_content()
 	var animating := _advance_ghost_animation(delta)
 	if _sim_alpha > SIM_ALPHA_MIN or _dragged_id != "":
 		_simulate(delta)
@@ -515,7 +559,10 @@ func _simulate(delta: float) -> void:
 		maxf(260.0, size.x / maxf(0.42, _zoom) * 0.5 - 40.0),
 		maxf(210.0, size.y / maxf(0.42, _zoom) * 0.5 - 46.0)
 	)
-	_aspect_stretch = clampf(half_view.x / maxf(1.0, half_view.y), 1.0, 2.6)
+	# 只依赖控件尺寸,不含相机 —— 相机在自动适配后会变,含进去就成了反馈环。
+	# 指数 0.78 是实测出来的:0.5(=开方)只把云拉到面板比例的 74%,
+	# 相机受高度限制,左右仍空一大片;0.78 后宽度填充率才跟高度对齐。
+	_pane_stretch = pow(clampf(size.x / maxf(1.0, size.y), 1.0, 2.6), 0.78)
 	for node in _nodes:
 		var node_id := str(node.id)
 		if node_id == _dragged_id:
@@ -524,27 +571,29 @@ func _simulate(delta: float) -> void:
 			continue
 		var position: Vector2 = _positions[node_id]
 		var force: Vector2 = forces[node_id]
-		# 向心力按画布宽高比拉伸(椭球):宽画布上云团会摊成椭圆,
-		# 而不是被上下边界压成一排贴边节点
-		force += -Vector2(position.x, position.y * _aspect_stretch) * CENTER_PULL
-		# 软边界:靠近画布边缘就开始往回推,避免一排节点贴边躺平
-		var soft_x := half_view.x * SOFT_BOUNDARY
-		var soft_y := half_view.y * SOFT_BOUNDARY
-		if position.x > soft_x:
-			force.x -= (position.x - soft_x) * 0.12
-		elif position.x < -soft_x:
-			force.x += (-soft_x - position.x) * 0.12
-		if position.y > soft_y:
-			force.y -= (position.y - soft_y) * 0.12
-		elif position.y < -soft_y:
-			force.y += (-soft_y - position.y) * 0.12
+		# 向心按面板长宽比做各向异性:让云团的形状自己长成面板的比例,
+		# 相机适配后才真正铺满,而不是一个正圆浮在宽面板中间、左右空一大片。
+		# 注意系数乘积保持不变(除以/乘以 sqrt),整体尺寸才不会跟着比例跑。
+		force += -Vector2(
+			position.x / _pane_stretch, position.y * _pane_stretch
+		) * CENTER_PULL
+		# 软边界按归一化椭圆半径往回推，推回强度随越界量超线性增长。
+		# 这里必须用"半径"而不是"四条边"：四边约束让节点沿四条直边排成矩形，
+		# 实测 74% 的节点落在包围盒边缘 26px 内 —— 打开就是一张方框。
+		# 半径约束的平衡态是圆润的一团，没有直边可贴。
 		var velocity: Vector2 = ((_velocities[node_id] as Vector2) + force * alpha) * DAMPING
 		if velocity.length() > MAX_SPEED:
 			velocity = velocity.normalized() * MAX_SPEED
 		_velocities[node_id] = velocity
 		var next_position := position + velocity
-		next_position.x = clampf(next_position.x, -half_view.x, half_view.x)
-		next_position.y = clampf(next_position.y, -half_view.y, half_view.y)
+		# 不设"可见范围"的墙。任何沿画布四边或椭圆边缘的容器都会留下形状痕迹：
+		# 四边约束让节点排成矩形（实测 74% 落在包围盒边缘），椭圆约束也仍会把
+		# 边缘挤成一条弧。Obsidian 的图谱根本没有墙 —— 图自由沉降，相机去适配
+		# 内容（见 fit_to_content）。这里只留一道很远的数值兜底，防止某帧被
+		# 极端斥力甩飞，正常布局永远碰不到。
+		var guard_radius := next_position.length()
+		if guard_radius > HARD_BOUNDARY:
+			next_position *= HARD_BOUNDARY / guard_radius
 		_positions[node_id] = next_position
 	for node in _nodes:
 		_layout_cache[str(node.id)] = _positions[str(node.id)]
@@ -621,8 +670,9 @@ func _draw() -> void:
 			edge_width = lerpf(0.4, 1.0 + render_strength * 2.2, lit_amount)
 		else:
 			# 普通记忆边:细而均匀的灰线(Obsidian 底网),聚焦时再发亮
-			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.08 + render_strength * 0.10, lit_amount) * focus_mul)
-			edge_width = lerpf(0.4, 0.5 + render_strength * 0.5, lit_amount)
+			# 底网要看得见:0.08 起步在浅色主题的近白底上等于没画,整张图只剩孤点。
+			edge_color = Color(Color(_palette.edge), lerpf(GHOST_EDGE_ALPHA, 0.22 + render_strength * 0.26, lit_amount) * focus_mul)
+			edge_width = lerpf(0.4, 0.7 + render_strength * 0.7, lit_amount)
 		draw_line(
 			_world_to_screen(_positions[source]),
 			_world_to_screen(_positions[target]),
@@ -711,7 +761,10 @@ func _draw() -> void:
 		if focus_active:
 			should_label = in_focus
 		else:
-			should_label = selected or hovered or _zoom >= 0.55
+			# 默认缩放下 50+ 个标签会糊成一片（实测最难读的就是这里）。
+			# 只标悬停/选中及其邻域,放大后再全标 —— 与 Obsidian「放大看细节」
+			# 的交互一致,默认视图则保持干净的星座。
+			should_label = selected or hovered or _zoom >= LABEL_ZOOM
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
 			var label := label_text_for(node)
@@ -841,12 +894,13 @@ func _screen_to_world(screen_position: Vector2) -> Vector2:
 
 
 func _base_radius(node: Dictionary) -> float:
-	# Obsidian 式小节点:半径 4.5-9.5,留白交给布局,而不是靠小图块撑场面
+	# Obsidian 式小节点:留白交给布局,而不是靠小图块撑场面。
+	# 但默认缩放下会被缩到 0.5 倍左右,原来 4.5 起步几乎看不见。
 	if _is_entity_node(node):
-		return 6.5
+		return 7.5
 	var importance := clampf(float(node.get("importance", 0.5)), 0.0, 1.0)
 	var recall_boost := minf(1.6, log(1.0 + float(node.get("recall_count", 0))) * 0.4)
-	return 4.5 + importance * 3.5 + recall_boost
+	return 5.5 + importance * 4.0 + recall_boost
 
 
 func _visible_member_count(node: Dictionary) -> int:

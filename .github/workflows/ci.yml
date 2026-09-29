@@ -45,3 +45,8 @@ jobs:
           ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/GameWorldStageCheck.gd
           ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --scene res://scripts/diagnostics/GameWorldUIRenderCheck.tscn
           ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/MultiRoleStressCheck.gd
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --scene res://scripts/diagnostics/MemoryNetworkCheck.tscn
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/GraphLayoutProbe.gd
+          ./Godot_v4.7-stable_linux.x86_64 --headless --path godot --script res://scripts/diagnostics/GameWorldStageCheck.gd
+          # GameWorldUIRenderCheck 故意不进 CI：它对打字机/网络等待的时序敏感，
+          # 实测偶发失败且无法稳定复现；它真正的价值是非 headless 的实拍图。

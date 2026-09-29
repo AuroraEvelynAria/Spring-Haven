@@ -364,6 +364,15 @@ func _load_graph() -> void:
 		_empty_state.text = "Companion Core 返回了无效的记忆网络"
 		_status.text = "加载失败"
 		return
+	_apply_graph_payload(data)
+	_clear_details()
+
+
+
+# 把 /heartloom/graph 的响应落到画布、时间轴与章节钉上。
+# 抽出来是为了让这条「API 字段 → 画布字段」的契约可以被直接断言：
+# src/dst 与 source/target 一旦对不上，图会安静地一条线都不画。
+func _apply_graph_payload(data: Dictionary) -> void:
 	# /heartloom/graph 契约字段映射到画布结构:
 	# memory_id→id、content(缺省回退 summary)、edges 的 src/dst→source/target。
 	var mapped_nodes: Array = []
@@ -440,7 +449,6 @@ func _load_graph() -> void:
 
 	_status.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
 	_selected_node_id = ""
-	_clear_details()
 
 
 func _collapse_duplicate_nodes(nodes: Array, edges: Array) -> Dictionary:

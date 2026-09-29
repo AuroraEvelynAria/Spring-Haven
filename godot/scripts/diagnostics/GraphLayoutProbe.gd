@@ -1,0 +1,239 @@
+extends SceneTree
+
+## 心织图谱外观探针。
+##
+## 用接近真实存档规模的合成图（53 主题 / 9 实体 / 79 联系）走**面板的真实落图路径**
+## （_apply_graph_payload），渲染一张实拍图并打印可量化的形态指标：
+##   * 包围盒比例应接近画布长宽比，而不是被压成一条；
+##   * on_edge_ratio（落在包围盒四边窄带内的节点比例）偏高即"贴墙排成矩形"；
+##   * 填充率（节点云占画布的比例）两个方向都应接近 0.8。
+##
+## 用法:
+##   godot --path godot --script res://scripts/diagnostics/GraphLayoutProbe.gd
+
+const PANEL_SCENE_PATH := "res://scenes/MemoryNetwork/MemoryNetworkPanel.tscn"
+const MEMORY_COUNT := 53
+const ENTITY_COUNT := 9
+const VIEWPORT_SIZE := Vector2i(1280, 720)
+const SETTLE_FRAMES := 1200
+
+
+func _initialize() -> void:
+	_run.call_deferred()
+
+
+func _run() -> void:
+	# 必须运行时 load：本脚本作为主循环运行，preload 会在编译期解析面板脚本里的
+	# autoload 标识（CompanionCore 等），而那时 autoload 还没注册。
+	var panel_scene := load(PANEL_SCENE_PATH) as PackedScene
+	if panel_scene == null:
+		printerr("GRAPH_LAYOUT_PROBE 无法加载面板场景")
+		quit(1)
+		return
+	var headless := DisplayServer.get_name() == "headless"
+	var viewport := SubViewport.new()
+	viewport.size = VIEWPORT_SIZE
+	viewport.render_target_update_mode = (
+		SubViewport.UPDATE_DISABLED if headless else SubViewport.UPDATE_ALWAYS
+	)
+	root.add_child(viewport)
+	var panel := panel_scene.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await process_frame
+	await process_frame
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	if not is_instance_valid(canvas):
+		printerr("GRAPH_LAYOUT_PROBE 找不到画布")
+		quit(1)
+		return
+	var payload := _build_payload()
+	panel.call("_apply_graph_payload", payload)
+	var empty_state := panel.get("_empty_state") as Control
+	if is_instance_valid(empty_state):
+		empty_state.hide()
+	# 等力导向冷却沉降，并以「自动适配已执行」为真正的结束条件 ——
+	# 固定帧数会在还没沉降完时截图，拍到的是一张被裁掉上下两端的图。
+	for frame in SETTLE_FRAMES:
+		await process_frame
+		if frame > 60 and not bool(canvas.get("_auto_fit_pending")):
+			break
+	var failure := _report(canvas, payload)
+	if not headless:
+		var image := viewport.get_texture().get_image()
+		if image != null and not image.is_empty():
+			var path := "user://graph_layout_probe.png"
+			image.save_png(path)
+			print("GRAPH_LAYOUT_PROBE 截图 %s" % ProjectSettings.globalize_path(path))
+	panel.free()
+	viewport.free()
+	if not failure.is_empty():
+		printerr("GRAPH_LAYOUT_PROBE failure=", failure)
+		quit(1)
+		return
+	quit(0)
+
+
+# 断言把「打开就是一张方框」这个已发生的缺陷钉住：
+#   * 云团要铺满画布（两个方向的填充率都不低于 0.55）；
+#   * 落在包围盒四边窄带内的节点不能超过三分之一（贴墙排成矩形时会到 0.74）；
+#   * 云团形状要跟随画布长宽比，而不是被压扁。
+func _report(canvas: MemoryGraphCanvas, payload: Dictionary) -> String:
+	var edges: Array = canvas.get("_edges")
+	var primary = canvas.get("_primary_edge_ids")
+	print("GRAPH_LAYOUT_PROBE 边: 载荷=%d 入账=%d 主边集=%d 默认可见=%d 阈值=%.2f" % [
+		(payload["edges"] as Array).size(),
+		edges.size(),
+		(primary as Dictionary).size(),
+		int(canvas.call("get_visible_edge_count")),
+		float(canvas.get("_min_strength")),
+	])
+	var extent := _measure_extent(canvas)
+	if extent.is_empty():
+		return "探针无节点坐标"
+	var canvas_size: Vector2 = canvas.size
+	var zoom := float(canvas.get("_zoom"))
+	var filled := Vector2(
+		extent["span"].x * zoom / canvas_size.x,
+		extent["span"].y * zoom / canvas_size.y
+	)
+	print("GRAPH_LAYOUT_PROBE 形态: 包围盒=%s 比例=%.2f 贴边比例=%.2f" % [
+		extent["span"], extent["ratio"], extent["on_edge_ratio"]
+	])
+	print("GRAPH_LAYOUT_PROBE 构图: zoom=%.3f 画布=%s 填充率 宽=%.2f 高=%.2f" % [
+		zoom, canvas_size, filled.x, filled.y
+	])
+	var pane_aspect := canvas_size.x / maxf(1.0, canvas_size.y)
+	if filled.x < 0.55 or filled.y < 0.55:
+		return "节点云没有铺满画布：填充率 %.2f x %.2f" % [filled.x, filled.y]
+	if float(extent["on_edge_ratio"]) > 0.34:
+		return "节点被压成矩形：贴边比例 %.2f" % extent["on_edge_ratio"]
+	var ratio := float(extent["ratio"])
+	if ratio < pane_aspect * 0.6 or ratio > pane_aspect * 1.6:
+		return "云团形状没有跟随画布长宽比：%.2f 对 %.2f" % [ratio, pane_aspect]
+	return ""
+
+
+# 包围盒与"贴边程度"：大量节点落在四条边附近的窄带里，就是被约束压成了矩形。
+func _measure_extent(canvas: MemoryGraphCanvas) -> Dictionary:
+	var positions: Dictionary = canvas.get("_positions")
+	if positions.is_empty():
+		return {}
+	var min_point := Vector2.INF
+	var max_point := -Vector2.INF
+	for value in positions.values():
+		var point: Vector2 = value
+		min_point.x = minf(min_point.x, point.x)
+		min_point.y = minf(min_point.y, point.y)
+		max_point.x = maxf(max_point.x, point.x)
+		max_point.y = maxf(max_point.y, point.y)
+	var span := max_point - min_point
+	var edge_band := 26.0
+	var on_edge := 0
+	for value in positions.values():
+		var point: Vector2 = value
+		if (
+			point.x - min_point.x < edge_band
+			or max_point.x - point.x < edge_band
+			or point.y - min_point.y < edge_band
+			or max_point.y - point.y < edge_band
+		):
+			on_edge += 1
+	return {
+		"span": span,
+		"ratio": span.x / maxf(1.0, span.y),
+		"on_edge_ratio": float(on_edge) / float(maxi(1, positions.size())),
+	}
+
+
+func _memory_node(index: int) -> Dictionary:
+	var node_id := "memory-%02d" % index
+	return {
+		"node_id": node_id,
+		"memory_id": node_id,
+		"node_type": "memory",
+		"title": "记忆主题 %d" % (index + 1),
+		"summary": "第 %d 条记忆的正文内容，用来占位以便观察标签与节点尺寸。" % (index + 1),
+		"scope_role_id": ["*", "ling", "nai"][index % 3],
+		"kind": "episodic",
+		"importance": 0.4 + float(index % 7) * 0.08,
+		"keywords": ["主题%d" % (index % 11)],
+		"recall_count": index % 5,
+		"world_created_at": float(index) * 1.7,
+		"created_at": 1_700_000_000 + index * 3600,
+		"updated_at": 1_700_000_000 + index * 3600,
+		"enabled": true,
+	}
+
+
+func _entity_node(index: int) -> Dictionary:
+	return {
+		"node_id": "entity-%02d" % index,
+		"node_type": "entity",
+		"name": "实体 %d" % (index + 1),
+		"kind": ["person", "object", "place", "event", "concept"][index % 5],
+		"aliases": [],
+		"claim_count": 2 + index % 4,
+		"world_created_at": float(index) * 3.0,
+	}
+
+
+func _build_payload() -> Dictionary:
+	var nodes: Array = []
+	var ids: Array = []
+	for index in MEMORY_COUNT:
+		ids.append("memory-%02d" % index)
+		nodes.append(_memory_node(index))
+	var entity_ids: Array = []
+	for index in ENTITY_COUNT:
+		entity_ids.append("entity-%02d" % index)
+		nodes.append(_entity_node(index))
+	var edges: Array = []
+	# 关联边：6 个枢纽各带一串卫星
+	for hub in 6:
+		for offset in range(1, 9):
+			var satellite := (hub * 9 + offset) % MEMORY_COUNT
+			if satellite == hub:
+				continue
+			edges.append({
+				"link_id": "assoc-%d-%d" % [hub, satellite],
+				"src": ids[hub],
+				"dst": ids[satellite],
+				"link_type": "association",
+				"link_strength": 0.62 + float(offset % 3) * 0.08,
+				"reason": "共享主题",
+			})
+	for index in range(0, MEMORY_COUNT - 4, 4):
+		edges.append({
+			"link_id": "chain-%d" % index,
+			"src": ids[index],
+			"dst": ids[index + 3],
+			"link_type": "association",
+			"link_strength": 0.58,
+			"reason": "",
+		})
+	# 主张边：实体挂在若干主题上，形成真实的「实体星座」
+	for index in ENTITY_COUNT:
+		for offset in 2:
+			var owner := (index * 5 + offset * 7) % MEMORY_COUNT
+			edges.append({
+				"link_id": "claim-%d-%d" % [index, offset],
+				"src": entity_ids[index],
+				"dst": ids[owner],
+				"link_type": "claim",
+				"predicate": "关联",
+				"object_text": "实体 %d" % (index + 1),
+				"link_strength": 0.7,
+				"reason": "",
+				"world_from": float(index) * 3.0,
+				"world_to": null,
+			})
+	return {
+		"nodes": nodes,
+		"edges": edges,
+		"world_now": 120.0,
+		"world_range": {"earliest": 0.0, "latest": 120.0},
+		"memory_node_count": MEMORY_COUNT,
+		"entity_node_count": ENTITY_COUNT,
+		"node_count": nodes.size(),
+	}
