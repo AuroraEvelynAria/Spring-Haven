@@ -40,6 +40,10 @@ func _run() -> void:
 	if not pin_failure.is_empty():
 		_finish(16, pin_failure)
 		return
+	var pan_failure := await _expect_blank_press_releases_pan()
+	if not pan_failure.is_empty():
+		_finish(17, pan_failure)
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -309,3 +313,68 @@ func _finish(code: int, message: String) -> void:
 	if not message.is_empty():
 		printerr("MEMORY_NETWORK_CHECK failure=", message)
 	get_tree().quit(code)
+
+
+func _mouse_button(position: Vector2, pressed: bool) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = pressed
+	event.position = position
+	event.global_position = position
+	return event
+
+
+func _mouse_motion(position: Vector2, relative: Vector2) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.relative = relative
+	return event
+
+
+# 在图的空白处按下再松手，必须结束平移态。
+#
+# 旧代码把 `_panning = false` 写在 `if _dragged_id != "":` 里面，而"空白处按下"
+# 这条路径只设 `_panning = true`、不会设 `_dragged_id` —— 于是松手时那个 if 不成立，
+# `_panning` 永远停在 true。此后每帧按鼠标位移平移画布，用户看到的是"鼠标一进图里
+# 就甩不掉，图永远跟着走"。4ea1028 / 6d473e8 / 场景式分支三版都有此缺陷。
+func _expect_blank_press_releases_pan() -> String:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(900, 640)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var panel := PANEL_SCENE.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	if not is_instance_valid(canvas):
+		panel.free()
+		viewport.free()
+		return "空白处平移检查找不到画布"
+	canvas.set_graph({
+		"nodes": [_node("memory-pan", "空白处平移测试", "ling", 0.6, ["平移"])],
+		"edges": [],
+	})
+	canvas.set_time_cursor(-1.0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 画布右下角离唯一节点足够远，必定是空白
+	var blank := Vector2(canvas.size.x - 6.0, canvas.size.y - 6.0)
+	viewport.push_input(_mouse_button(blank, true))
+	viewport.push_input(_mouse_button(blank, false))
+	var panning_after_release := bool(canvas.get("_panning"))
+	var pan_before: Vector2 = canvas.get("_pan")
+	viewport.push_input(_mouse_motion(blank + Vector2(48.0, 32.0), Vector2(48.0, 32.0)))
+	var pan_after: Vector2 = canvas.get("_pan")
+	panel.free()
+	viewport.free()
+	if panning_after_release:
+		return "空白处松手后仍停留在平移状态（_panning 没有复位）"
+	if not pan_after.is_equal_approx(pan_before):
+		return "空白处松手后画面仍被鼠标拖动：%s → %s" % [pan_before, pan_after]
+	print("MEMORY_NETWORK_CHECK 空白处平移: 松手后 _panning=%s 位移=%s" % [
+		panning_after_release, pan_after - pan_before
+	])
+	return ""
