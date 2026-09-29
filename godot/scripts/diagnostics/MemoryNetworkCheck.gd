@@ -44,6 +44,10 @@ func _run() -> void:
 	if not pan_failure.is_empty():
 		_finish(17, pan_failure)
 		return
+	var hover_failure := await _expect_hover_clears_on_mouse_exit()
+	if not hover_failure.is_empty():
+		_finish(18, hover_failure)
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -332,6 +336,21 @@ func _mouse_motion(position: Vector2, relative: Vector2) -> InputEventMouseMotio
 	return event
 
 
+# 在画布**局部**坐标里扫出第一个命中结果等于 want（空串 = 要空白）的位置。
+# 命中测试 `_hit_test` 吃的是局部坐标，而 `push_input` 要视口全局坐标 ——
+# 两者混用会让合成事件"看着打中了其实没打中"，务必分开算。
+func _find_local_spot(canvas: MemoryGraphCanvas, want: String, step := 8.0) -> Vector2:
+	var y := step
+	while y < canvas.size.y:
+		var x := step
+		while x < canvas.size.x:
+			if str(canvas.call("_hit_test", Vector2(x, y))) == want:
+				return Vector2(x, y)
+			x += step
+		y += step
+	return Vector2(-1.0, -1.0)
+
+
 # 在图的空白处按下再松手，必须结束平移态。
 #
 # 旧代码把 `_panning = false` 写在 `if _dragged_id != "":` 里面，而"空白处按下"
@@ -360,13 +379,18 @@ func _expect_blank_press_releases_pan() -> String:
 	canvas.set_time_cursor(-1.0)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	# 画布右下角离唯一节点足够远，必定是空白
-	var blank := Vector2(canvas.size.x - 6.0, canvas.size.y - 6.0)
-	viewport.push_input(_mouse_button(blank, true))
-	viewport.push_input(_mouse_button(blank, false))
+	# 画布右下角离唯一节点足够远，必定是空白（局部坐标，推送时再加画布原点）
+	var local_blank := Vector2(canvas.size.x - 6.0, canvas.size.y - 6.0)
+	if not str(canvas.call("_hit_test", local_blank)).is_empty():
+		return "空白处平移检查选到的位置其实命中了节点"
+	var global_blank := canvas.get_global_rect().position + local_blank
+	viewport.push_input(_mouse_button(global_blank, true), true)
+	viewport.push_input(_mouse_button(global_blank, false), true)
 	var panning_after_release := bool(canvas.get("_panning"))
 	var pan_before: Vector2 = canvas.get("_pan")
-	viewport.push_input(_mouse_motion(blank + Vector2(48.0, 32.0), Vector2(48.0, 32.0)))
+	viewport.push_input(
+		_mouse_motion(global_blank + Vector2(48.0, 32.0), Vector2(48.0, 32.0)), true
+	)
 	var pan_after: Vector2 = canvas.get("_pan")
 	panel.free()
 	viewport.free()
@@ -377,4 +401,66 @@ func _expect_blank_press_releases_pan() -> String:
 	print("MEMORY_NETWORK_CHECK 空白处平移: 松手后 _panning=%s 位移=%s" % [
 		panning_after_release, pan_after - pan_before
 	])
+	return ""
+
+
+# 鼠标离开画布后悬停与聚焦必须清掉。聚焦态会让整图"除邻域外全部变暗"，
+# 不清的话鼠标早就离开图了，图却一直维持那个样子 —— 和"平移甩不掉"是同一种
+# "卡住了"的体感。
+func _expect_hover_clears_on_mouse_exit() -> String:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(900, 640)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var panel := PANEL_SCENE.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	if not is_instance_valid(canvas):
+		panel.free()
+		viewport.free()
+		return "悬停清理检查找不到画布"
+	canvas.set_graph({
+		"nodes": [_node("memory-hover", "悬停测试", "ling", 0.8, ["悬停"])],
+		"edges": [],
+	})
+	canvas.set_time_cursor(-1.0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var positions: Dictionary = canvas.get("_positions")
+	if not positions.has("memory-hover"):
+		panel.free()
+		viewport.free()
+		return "悬停清理检查找不到节点坐标"
+	# 不靠"算出来的屏幕坐标一定命中"这种假设，直接扫出真正能命中节点的局部位置。
+	# 位移事件随后用局部坐标直接调用 _gui_input：悬停路径不会走到 accept_event()
+	# （既没拖节点也没平移），直接调用是安全的；而经 push_input 转发时目标控件由
+	# GUI 命中决定，实测会因坐标语义差异打空。本断言验的是"处理函数在鼠标离开后
+	# 是否清态"，直接调用正是它的契约。
+	var hit_position := _find_local_spot(canvas, "memory-hover")
+	if hit_position.x < 0.0:
+		panel.free()
+		viewport.free()
+		return "整张画布里找不到能命中节点的位置（节点可能被布局挤到视口外）"
+	canvas.call("_gui_input", _mouse_motion(hit_position, Vector2(1.0, 0.0)))
+	var hovered_after_move := str(canvas.get("_hovered_id"))
+	var focus_after_move := str(canvas.get("_focus_id"))
+	canvas.notification(Control.NOTIFICATION_MOUSE_EXIT)
+	var hovered_after_exit := str(canvas.get("_hovered_id"))
+	var focus_after_exit := str(canvas.get("_focus_id"))
+	panel.free()
+	viewport.free()
+	if hovered_after_move != "memory-hover":
+		return "鼠标移到节点上没有被识别为悬停：%s @ %s" % [
+			hovered_after_move, hit_position
+		]
+	if focus_after_move != "memory-hover":
+		return "悬停没有聚焦到该节点：%s" % focus_after_move
+	if hovered_after_exit != "" or focus_after_exit != "":
+		return "鼠标离开画布后悬停/聚焦没有清掉：hovered=%s focus=%s" % [
+			hovered_after_exit, focus_after_exit
+		]
+	print("MEMORY_NETWORK_CHECK 离开画布: 悬停与聚焦已清空（命中点 %s）" % hit_position)
 	return ""

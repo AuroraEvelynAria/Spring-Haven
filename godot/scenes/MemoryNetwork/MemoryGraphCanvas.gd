@@ -100,6 +100,15 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		_wake_physics()
+	elif what == NOTIFICATION_MOUSE_EXIT:
+		# 鼠标离开后悬停与聚焦必须清掉：聚焦态会让整图"除邻域外全部变暗"，
+		# 不清的话人早就离开图了、图却一直维持那个样子 —— 和"平移甩不掉"是
+		# 同一种"卡住了"的体感。拖拽过程中不清，否则拖到控件外会中断拖拽。
+		if _dragged_id == "" and _hovered_id != "":
+			_hovered_id = ""
+			tooltip_text = ""
+			_update_focus("")
+		queue_redraw()
 
 
 func set_graph(graph: Dictionary) -> void:
