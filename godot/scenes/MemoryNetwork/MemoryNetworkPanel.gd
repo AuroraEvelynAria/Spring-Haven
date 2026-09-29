@@ -5,6 +5,14 @@ signal closed
 const GRAPH_CANVAS := preload("res://scenes/MemoryNetwork/MemoryGraphCanvas.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈"}
+# 低于这个宽度就不再并排:改成"画布聚焦 / 详情聚焦"二选一。
+const NARROW_WIDTH := 840.0
+# 观察台形态:外框保留庭院氛围,但图内容区与详情卡必须是实心的,
+# 否则节点、标签和连线会跟底下的 GameWorld 糊在一起。
+const SCRIM_ALPHA := 0.55
+const SHEET_ALPHA := 0.88
+const PLATE_ALPHA := 0.97
+const DETAIL_ALPHA := 0.96
 const KIND_NAMES := {
 	"episodic": "经历",
 	"semantic": "事实",
@@ -18,8 +26,10 @@ const KIND_NAMES := {
 var _background: ColorRect
 var _sheet: PanelContainer
 var _body: BoxContainer
+var _canvas_plate: PanelContainer
 var _canvas: MemoryGraphCanvas
 var _detail_panel: PanelContainer
+var _detail_back_button: Button
 var _scope_select: OptionButton
 var _search_input: LineEdit
 var _strength_slider: HSlider
@@ -219,13 +229,20 @@ func _build_interface() -> void:
 	_body.add_theme_constant_override("separation", 10)
 	content.add_child(_body)
 
+	# 图内容区必须有自己的一层实心衬底:庭院场景与 GameWorld 只能透过外框被
+	# 看见,不能透到节点、标签和连线底下来。
+	_canvas_plate = PanelContainer.new()
+	_canvas_plate.name = "GraphPlate"
+	_canvas_plate.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_canvas_plate.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_body.add_child(_canvas_plate)
 	_canvas = GRAPH_CANVAS.new()
 	_canvas.name = "MemoryGraphCanvas"
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_canvas.custom_minimum_size = Vector2(460, 360)
 	_canvas.node_selected.connect(_show_node_details)
-	_body.add_child(_canvas)
+	_canvas_plate.add_child(_canvas)
 	_empty_state = Label.new()
 	_empty_state.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_empty_state.text = "正在读取心织记忆……"
@@ -248,6 +265,13 @@ func _build_interface() -> void:
 	var detail := VBoxContainer.new()
 	detail.add_theme_constant_override("separation", 9)
 	detail_margin.add_child(detail)
+	# 窄屏在"画布聚焦"与"详情聚焦"之间切换,需要一个明确的返回图谱入口,
+	# 而不是把两块一上一下堆着让人自己分辨。
+	_detail_back_button = _icon_button("back", "返回图谱")
+	_detail_back_button.visible = false
+	_detail_back_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_detail_back_button.pressed.connect(_clear_details)
+	detail.add_child(_detail_back_button)
 	_detail_title = Label.new()
 	_detail_title.text = "选择一条记忆"
 	_detail_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -540,6 +564,7 @@ func _detail_member_at_cursor(node: Dictionary) -> Dictionary:
 func _show_node_details(node: Dictionary) -> void:
 	_detail_panel.show()
 	_selected_node_id = str(node.get("id", ""))
+	_apply_detail_focus()
 	if str(node.get("node_type", "memory")) == "entity":
 		_show_entity_details(node)
 		return
@@ -777,7 +802,9 @@ func _on_pin_selected(day: float) -> void:
 
 
 func _clear_details() -> void:
+	_selected_node_id = ""
 	_detail_panel.hide()
+	_apply_detail_focus()
 	_detail_title.text = "选择一条记忆"
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
 	_detail_content.text = ""
@@ -910,10 +937,27 @@ func _format_time(timestamp: int) -> String:
 func _apply_responsive_layout() -> void:
 	if not is_instance_valid(_body):
 		return
-	var narrow := get_viewport_rect().size.x < 840.0
-	_body.vertical = narrow
-	_detail_panel.custom_minimum_size = Vector2(0, 220) if narrow else Vector2(318, 0)
+	var narrow := get_viewport_rect().size.x < NARROW_WIDTH
+	_body.vertical = false
+	_detail_panel.custom_minimum_size = Vector2(0, 0) if narrow else Vector2(318, 0)
+	_detail_panel.size_flags_horizontal = (
+		Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_SHRINK_BEGIN
+	)
 	_canvas.custom_minimum_size = Vector2(340, 300) if narrow else Vector2(460, 360)
+	_apply_detail_focus()
+
+
+# 窄屏不做"图谱与详情上下堆叠"——两块都残缺。改成二选一:没选节点时看图谱,
+# 选中后整块让给详情卡,详情卡顶部的返回键切回图谱。
+func _apply_detail_focus() -> void:
+	if not is_instance_valid(_canvas_plate) or not is_instance_valid(_detail_panel):
+		return
+	var narrow := get_viewport_rect().size.x < NARROW_WIDTH
+	var has_selection := not _selected_node_id.is_empty()
+	_canvas_plate.visible = not narrow or not has_selection
+	_detail_panel.visible = has_selection
+	if is_instance_valid(_detail_back_button):
+		_detail_back_button.visible = narrow and has_selection
 
 
 func _on_theme_changed(_theme_data: Dictionary) -> void:
@@ -925,11 +969,16 @@ func _apply_theme() -> void:
 	var background := Color(str(data.bg))
 	var text := Color(str(data.text))
 	var secondary := Color(str(data.secondary))
-	_background.color = Color(background, 0.28)
+	_background.color = Color(background, SCRIM_ALPHA)
 	_sheet.add_theme_stylebox_override(
-		"panel", _style(Color(background, 0.68), Color(text, 0.18), 16)
+		"panel", _style(Color(background, SHEET_ALPHA), Color(text, 0.18), 16)
 	)
-	_detail_panel.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.035), Color(text, 0.12), 5))
+	_canvas_plate.add_theme_stylebox_override(
+		"panel", _style(Color(background, PLATE_ALPHA), Color(text, 0.14), 8)
+	)
+	_detail_panel.add_theme_stylebox_override(
+		"panel", _style(Color(background, DETAIL_ALPHA), Color(text, 0.16), 8)
+	)
 	_apply_readable_colors(_sheet, text, secondary)
 	_detail_meta.add_theme_color_override("font_color", Color(secondary, 0.86))
 	_detail_keywords.add_theme_color_override("font_color", Color(secondary, 0.92))

@@ -20,6 +20,14 @@ func _run() -> void:
 	if not is_instance_valid(detail_panel) or detail_panel.visible:
 		_finish(10, "心织详情卡默认不应显示")
 		return
+	var opacity_failure := _expect_observation_opacity(panel)
+	if not opacity_failure.is_empty():
+		_finish(12, opacity_failure)
+		return
+	var focus_failure := await _expect_narrow_detail_focus()
+	if not focus_failure.is_empty():
+		_finish(13, focus_failure)
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -114,6 +122,94 @@ func _node(
 		"updated_at": int(Time.get_unix_time_from_system()),
 		"enabled": true,
 	}
+
+
+# 观测台形态:外框可以保留庭院氛围(遮罩半透),但图内容区与详情卡必须实心,
+# 否则节点、标签与连线会跟底下的 GameWorld 糊在一起——这正是改坏时截图的样子。
+func _expect_observation_opacity(panel: Node) -> String:
+	var scrim := panel.get("_background") as ColorRect
+	var sheet := panel.get("_sheet") as Control
+	var plate := panel.get("_canvas_plate") as Control
+	var detail := panel.get("_detail_panel") as Control
+	if (
+		not is_instance_valid(scrim)
+		or not is_instance_valid(sheet)
+		or not is_instance_valid(plate)
+		or not is_instance_valid(detail)
+	):
+		return "心织观测台缺少图层结构"
+	var plate_alpha := _style_alpha(plate)
+	var detail_alpha := _style_alpha(detail)
+	var sheet_alpha := _style_alpha(sheet)
+	if plate_alpha < 0.95:
+		return "图内容区衬底不够实心：%s" % plate_alpha
+	if detail_alpha < 0.92:
+		return "详情卡衬底不够实心：%s" % detail_alpha
+	if sheet_alpha < 0.82:
+		return "观测台外框仍然过透：%s" % sheet_alpha
+	if scrim.color.a < 0.45 or scrim.color.a > 0.78:
+		return "最外层遮罩不再保留庭院氛围：%s" % scrim.color.a
+	print("MEMORY_NETWORK_CHECK 观测台不透明度: 遮罩=%s 外框=%s 图衬底=%s 详情卡=%s" % [
+		scrim.color.a, sheet_alpha, plate_alpha, detail_alpha
+	])
+	return ""
+
+
+func _style_alpha(control: Control) -> float:
+	var style := control.get_theme_stylebox("panel")
+	if style is StyleBoxFlat:
+		return (style as StyleBoxFlat).bg_color.a
+	return -1.0
+
+
+# 窄屏不能在"图谱"和"详情"之间上下堆叠——两块都残缺。必须是二选一聚焦,
+# 并且详情聚焦时有一个返回图谱的入口能切回去。
+func _expect_narrow_detail_focus() -> String:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(700, 620)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var panel := PANEL_SCENE.instantiate()
+	viewport.add_child(panel)
+	panel.show()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	panel.call("_apply_responsive_layout")
+	await get_tree().process_frame
+	var plate := panel.get("_canvas_plate") as Control
+	var detail := panel.get("_detail_panel") as Control
+	var back := panel.get("_detail_back_button") as Button
+	var canvas := panel.find_child("MemoryGraphCanvas", true, false) as MemoryGraphCanvas
+	var message := ""
+	if not is_instance_valid(plate) or not plate.visible:
+		message = "窄屏未选中节点时应聚焦画布"
+	elif is_instance_valid(detail) and detail.visible:
+		message = "窄屏未选中节点时不应显示详情卡"
+	elif is_instance_valid(back) and back.visible:
+		message = "窄屏未选中节点时不应显示返回图谱入口"
+	if message.is_empty() and is_instance_valid(canvas):
+		canvas.set_graph({
+			"nodes": [_node("memory-narrow", "窄屏里的记忆", "ling", 0.7, ["窄屏"])],
+			"edges": [],
+		})
+		canvas.select_node_by_id("memory-narrow", false)
+		await get_tree().process_frame
+		if is_instance_valid(plate) and plate.visible:
+			message = "窄屏选中节点后画布应让位给详情卡"
+		elif not is_instance_valid(detail) or not detail.visible:
+			message = "窄屏选中节点后没有切到详情聚焦"
+		elif not is_instance_valid(back) or not back.visible:
+			message = "窄屏详情聚焦缺少返回图谱入口"
+		elif not (panel.get("_selected_node_id") as String).is_empty():
+			back.pressed.emit()
+			await get_tree().process_frame
+			if not plate.visible or (is_instance_valid(detail) and detail.visible):
+				message = "窄屏返回图谱没有切回画布聚焦"
+	panel.free()
+	viewport.free()
+	if message.is_empty():
+		print("MEMORY_NETWORK_CHECK 窄屏聚焦切换: 画布→详情→画布 通过")
+	return message
 
 
 func _finish(code: int, message: String) -> void:

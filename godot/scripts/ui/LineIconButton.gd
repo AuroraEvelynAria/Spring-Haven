@@ -152,5 +152,9 @@ func _draw_icon(center: Vector2, r: float, color: Color) -> void:
 			draw_arc(right, r * 0.35, PI, TAU, 12, color, icon_stroke, true)
 			_line(center + Vector2(-r * 0.62, -r * 0.12), center + Vector2(0.0, r * 0.72), color)
 			_line(center + Vector2(r * 0.62, -r * 0.12), center + Vector2(0.0, r * 0.72), color)
+		"back":
+			_line(center + Vector2(r * 0.72, 0.0), center + Vector2(-r * 0.62, 0.0), color)
+			_line(center + Vector2(-r * 0.62, 0.0), center + Vector2(-r * 0.06, -r * 0.56), color)
+			_line(center + Vector2(-r * 0.62, 0.0), center + Vector2(-r * 0.06, r * 0.56), color)
 		_:
 			draw_circle(center, r * 0.18, color)
