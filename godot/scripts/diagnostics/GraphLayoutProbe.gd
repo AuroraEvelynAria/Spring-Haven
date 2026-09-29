@@ -37,6 +37,12 @@ func _run() -> void:
 		SubViewport.UPDATE_DISABLED if headless else SubViewport.UPDATE_ALWAYS
 	)
 	root.add_child(viewport)
+	# 注入真实主题再实例化面板:--script 模式下 autoload 仍在树里,只是编译期
+	# 解析不到标识符,运行时按节点取是安全的。不注入的话截图是 Godot 灰底
+	# 默认主题,和玩家看到的颜色完全是两回事,可读性判断会失真。
+	var theme_mgr := root.get_node_or_null("ThemeMgr")
+	if theme_mgr != null and theme_mgr.has_method("apply_theme"):
+		theme_mgr.call("apply_theme", "amber")
 	var panel := panel_scene.instantiate()
 	viewport.add_child(panel)
 	panel.show()
@@ -103,6 +109,14 @@ func _report(canvas: MemoryGraphCanvas, payload: Dictionary) -> String:
 	print("GRAPH_LAYOUT_PROBE 构图: zoom=%.3f 画布=%s 填充率 宽=%.2f 高=%.2f" % [
 		zoom, canvas_size, filled.x, filled.y
 	])
+	# 默认视角下大部分节点必须带着名字(Obsidian 式):一张无名点云什么
+	# 都读不出来 —— 这个缺陷曾经由 LABEL_ZOOM(1.2) 高于自适应上限(1.15)
+	# 造成,打开永远是匿名星座。碰撞避让会隐藏少数重叠标签,留 45% 余量。
+	var labeled := int(canvas.call("debug_label_count"))
+	var node_total := (canvas.get("_nodes") as Array).size()
+	print("GRAPH_LAYOUT_PROBE 标签: %d / %d zoom=%.3f" % [labeled, node_total, zoom])
+	if node_total > 0 and float(labeled) < float(node_total) * 0.55:
+		return "默认视角下有名字的节点太少：%d / %d —— 图读不出来" % [labeled, node_total]
 	var pane_aspect := canvas_size.x / maxf(1.0, canvas_size.y)
 	if filled.x < 0.55 or filled.y < 0.55:
 		return "节点云没有铺满画布：填充率 %.2f x %.2f" % [filled.x, filled.y]

@@ -34,8 +34,13 @@ const SIM_COOL_PER_FRAME := 0.004
 const SIM_ALPHA_MIN := 0.01
 const SIM_ALPHA_DRAG := 0.5
 const COLLISION_PAD := 6.0
-# 全量标签的缩放门槛:低于它只标悬停/选中与邻域。
-const LABEL_ZOOM := 1.2
+# 标签 LOD:≥LABEL_ZOOM 时全量画名字;更远的远景只画实体/枢纽/高重要度
+# (LABEL_PRIORITY_ZOOM 门槛),避免几十个标签糊成一团。阈值实测:自适应视角
+# 通常落在 0.6~1.15 之间,旧的 1.2 门槛等于"打开永远没有名字"——
+# 一张没有名字的关系图什么都读不出来,这正是 Obsidian 默认全标签的原因。
+const LABEL_ZOOM := 0.72
+const LABEL_PRIORITY_ZOOM := 0.45
+const LABEL_FONT_SIZE := 12
 const FOCUS_DIM := 0.10
 # 数值兜底半径（世界单位）：只在极端斥力下生效，正常布局碰不到。
 # 它必须远大于任何正常云团，否则又会变成一堵墙。
@@ -755,25 +760,18 @@ func _draw() -> void:
 				var moon_color := Color(Color("#D9CFAE"), 0.85 * lit_amount * focus_mul)
 				draw_arc(moon_center, moon_radius, 0.42 * PI, 1.58 * PI, 20, moon_color, 1.4, true)
 				draw_arc(moon_center, moon_radius * 0.62, 1.05 * PI, 1.95 * PI, 16, Color(moon_color, 0.55 * lit_amount * focus_mul), 1.1, true)
-		# 标签策略(Obsidian 式):常态下所有节点带小标签,靠字号/颜色克制;
-		# 聚焦时只留邻域;宽度给足,避免 CJK 文本被截成省略号
-		var should_label := false
-		if focus_active:
-			should_label = in_focus
-		else:
-			# 默认缩放下 50+ 个标签会糊成一片（实测最难读的就是这里）。
-			# 只标悬停/选中及其邻域,放大后再全标 —— 与 Obsidian「放大看细节」
-			# 的交互一致,默认视图则保持干净的星座。
-			should_label = selected or hovered or _zoom >= LABEL_ZOOM
+		# 标签策略(Obsidian 式):名字默认就画在节点下面;字号克制 + 碰撞避让
+		# + 远景 LOD 防糊。聚焦时只留邻域;宽度给足,避免 CJK 被截成省略号。
+		var should_label := _label_policy_allows(node, focus_active, in_focus, selected, hovered)
 		should_label = should_label and lit_amount > 0.5
 		if should_label:
 			var label := label_text_for(node)
 			# 量宽度只为居中/避让;绘制不传宽度约束 —— 从根上杜绝 CJK 被裁成省略号
-			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
-			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 15.0)
+			var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE)
+			var label_position := screen_position + Vector2(-text_size.x * 0.5, radius + 16.0)
 			var label_rect := Rect2(
-				label_position - Vector2(3.0, 12.0),
-				Vector2(text_size.x + 6.0, 18.0)
+				label_position - Vector2(3.0, 13.0),
+				Vector2(text_size.x + 6.0, 19.0)
 			)
 			var overlaps := false
 			if not selected and not hovered:
@@ -784,14 +782,25 @@ func _draw() -> void:
 			if overlaps:
 				continue
 			occupied_label_rects.append(label_rect)
+			# 文字底下垫一层背景色描影:标签压在连线上时仍能读清(Obsidian 同款)
+			var label_alpha := 0.95 if selected or hovered else 0.82
+			draw_string(
+				font,
+				label_position + Vector2(1.0, 1.0),
+				label,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				LABEL_FONT_SIZE,
+				Color(_palette.background, 0.85)
+			)
 			draw_string(
 				font,
 				label_position,
 				label,
 				HORIZONTAL_ALIGNMENT_LEFT,
 				-1,
-				11,
-				Color(_palette.text, 0.95 if selected or hovered else 0.72)
+				LABEL_FONT_SIZE,
+				Color(_palette.text, label_alpha)
 			)
 
 
@@ -949,6 +958,53 @@ func label_text_for(node: Dictionary) -> String:
 	if member_count > 1:
 		label += " ×%d" % member_count
 	return label
+
+
+# 远景下仍值得画名字的节点:实体、常驻枢纽与高重要度记忆。
+# 全量标签交给 LABEL_ZOOM 门槛,这里只负责"缩得很远也认得出地标"。
+func _is_label_priority(node: Dictionary) -> bool:
+	if _is_entity_node(node):
+		return true
+	if bool(node.get("always_active", false)):
+		return true
+	if clampf(float(node.get("importance", 0.5)), 0.0, 1.0) >= 0.78:
+		return true
+	return int(_degrees.get(str(node.id), 0)) >= 3
+
+
+# _draw 与诊断计数共用的标签判据:选中/悬停永远画;聚焦态只画邻域;
+# 常态按缩放 LOD(全量 → 仅优先节点)。
+func _label_policy_allows(
+	node: Dictionary, focus_active: bool, in_focus: bool, selected: bool, hovered: bool
+) -> bool:
+	if selected or hovered:
+		return true
+	if focus_active:
+		return in_focus
+	if _zoom >= LABEL_ZOOM:
+		return true
+	return _is_label_priority(node) and _zoom >= LABEL_PRIORITY_ZOOM
+
+
+# 诊断口径:按当前缩放/聚焦/幽灵态统计会绘制标签的节点数(与 _draw 同一判据,
+# 不含碰撞避让)。探针用"默认视角下大部分节点必须有名字"钉住回归。
+func debug_label_count() -> int:
+	var count := 0
+	var focus_active := _focus_id != ""
+	for node in _nodes:
+		var node_id := str(node.id)
+		var in_focus := not focus_active or node_id == _focus_id or _focus_neighbors.has(node_id)
+		if _node_ghost_amount(node) >= 0.5:
+			continue
+		if _label_policy_allows(
+			node,
+			focus_active,
+			in_focus,
+			node_id == _selected_id,
+			node_id == _hovered_id
+		):
+			count += 1
+	return count
 
 
 func _entity_color(node: Dictionary) -> Color:

@@ -136,10 +136,12 @@ func _build_interface() -> void:
 	legend.bbcode_enabled = true
 	legend.fit_content = true
 	legend.scroll_active = false
-	legend.custom_minimum_size = Vector2(194, 28)
-	legend.text = "[color=#C9A64B]●[/color] 共享   [color=#3D9F91]●[/color] 小玲   [color=#CE7899]●[/color] 小奈"
-	legend.tooltip_text = "金色为共享记忆，青绿色为小玲记忆，粉色为小奈记忆；节点越大表示重要度越高。"
-	legend.add_theme_font_size_override("font_size", 11)
+	legend.custom_minimum_size = Vector2(268, 28)
+	# 颜色必须与 MemoryGraphCanvas.DEFAULT_SCOPE_COLORS 逐字一致:
+	# 图例与图里的点对不上色,比没有图例更误导。
+	legend.text = "[color=#E8C97A]●[/color] 共享  [color=#72C7B8]●[/color] 小玲  [color=#E6A4BD]●[/color] 小奈  [color=#9A93A8]○[/color] 实体"
+	legend.tooltip_text = "金=共享记忆，青=小玲，粉=小奈；空心环=实体，实心圆=记忆主题（越大重要度越高）；半透明=时间游标之后的记忆。"
+	legend.add_theme_font_size_override("font_size", 12)
 	header.add_child(legend)
 	var reset_button := _icon_button("reset", "重置网络视角")
 	reset_button.pressed.connect(func(): _canvas.reset_view())
@@ -178,7 +180,8 @@ func _build_interface() -> void:
 	_strength_label = Label.new()
 	_strength_label.text = "关联 ≥ 0.55"
 	_strength_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_strength_label.custom_minimum_size = Vector2(82, 34)
+	_strength_label.add_theme_font_size_override("font_size", 12)
+	_strength_label.custom_minimum_size = Vector2(92, 34)
 	filters.add_child(_strength_label)
 	_strength_slider = HSlider.new()
 	_strength_slider.min_value = 0.2
@@ -252,6 +255,18 @@ func _build_interface() -> void:
 	_empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_empty_state.add_theme_font_size_override("font_size", 15)
 	_canvas.add_child(_empty_state)
+	# 交互提示:画布手势(滚轮/平移/甩节点)没有任何可见入口,不写出来没人知道
+	var gesture_hint := Label.new()
+	gesture_hint.name = "GestureHint"
+	gesture_hint.text = "滚轮缩放 · 空白处拖动平移 · 拖住节点可甩动"
+	gesture_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gesture_hint.add_theme_font_size_override("font_size", 11)
+	gesture_hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	gesture_hint.offset_left = 14.0
+	gesture_hint.offset_top = -30.0
+	gesture_hint.offset_right = 480.0
+	gesture_hint.offset_bottom = -12.0
+	_canvas.add_child(gesture_hint)
 
 	_detail_panel = PanelContainer.new()
 	_detail_panel.name = "MemoryDetailSheet"
@@ -281,7 +296,7 @@ func _build_interface() -> void:
 	_detail_meta = Label.new()
 	_detail_meta.text = "点击节点查看它与其他记忆的联系"
 	_detail_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_detail_meta.add_theme_font_size_override("font_size", 11)
+	_detail_meta.add_theme_font_size_override("font_size", 12)
 	detail.add_child(_detail_meta)
 	var separator := HSeparator.new()
 	detail.add_child(separator)
@@ -301,7 +316,7 @@ func _build_interface() -> void:
 	detail.add_child(_decay_curve)
 	_detail_keywords = Label.new()
 	_detail_keywords.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_detail_keywords.add_theme_font_size_override("font_size", 11)
+	_detail_keywords.add_theme_font_size_override("font_size", 12)
 	detail.add_child(_detail_keywords)
 	_related_title = Label.new()
 	_related_title.text = "关联记忆"
@@ -320,7 +335,7 @@ func _build_interface() -> void:
 	_status = Label.new()
 	_status.text = "等待加载"
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_status.add_theme_font_size_override("font_size", 11)
+	_status.add_theme_font_size_override("font_size", 12)
 	content.add_child(_status)
 
 	_search_timer = Timer.new()
@@ -646,7 +661,7 @@ func _rebuild_related_memories(node_id: String) -> void:
 		var empty := Label.new()
 		empty.text = "尚未发现足够明确的联系"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		empty.add_theme_font_size_override("font_size", 11)
+		empty.add_theme_font_size_override("font_size", 12)
 		empty.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
 		_related_list.add_child(empty)
 		return
@@ -660,7 +675,7 @@ func _rebuild_related_memories(node_id: String) -> void:
 		]
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.flat = true
-		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_font_size_override("font_size", 12)
 		button.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().text))
 		button.add_theme_color_override("font_hover_color", Color(ThemeMgr.get_current_theme_data().text))
 		button.tooltip_text = "；".join(edge.get("reasons", []))
@@ -747,7 +762,7 @@ func _rebuild_entity_lifeline(entity_id: String) -> void:
 		var empty := Label.new()
 		empty.text = "这张星座还没有连线"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		empty.add_theme_font_size_override("font_size", 11)
+		empty.add_theme_font_size_override("font_size", 12)
 		empty.add_theme_color_override("font_color", Color(ThemeMgr.get_current_theme_data().secondary, 0.82))
 		_related_list.add_child(empty)
 		return
@@ -774,7 +789,7 @@ func _rebuild_entity_lifeline(entity_id: String) -> void:
 		]
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.flat = true
-		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_font_size_override("font_size", 12)
 		button.add_theme_color_override("font_color", text)
 		button.add_theme_color_override("font_hover_color", text)
 		var object_text := str(edge.get("object_text", ""))
@@ -788,7 +803,7 @@ func _rebuild_entity_lifeline(entity_id: String) -> void:
 		button.text = "〔出处〕%s" % str(other.get("display_title", other.get("title", "未命名记忆")))
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.flat = true
-		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_font_size_override("font_size", 12)
 		button.add_theme_color_override("font_color", text)
 		button.add_theme_color_override("font_hover_color", text)
 		button.tooltip_text = "跳到这段记忆 · %s" % str(edge.get("predicate", ""))
@@ -1057,6 +1072,9 @@ func _apply_theme() -> void:
 	_detail_meta.add_theme_color_override("font_color", Color(secondary, 0.86))
 	_detail_keywords.add_theme_color_override("font_color", Color(secondary, 0.92))
 	_empty_state.add_theme_color_override("font_color", Color(secondary, 0.82))
+	var gesture_hint := _canvas.get_node_or_null("GestureHint") as Label
+	if gesture_hint != null:
+		gesture_hint.add_theme_color_override("font_color", Color(secondary, 0.66))
 	_canvas.set_palette(data)
 	if _time_pins != null:
 		_time_pins.set_palette(data)
