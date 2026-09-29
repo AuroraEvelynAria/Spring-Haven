@@ -10,7 +10,9 @@ const UIBREATH := preload("res://scripts/domain/UIBreath.gd")
 const GARDEN_BACKDROP := preload("res://scenes/UI/GardenSceneBackdrop.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
 
+var _menu_anchor: MarginContainer
 var _content: VBoxContainer
+var _menu_buttons: VBoxContainer
 var _title: Label
 var _lockup: VBoxContainer
 var _utility_rail: HBoxContainer
@@ -44,6 +46,8 @@ func _ready() -> void:
 	_build_lockup()
 	_build_utility_rail()
 	_build_menu()
+	_apply_responsive_layout()
+	_apply_responsive_layout.call_deferred()
 	Settings.visual_accessibility_changed.connect(_on_visual_accessibility_changed)
 	_settings = SETTINGS_SCENE.instantiate() as SETTINGS_PANEL_SCRIPT
 	add_child(_settings)
@@ -198,21 +202,18 @@ func _cycle_scene_theme() -> void:
 
 
 func _build_menu() -> void:
-	var anchor := MarginContainer.new()
-	anchor.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	anchor.offset_left = -180.0
-	anchor.offset_right = 180.0
-	anchor.offset_top = -320.0
-	anchor.offset_bottom = -54.0
-	anchor.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(anchor)
+	_menu_anchor = MarginContainer.new()
+	_menu_anchor.name = "MenuAnchor"
+	_menu_anchor.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_menu_anchor.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_menu_anchor)
 
 	_content = VBoxContainer.new()
 	_content.name = "MenuContent"
 	_content.alignment = BoxContainer.ALIGNMENT_END
 	_content.add_theme_constant_override("separation", 10)
 	_content.mouse_filter = Control.MOUSE_FILTER_PASS
-	anchor.add_child(_content)
+	_menu_anchor.add_child(_content)
 
 	_subtitle = Label.new()
 	_subtitle.text = "双生 · 絮语 · 陪伴"
@@ -222,32 +223,32 @@ func _build_menu() -> void:
 	_subtitle.custom_minimum_size = Vector2(0, 24)
 	_content.add_child(_subtitle)
 
-	var menu := VBoxContainer.new()
-	menu.name = "MenuButtons"
-	menu.alignment = BoxContainer.ALIGNMENT_CENTER
-	menu.add_theme_constant_override("separation", 9)
-	_content.add_child(menu)
+	_menu_buttons = VBoxContainer.new()
+	_menu_buttons.name = "MenuButtons"
+	_menu_buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	_menu_buttons.add_theme_constant_override("separation", 8)
+	_content.add_child(_menu_buttons)
 
 	_start_button = _make_menu_button("继续旅程", true)
 	_start_button.name = "StartButton"
 	_start_button.pressed.connect(_on_start_pressed)
-	menu.add_child(_start_button)
+	_menu_buttons.add_child(_start_button)
 	_new_game_button = _make_menu_button("新旅程", false)
 	_new_game_button.name = "NewGameButton"
 	_new_game_button.pressed.connect(_on_new_game_pressed)
-	menu.add_child(_new_game_button)
+	_menu_buttons.add_child(_new_game_button)
 	_journey_library_button = _make_menu_button("旅程档案", false)
 	_journey_library_button.name = "JourneyLibraryButton"
 	_journey_library_button.pressed.connect(_on_journey_library_pressed)
-	menu.add_child(_journey_library_button)
+	_menu_buttons.add_child(_journey_library_button)
 	_life_lab_button = _make_menu_button("生活实验室", false)
 	_life_lab_button.name = "LifeLabButton"
 	_life_lab_button.pressed.connect(_on_life_lab_pressed)
-	menu.add_child(_life_lab_button)
+	_menu_buttons.add_child(_life_lab_button)
 	_settings_button = _make_menu_button("设置", false)
 	_settings_button.name = "SettingsButton"
 	_settings_button.pressed.connect(_on_settings_pressed)
-	menu.add_child(_settings_button)
+	_menu_buttons.add_child(_settings_button)
 	_new_game_confirmation = ConfirmationDialog.new()
 	_new_game_confirmation.title = "开始新旅程"
 	_new_game_confirmation.dialog_text = "当前旅程会完整保留。新旅程将使用独立的对话、属性、生活状态与心织记忆作用域。"
@@ -286,6 +287,44 @@ func _build_menu() -> void:
 	_version.offset_bottom = -18
 	add_child(_version)
 	_update_visuals()
+
+
+func _apply_responsive_layout() -> void:
+	if not is_instance_valid(_menu_anchor) or not is_instance_valid(_menu_buttons):
+		return
+	var viewport := get_viewport_rect().size
+	var compact := viewport.y < 820.0 or viewport.x < 960.0
+	var narrow := viewport.y < 680.0 or viewport.x < 640.0
+	var button_height := 44.0 if compact else 52.0
+	if narrow:
+		button_height = 40.0
+	var button_width := minf(220.0, maxf(184.0, viewport.x - 48.0))
+	var button_separation := 6 if compact else 8
+	_menu_buttons.add_theme_constant_override("separation", button_separation)
+	for button in [_start_button, _new_game_button, _journey_library_button, _life_lab_button, _settings_button]:
+		if is_instance_valid(button):
+			button.custom_minimum_size = Vector2(button_width, button_height)
+	var subtitle_height := 20.0 if compact else 24.0
+	_subtitle.custom_minimum_size = Vector2(0, subtitle_height)
+	_content.add_theme_constant_override("separation", 8 if compact else 10)
+	# Button 的 StyleBox 内容边距不总会计入容器的组合最小尺寸，
+	# 因此为最终绘制边界预留固定空间，避免入口压到版本标签。
+	var estimated_height := subtitle_height + button_height * 5.0 + float(button_separation) * 5.0 + 24.0
+	var visual_padding := 24.0
+	var menu_height := maxf(
+		_content.get_combined_minimum_size().y + visual_padding,
+		estimated_height + visual_padding
+	)
+	var version_band := 42.0 if viewport.y >= 560.0 else 10.0
+	var safe_bottom := version_band + 12.0 + visual_padding
+	_menu_anchor.offset_left = -button_width * 0.5 - 22.0
+	_menu_anchor.offset_right = button_width * 0.5 + 22.0
+	_menu_anchor.offset_top = -(menu_height + safe_bottom)
+	_menu_anchor.offset_bottom = -safe_bottom
+	_version.offset_top = -34.0
+	_version.offset_bottom = -14.0
+	_version.visible = viewport.y >= 560.0
+
 
 func _make_menu_button(text: String, filled: bool) -> Button:
 	var data := ThemeMgr.get_current_theme_data()
@@ -521,10 +560,13 @@ func _on_font_size_changed(size: int) -> void:
 		_start_button.add_theme_font_size_override("font_size", size + 1)
 	if _new_game_button:
 		_new_game_button.add_theme_font_size_override("font_size", size + 1)
+	if _journey_library_button:
+		_journey_library_button.add_theme_font_size_override("font_size", size + 1)
 	if _settings_button:
 		_settings_button.add_theme_font_size_override("font_size", size + 1)
 	if _life_lab_button:
 		_life_lab_button.add_theme_font_size_override("font_size", size + 1)
+	_apply_responsive_layout()
 
 func _update_visuals() -> void:
 	if not _title:
@@ -565,6 +607,7 @@ func _update_visuals() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED and _glow:
 		_glow.position = get_viewport_rect().size / 2.0 - _glow.size / 2.0
+		_apply_responsive_layout()
 		var viewport_size := get_viewport_rect().size
 		for particle in _particles:
 			particle.position.x = fposmod(float(particle.position.x), maxf(1.0, viewport_size.x))

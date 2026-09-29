@@ -6,6 +6,7 @@ const RUNTIME_TUNING := preload("res://scripts/domain/DeveloperRuntimeTuning.gd"
 func _is_headless() -> bool:
 	return DisplayServer.get_name() == "headless"
 
+
 func _ready() -> void:
 	_run.call_deferred()
 
@@ -52,6 +53,7 @@ func _run() -> void:
 
 	var failures: Array[String] = []
 	_check_developer_reply_tuning(world, failures)
+	await _expect_compact_scene_layout(failures)
 	var send_button := world.get("_send_button") as Button
 	var chat_input := world.get("_chat_input") as LineEdit
 	var ling_button := world.get("_ling_button") as Button
@@ -61,9 +63,24 @@ func _run() -> void:
 	var message_views: Dictionary = world.get("_message_views")
 	var sidebar := world.get("_sidebar") as ScrollContainer
 	var portrait_rig := world.get("_portrait_rig") as Control
+	var utility_rail := world.get("_utility_rail") as HBoxContainer
+	var chat_area := world.get("_chat_area") as VBoxContainer
+	var viewport_rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+	if not is_instance_valid(chat_area) or not chat_area.is_inside_tree() or not viewport_rect.encloses(chat_area.get_global_rect()):
+		failures.append("视觉小说式对话层没有完整显示在视口内")
+	if not is_instance_valid(chat_input) or not chat_input.is_inside_tree() or not viewport_rect.encloses(chat_input.get_global_rect()):
+		failures.append("对话输入框没有完整显示在视口内")
+	if not is_instance_valid(utility_rail) or not utility_rail.is_inside_tree() or utility_rail.get_global_rect().end.x > viewport_rect.end.x - 12.0:
+		failures.append("工具栏右侧入口被视口边缘裁切")
+	if (
+		viewport_rect.size.x > 940.0
+		and is_instance_valid(chat_area)
+		and is_instance_valid(portrait_rig)
+		and chat_area.get_global_rect().intersects(portrait_rig.get_global_rect())
+	):
+		failures.append("宽屏对话阅读区与角色舞台重叠")
 	chat_input.text = "输入光标位置测试"
 	chat_input.caret_column = 4
-	chat_input.grab_focus()
 	await get_tree().process_frame
 	var widgets: Dictionary = world.get("_stat_widgets")
 	if send_button.disabled or ling_button.disabled or not chat_input.editable:
@@ -112,20 +129,20 @@ func _run() -> void:
 	var ambient_meta := ambient_view.get("meta") as Label
 	if not is_instance_valid(ambient_meta) or "小奈 →" not in ambient_meta.text or "小玲" not in ambient_meta.text:
 		failures.append("后台互聊消息没有显示说话者和收件人")
+	if sidebar.visible:
+		failures.append("状态抽屉默认不应常驻显示")
+	var status_toggle := world.get("_status_toggle_button") as Button
+	if not is_instance_valid(status_toggle):
+		failures.append("状态抽屉入口未创建")
+	else:
+		status_toggle.pressed.emit()
+		await get_tree().process_frame
+		if not sidebar.visible or sidebar.size.x < 260.0:
+			failures.append("状态抽屉打开后尺寸异常")
+		status_toggle.pressed.emit()
+		await get_tree().process_frame
 		if sidebar.visible:
-			failures.append("状态抽屉默认不应常驻显示")
-		var status_toggle := world.get("_status_toggle_button") as Button
-		if not is_instance_valid(status_toggle):
-			failures.append("状态抽屉入口未创建")
-		else:
-			status_toggle.pressed.emit()
-			await get_tree().process_frame
-			if not sidebar.visible or sidebar.size.x < 260.0:
-				failures.append("状态抽屉打开后尺寸异常")
-			status_toggle.pressed.emit()
-			await get_tree().process_frame
-			if sidebar.visible:
-				failures.append("状态抽屉关闭失败")
+			failures.append("状态抽屉关闭失败")
 	if not is_instance_valid(portrait_rig):
 		failures.append("角色表现层未创建")
 	else:
@@ -156,12 +173,12 @@ func _run() -> void:
 			failures.append("服药后着床倾向仍显示伪精确百分比")
 
 	var screenshot_path := "user://gameworld_waiting_ui.png"
-	var image := get_viewport().get_texture().get_image()
-	if image == null or image.is_empty() or image.save_png(screenshot_path) != OK:
-		if not _is_headless():
+	if _is_headless():
+		print("GAMEWORLD_UI_RENDER_CHECK headless: 截图跳过")
+	else:
+		var image := get_viewport().get_texture().get_image()
+		if image == null or image.is_empty() or image.save_png(screenshot_path) != OK:
 			failures.append("UI 截图保存失败")
-		else:
-			print("GAMEWORLD_UI_RENDER_CHECK headless: 截图跳过")
 
 	var settings_panel := world.get("_settings") as Control
 	if not is_instance_valid(settings_panel):
@@ -208,16 +225,13 @@ func _run() -> void:
 			for _frame in 4:
 				await get_tree().process_frame
 		var settings_screenshot_path := "user://ambient_settings_ui.png"
-		var settings_image := get_viewport().get_texture().get_image()
-		if (
-			settings_image == null
-			or settings_image.is_empty()
-			or settings_image.save_png(settings_screenshot_path) != OK
-		):
-			if _is_headless():
-				print("GAMEWORLD_UI_RENDER_CHECK headless: 设置页截图跳过")
-			else:
+		if _is_headless():
+			print("GAMEWORLD_UI_RENDER_CHECK headless: 设置页截图跳过")
+		else:
+			var settings_image := get_viewport().get_texture().get_image()
+			if settings_image == null or settings_image.is_empty() or settings_image.save_png(settings_screenshot_path) != OK:
 				failures.append("后台生活设置截图保存失败")
+
 	var archive_button := world.get("_archive_button") as Button
 	var archive_panel := world.get("_archive_panel") as Control
 	if not is_instance_valid(archive_button) or not is_instance_valid(archive_panel):
@@ -240,12 +254,13 @@ func _run() -> void:
 		):
 			failures.append("聊天归档筛选控件不完整")
 		var archive_screenshot_path := "user://conversation_archive_ui.png"
-		var archive_image := get_viewport().get_texture().get_image()
-		if archive_image == null or archive_image.is_empty() or archive_image.save_png(archive_screenshot_path) != OK:
-			if _is_headless():
-				print("GAMEWORLD_UI_RENDER_CHECK headless: 归档截图跳过")
-			else:
+		if _is_headless():
+			print("GAMEWORLD_UI_RENDER_CHECK headless: 归档截图跳过")
+		else:
+			var archive_image := get_viewport().get_texture().get_image()
+			if archive_image == null or archive_image.is_empty() or archive_image.save_png(archive_screenshot_path) != OK:
 				failures.append("聊天归档界面截图保存失败")
+
 	if failures.is_empty():
 		print("GAMEWORLD_UI_RENDER_CHECK passed screenshot=", ProjectSettings.globalize_path(screenshot_path))
 		await _finish(world, 0)
@@ -253,6 +268,50 @@ func _run() -> void:
 	for failure in failures:
 		printerr("GAMEWORLD_UI_RENDER_CHECK failure=", failure)
 	await _finish(world, 1)
+
+func _expect_compact_scene_layout(failures: Array[String]) -> void:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(600, 600)
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	get_tree().root.add_child(viewport)
+	var world := GAME_WORLD_SCENE.instantiate() as Control
+	world.set("_suppress_exit_persistence", true)
+	world.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	viewport.add_child(world)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	world.call("_apply_responsive_layout")
+	await get_tree().process_frame
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(viewport.size))
+	var shell := world.get("_main_layout") as Control
+	var shell_origin := shell.get_global_rect().position if is_instance_valid(shell) else Vector2.ZERO
+	var utility_rail := world.get("_utility_rail") as Control
+	var chat_area := world.get("_chat_area") as Control
+	var chat_input := world.get("_chat_input") as Control
+	var stage := world.get("_stage_column") as Control
+	for entry in [
+		[utility_rail, "紧凑工具栏"],
+		[chat_area, "紧凑对话层"],
+		[chat_input, "紧凑输入框"],
+		[stage, "紧凑角色舞台"],
+	]:
+		var control := entry[0] as Control
+		var rect := Rect2()
+		if is_instance_valid(control):
+			var global_rect := control.get_global_rect()
+			rect = Rect2(global_rect.position - shell_origin, global_rect.size)
+		if not is_instance_valid(control) or not viewport_rect.encloses(rect):
+			failures.append("%s超出 600×600 视口：%s" % [str(entry[1]), rect])
+	if is_instance_valid(chat_area) and is_instance_valid(stage):
+		var chat_rect := chat_area.get_global_rect()
+		chat_rect.position -= shell_origin
+		var stage_rect := stage.get_global_rect()
+		stage_rect.position -= shell_origin
+		if chat_rect.intersects(stage_rect):
+			failures.append("紧凑对话层与角色舞台重叠")
+	world.free()
+	viewport.free()
+
 
 func _finish(world: Node, exit_code: int) -> void:
 	if is_instance_valid(world):

@@ -428,7 +428,9 @@ func _build_nav(parent: Control) -> void:
 	_utility_rail = HBoxContainer.new()
 	_utility_rail.name = "UtilityRail"
 	_utility_rail.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_utility_rail.offset_left = -326.0
+	# 八个 38px 线性图标加间距的真实最小宽度约为 339px。
+	# 预留完整宽度，避免最后的“返回主菜单”按钮被右边缘裁切。
+	_utility_rail.offset_left = -359.0
 	_utility_rail.offset_top = 20.0
 	_utility_rail.offset_right = -20.0
 	_utility_rail.offset_bottom = 60.0
@@ -512,6 +514,7 @@ func _build_chat_area(parent: Control) -> void:
 	_chat_area.offset_top = -344.0
 	_chat_area.offset_bottom = -28.0
 	_chat_area.add_theme_constant_override("separation", 0)
+	parent.add_child(_chat_area)
 	var conversation_plate := PanelContainer.new()
 	conversation_plate.name = "ConversationPlate"
 	conversation_plate.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2691,8 +2694,9 @@ func _apply_responsive_layout() -> void:
 		_stage_column.offset_right = -22.0
 		_stage_column.offset_bottom = -118.0
 		_stage_portrait_holder.custom_minimum_size = Vector2(0, 330)
-		_chat_area.offset_left = -390.0
-		_chat_area.offset_right = 390.0
+		# 宽屏时让阅读区停在角色舞台左侧，避免视觉小说文本与角色身份牌相互遮挡。
+		_chat_area.offset_left = -548.0
+		_chat_area.offset_right = 220.0
 		_chat_area.offset_top = -344.0
 		_chat_area.offset_bottom = -28.0
 		_sidebar.offset_left = -350.0
@@ -2701,10 +2705,12 @@ func _apply_responsive_layout() -> void:
 		_sidebar.offset_bottom = -86.0
 		_log_bar.visible = true
 	if narrow:
-		_stage_column.offset_left = width * 0.5 - 150.0
-		_stage_column.offset_right = width * 0.5 + 150.0
-		_stage_column.offset_top = -470.0
-		_stage_column.offset_bottom = -210.0
+		# StageColumn 保持右下锚点；窄屏时先换算为相对偏移，
+		# 再让其 305px 最小高度恰好止于对话阅读区上方。
+		_stage_column.offset_left = -width * 0.5 - 150.0
+		_stage_column.offset_right = -width * 0.5 + 150.0
+		_stage_column.offset_top = -530.0
+		_stage_column.offset_bottom = -225.0
 		_stage_portrait_holder.custom_minimum_size = Vector2(0, 210)
 		_chat_area.offset_left = -width * 0.5 + 12.0
 		_chat_area.offset_right = width * 0.5 - 12.0

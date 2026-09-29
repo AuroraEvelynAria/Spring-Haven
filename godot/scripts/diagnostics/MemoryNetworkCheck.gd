@@ -16,6 +16,10 @@ func _run() -> void:
 	if not is_instance_valid(canvas):
 		_finish(2, "找不到记忆网络画布")
 		return
+	var detail_panel := panel.get("_detail_panel") as Control
+	if not is_instance_valid(detail_panel) or detail_panel.visible:
+		_finish(10, "心织详情卡默认不应显示")
+		return
 	var graph := {
 		"nodes": [
 			_node("memory-tea", "雨天的桂花茶", "ling", 0.88, ["桂花热茶", "雨天"]),
@@ -39,6 +43,10 @@ func _run() -> void:
 	var selected: Array[Dictionary] = []
 	canvas.node_selected.connect(func(node: Dictionary): selected.append(node))
 	canvas.select_node_by_id("memory-tea", false)
+	await get_tree().process_frame
+	if not detail_panel.visible:
+		_finish(11, "选择心织节点后没有显示详情卡")
+		return
 	# 严格历史快照:未来节点不可被程序选择或鼠标命中。
 	canvas.set_time_cursor(-1.0)
 	var future_node := _node("memory-future", "未来的约定", "ling", 0.6, ["未来"])
@@ -65,20 +73,20 @@ func _run() -> void:
 	if canvas.size.x < 300.0 or canvas.size.y < 260.0:
 		_finish(4, "记忆网络画布尺寸异常：%s" % canvas.size)
 		return
-	var viewport := get_viewport()
-	var screenshot := viewport.get_texture().get_image()
 	var screenshot_path := "user://memory-network-check.png"
-	if screenshot == null or screenshot.is_empty():
-		if DisplayServer.get_name() != "headless":
+	if DisplayServer.get_name() == "headless":
+		print("MEMORY_NETWORK_CHECK headless: 截图跳过")
+	else:
+		var screenshot := get_viewport().get_texture().get_image()
+		if screenshot == null or screenshot.is_empty():
 			_finish(5, "记忆网络画面输出为空")
 			return
-		print("MEMORY_NETWORK_CHECK headless: 截图跳过")
-	elif screenshot.get_width() < 640 or screenshot.get_height() < 360:
-		_finish(5, "记忆网络画面尺寸异常")
-		return
-	elif screenshot.save_png(screenshot_path) != OK:
-		_finish(6, "无法保存记忆网络诊断截图")
-		return
+		if screenshot.get_width() < 640 or screenshot.get_height() < 360:
+			_finish(5, "记忆网络画面尺寸异常")
+			return
+		if screenshot.save_png(screenshot_path) != OK:
+			_finish(6, "无法保存记忆网络诊断截图")
+			return
 	print("MEMORY_NETWORK_CHECK=PASS nodes=3 edges=1 screenshot=%s" % ProjectSettings.globalize_path(screenshot_path))
 	_finish(0, "")
 
