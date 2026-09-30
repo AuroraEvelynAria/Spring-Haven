@@ -401,10 +401,21 @@ func _request_close_panel() -> void:
 	if _provider.is_write_in_flight():
 		_provider.warn_write_in_flight()
 		return
-	if _advanced.has_unsaved_changes() or _knowledge.has_unsaved_changes() or _provider.has_unsaved_changes():
-		_developer_discard_dialog.popup_centered(Vector2i(460, 180))
+	# 点名哪些区块没保存:笼统的"有未保存修改"让人不知道丢的是什么(外部测试反馈)
+	var pending: Array[String] = []
+	if _provider.has_unsaved_changes():
+		pending.append("模型连接")
+	if _knowledge.has_unsaved_changes():
+		pending.append("知识库")
+	if _advanced.has_unsaved_changes():
+		pending.append("运行参数 / 生活 / 角色数值")
+	if pending.is_empty():
+		close_panel()
 		return
-	close_panel()
+	_developer_discard_dialog.dialog_text = (
+		"以下设置尚未保存，关闭后会丢弃：%s。\n要保留请先在对应区块点「保存」，或选「继续编辑」。" % "、".join(pending)
+	)
+	_developer_discard_dialog.popup_centered(Vector2i(460, 200))
 
 func _on_scrim_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:

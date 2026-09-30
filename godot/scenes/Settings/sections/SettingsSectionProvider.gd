@@ -206,7 +206,7 @@ func _build_ai_provider_section(parent: VBoxContainer, data: Dictionary, subcate
 	var pages := {"chat": column}
 
 	var notice := Label.new()
-	notice.text = "支持 OpenAI、DeepSeek 与 LM Studio 等 OpenAI-compatible 接口。API Key 不会回显，并由 Windows 当前用户加密保存。"
+	notice.text = "支持 OpenAI、DeepSeek 与 LM Studio 等 OpenAI-compatible 接口。API Key 不会回显，并由 Windows 当前用户加密保存。「测试连接」使用的始终是已保存的配置——修改后要先「保存并立即应用」再测试。"
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	notice.add_theme_font_size_override("font_size", 11)
 	notice.add_theme_color_override("font_color", Color(data.secondary, 0.96))
@@ -1311,11 +1311,15 @@ func _sync_provider_profile_buttons(capability: String) -> void:
 		or not bool(_capability_loaded_or_default(capability).get("saved_api_key_configured", false))
 	)
 	if is_instance_valid((controls as Dictionary).get("diagnose")):
-		((controls as Dictionary).diagnose as Button).disabled = (
+		var profile_diagnose := (controls as Dictionary).diagnose as Button
+		profile_diagnose.disabled = (
 			_provider_busy
 			or bool(_provider_profile_dirty.get(capability, false))
 			or not bool(_capability_loaded_or_default(capability).get("request_ready", false))
 		)
+		if bool(_provider_profile_dirty.get(capability, false)):
+			# 禁用必须带原因:测试者反馈过"灰按钮不知道要先保存"
+			profile_diagnose.tooltip_text = "有未保存的修改：先保存本区块，测试连接使用的始终是已保存的配置"
 
 
 func _on_provider_preset_selected(index: int) -> void:
@@ -1615,6 +1619,19 @@ func _set_provider_status(text: String, color: Color) -> void:
 	_provider_status.tooltip_text = text
 	_provider_status.add_theme_color_override("font_color", color)
 
+# 本地无鉴权服务(LM Studio 等)没有 Key 也应该能测:后端会如实报告真实错误。
+# 远程服务在保存前保持禁用——反正一定会以 401 失败,省一次注定失败的请求。
+func _diagnose_chat_ready() -> bool:
+	if bool(_provider_status_data.get("api_key_configured", false)):
+		return true
+	var saved_base_url := str(_provider_status_data.get("base_url", "")).to_lower()
+	return (
+		saved_base_url.begins_with("http://127.0.0.1")
+		or saved_base_url.begins_with("http://localhost")
+		or saved_base_url.begins_with("http://[::1]")
+	)
+
+
 func _sync_provider_buttons() -> void:
 	if is_instance_valid(_provider_save_button):
 		_provider_save_button.disabled = _provider_busy or not _provider_dirty
@@ -1627,8 +1644,17 @@ func _sync_provider_buttons() -> void:
 		_provider_diagnose_button.disabled = (
 			_provider_busy
 			or _provider_dirty
-			or not bool(_provider_status_data.get("api_key_configured", false))
+			or not _diagnose_chat_ready()
 		)
+		# 禁用必须带原因,否则玩家不知道该先做什么(外部测试反馈)
+		if _provider_busy:
+			_provider_diagnose_button.tooltip_text = "正在诊断中…"
+		elif _provider_dirty:
+			_provider_diagnose_button.tooltip_text = "有未保存的修改：先点「保存并立即应用」，测试连接使用的始终是已保存的配置"
+		elif not _diagnose_chat_ready():
+			_provider_diagnose_button.tooltip_text = "尚未配置 Key：填好 Key 并保存后再测试（本地无鉴权服务如 LM Studio 无需 Key，保存地址后即可测试）"
+		else:
+			_provider_diagnose_button.tooltip_text = "发送最小请求，检查模型、代理、延迟与令牌统计"
 	_sync_provider_proxy_controls()
 	for capability in _provider_fallback_controls:
 		var controls = _provider_fallback_controls.get(capability, {})
