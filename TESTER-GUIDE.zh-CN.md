@@ -24,10 +24,14 @@
 
 ```powershell
 git clone https://github.com/AuroraEvelynAria/Spring-Haven.git
-cd Spring-Haven\companion-core
+cd Spring-Haven
+git switch restore/dashboard-ui
+cd companion-core
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
+
+> **别跳过 `git switch`**：`main` 分支是旧基线，最新测试内容都在 `restore/dashboard-ui` 分支上。
 
 然后打开游戏（二选一）：
 
