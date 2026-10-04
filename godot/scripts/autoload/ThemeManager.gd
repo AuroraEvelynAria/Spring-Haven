@@ -99,7 +99,12 @@ func _apply_theme_resource(data: Dictionary) -> void:
 	theme.set_stylebox("normal", "Button", button_normal)
 	theme.set_stylebox("hover", "Button", button_hover)
 	theme.set_stylebox("pressed", "Button", button_pressed)
-	theme.set_stylebox("focus", "Button", button_hover)
+	# 焦点框必须隐形:Godot 在鼠标点击后也会保留焦点,若 focus 样式可见,
+	# 每个点过的按钮都会挂着一个描边框直到点别处——是"网页感"的最大来源。
+	# 悬停/按压样式已足够给鼠标反馈;LineEdit 例外,文本输入需要可见焦点。
+	var no_focus := StyleBoxEmpty.new()
+	for focus_type in ["Button", "OptionButton", "CheckBox", "CheckButton", "MenuButton"]:
+		theme.set_stylebox("focus", focus_type, no_focus)
 	theme.set_stylebox("normal", "LineEdit", _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.12), 22, 16, 9))
 	theme.set_stylebox("focus", "LineEdit", _style(Color(1, 1, 1, 0.08), primary, 22, 16, 9))
 	theme.set_stylebox("normal", "OptionButton", _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.12), 10, 10, 6))

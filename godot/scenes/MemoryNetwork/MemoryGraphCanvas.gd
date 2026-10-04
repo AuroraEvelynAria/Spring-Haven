@@ -277,9 +277,11 @@ func set_palette(theme_data: Dictionary) -> void:
 	var text := Color(str(theme_data.get("text", "#F2E9DF")))
 	var secondary := Color(str(theme_data.get("secondary", "#A79B90")))
 	_palette = {
-		# 图区必须是独立的一层表面。浅色主题下只压 0.025 时它与面板几乎同色,
-		# 节点像浮在白纸上的淡点 —— 这是原先最刺眼的问题之一。
-		"background": background.darkened(0.12) if bool(theme_data.get("is_dark", true)) else background.darkened(0.07),
+		# 图区必须是独立的一层表面。完全同色时节点像浮在白纸上;但浅色主题
+		# 压深超过 ~0.04 后,大面积灰会在纯白面板旁边读成"发黄的脏白"
+		# (实测 0.07 → #EDEDED 被用户报告为偏黄),折中取 0.035:
+		# 保留与面板的层级差,整体仍是干净的近白。
+		"background": background.darkened(0.12) if bool(theme_data.get("is_dark", true)) else background.darkened(0.035),
 		"grid": Color(text, 0.045),
 		"edge": Color(secondary, 0.72),
 		"text": text,
