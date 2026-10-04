@@ -283,9 +283,18 @@ func _build_interface() -> void:
 	for side in ["left", "right", "top", "bottom"]:
 		detail_margin.add_theme_constant_override("margin_%s" % side, 14)
 	_detail_panel.add_child(detail_margin)
+	# 详情卡内容包一层滚动:标题/统计/遗忘曲线/正文/关联列表的最小高度会无上界
+	# 地叠起来(实测 700+),把 content VBox 总 min 高撑过 720 视口,状态行与
+	# 章节钉被裁出窗口。卡内滚动让整卡 min 高度有界,超出的部分滚着看。
+	var detail_scroll := ScrollContainer.new()
+	detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	detail_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_margin.add_child(detail_scroll)
 	var detail := VBoxContainer.new()
 	detail.add_theme_constant_override("separation", 9)
-	detail_margin.add_child(detail)
+	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_scroll.add_child(detail)
 	# 窄屏在"画布聚焦"与"详情聚焦"之间切换,需要一个明确的返回图谱入口,
 	# 而不是把两块一上一下堆着让人自己分辨。
 	_detail_back_button = _icon_button("back", "返回图谱")
@@ -340,9 +349,11 @@ func _build_interface() -> void:
 	_detail_content = RichTextLabel.new()
 	_detail_content.bbcode_enabled = false
 	_detail_content.selection_enabled = true
-	_detail_content.fit_content = false
+	# fit_content + 卡内滚动:正文随内容自然长高,由 detail_scroll 统一滚动,
+	# 不再在自己的 120px 视口里内滚(嵌套滚动会抢滚轮、读长文像窥视孔)。
+	_detail_content.fit_content = true
+	_detail_content.scroll_active = false
 	_detail_content.custom_minimum_size = Vector2(0, 120)
-	_detail_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	for font_size_key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
 		_detail_content.add_theme_font_size_override(font_size_key, 13)
 	detail.add_child(_detail_content)
