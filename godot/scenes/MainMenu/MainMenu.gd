@@ -241,6 +241,14 @@ func _make_menu_button(text: String, filled: bool) -> Button:
 	button.add_theme_stylebox_override("normal", _menu_style(filled, false))
 	button.add_theme_stylebox_override("hover", _menu_style(filled, true))
 	button.add_theme_stylebox_override("pressed", _menu_style(false, true))
+	# disabled 也必须覆盖:点击进入游戏前会整体禁用按钮防连点,不覆盖的话
+	# 样式会跌回 Godot 默认主题的灰色小圆角方块(用户截图里的"web 灰盒")。
+	# 取 normal 造型整体降不透明度,保持药丸轮廓与阴影层级。
+	var disabled_style := _menu_style(filled, false)
+	disabled_style.bg_color = Color(disabled_style.bg_color, 0.45)
+	disabled_style.border_color = Color(disabled_style.border_color, 0.35)
+	disabled_style.shadow_color = Color(disabled_style.shadow_color, disabled_style.shadow_color.a * 0.5)
+	button.add_theme_stylebox_override("disabled", disabled_style)
 	button.mouse_entered.connect(func(): _scale_button(button, 1.04))
 	button.mouse_exited.connect(func(): _scale_button(button, 1.0))
 	return button

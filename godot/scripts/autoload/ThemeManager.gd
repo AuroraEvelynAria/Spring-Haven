@@ -99,6 +99,9 @@ func _apply_theme_resource(data: Dictionary) -> void:
 	theme.set_stylebox("normal", "Button", button_normal)
 	theme.set_stylebox("hover", "Button", button_hover)
 	theme.set_stylebox("pressed", "Button", button_pressed)
+	# disabled 不覆盖会跌回默认主题的灰色方块,任何被禁用的按钮都会突兀地
+	# 变成"web 灰盒";取 normal 同款造型再淡一档,安静地退到背景里。
+	theme.set_stylebox("disabled", "Button", _style(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.07), 18, 14, 7))
 	# 焦点框必须隐形:Godot 在鼠标点击后也会保留焦点,若 focus 样式可见,
 	# 每个点过的按钮都会挂着一个描边框直到点别处——是"网页感"的最大来源。
 	# 悬停/按压样式已足够给鼠标反馈;LineEdit 例外,文本输入需要可见焦点。
