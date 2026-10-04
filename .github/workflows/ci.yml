@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  privacy-guard:
+    # 远程兜底:本地 pre-commit 钩子(tools/git-hooks)被绕过或未启用时,
+    # 任何试图把 companion-core/user_data(真实记忆/私人 personas/密钥)
+    # 带进仓库的提交都在这里失败。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block user_data from the public repo
+        run: |
+          if git ls-files | grep -E '^companion-core/user_data/'; then
+            echo "::error::user_data files must never be tracked (privacy boundary 2026-10-05)"
+            exit 1
+          fi
+
   backend:
     # 凭据持久化依赖 Windows DPAPI,backend 测试必须在 Windows 上跑。
     runs-on: windows-latest

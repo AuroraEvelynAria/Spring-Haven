@@ -1,0 +1,13 @@
+#!/bin/sh
+# 隐私门卫:companion-core/user_data/(真实记忆库/私人 personas/DPAPI 密钥)绝不入库。
+# 背景:2026-10-05 用户定调——NSFW 私人记忆只允许存在于本地,公开仓库零容忍。
+# 启用(每个克隆执行一次):git config core.hooksPath tools/git-hooks
+# 兜底:绕过本钩子(--no-verify / 未启用钩子的克隆)由 CI 的 privacy-guard 拦截。
+if git diff --cached --name-only | grep -E '^companion-core/user_data/'; then
+	echo "" >&2
+	echo "[privacy-guard] 提交被拦截:暂存区包含 companion-core/user_data/ 下的文件。" >&2
+	echo "[privacy-guard] 真实记忆、私人 personas 与密钥只允许留在本地(gitignored)。" >&2
+	echo "[privacy-guard] 如为误加:git restore --staged <file>;请不要用 git add -f 强加。" >&2
+	exit 1
+fi
+exit 0

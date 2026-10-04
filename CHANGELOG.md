@@ -1,8 +1,11 @@
 # 变更日志 / Changelog
 
 本项目处于 **Alpha(预发布)** 阶段。`companion-core` 当前版本为 `0.1.0`
-(见 `companion-core/pyproject.toml`),**尚未打任何 git tag** —— 因此以下条目按
-开发时间倒序整理自提交历史,而非来自正式发布记录。
+(见 `companion-core/pyproject.toml`)。**2026-10-05 起以 git tag 标记版本**:
+首个发布 tag `v0.6.0`(= `76a9f31`,与游戏主菜单版本号一致,内容为记忆隔离
+P0/P1 + dashboard 正线 + 验收期三处 UI 修复,已通过 258 测试与实机验收)。
+此前的条目按开发时间倒序整理自提交历史;另有一组 `backup/<日期时间>/*`
+快照 tag 用于灾难恢复(2026-10-05 起随发布推送至 GitHub)。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
