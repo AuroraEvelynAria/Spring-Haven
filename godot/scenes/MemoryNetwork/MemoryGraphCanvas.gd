@@ -57,11 +57,18 @@ const HUB_DEGREE_SOFT_CAP := 7
 # 星座必须"活着":每个记忆节点按自己的相位缓慢呼吸(像沉在水下的光点),
 # 悬停/选中时一颗光脉沿连线从该节点流向邻居 —— 回想正在发生的可感知形态。
 # 节奏刻意放慢:5 秒一息,2.4 秒流完一条边,远看几乎静止,盯着看才觉察。
+# 深浅画布双档:白底会把柔光整个吃掉,浅色档改"水彩晕染"(压深色+高峰值
+# +节点微胀大),光脉换压深暖金 —— 奶白光点在白底上同样会隐身。
 const BREATH_PERIOD := 5.2
 const PULSE_PERIOD := 2.4
 const BREATH_HALO_ALPHA := 0.075
+const BREATH_LIGHT_FLOOR := 0.10
+const BREATH_LIGHT_PEAK := 0.26
+const BREATH_LIGHT_SWELL := 4.5
+const PULSE_LIGHT_GLOW := Color("#C9902E")
 
 var _breath_clock := 0.0
+var _light_canvas := false
 
 var _nodes: Array[Dictionary] = []
 var _edges: Array[Dictionary] = []
@@ -297,6 +304,8 @@ func set_palette(theme_data: Dictionary) -> void:
 		"text": text,
 		"muted": secondary,
 	}
+	# 呼吸/光脉按深浅画布取双档:浅色(含 custom 白底)用水彩晕染参数
+	_light_canvas = not bool(theme_data.get("is_dark", true))
 	queue_redraw()
 
 
@@ -839,8 +848,13 @@ func _draw() -> void:
 			var travel := fmod(_breath_clock / PULSE_PERIOD + edge_phase, 1.0)
 			var pulse_pos := from_pos.lerp(to_pos, travel)
 			var pulse_alpha := 0.9 * lit_amount * focus_mul * dead_damp
-			draw_circle(pulse_pos, 2.6, Color(Color("#FFF2C5"), 0.62 * pulse_alpha))
-			draw_circle(pulse_pos, 1.1, Color(Color("#FFFDF2"), pulse_alpha))
+			if _light_canvas:
+				# 白底上奶白光点会隐身:压深的暖金外晕提供对比,白心保"光"感
+				draw_circle(pulse_pos, 3.2, Color(PULSE_LIGHT_GLOW, 0.55 * pulse_alpha))
+				draw_circle(pulse_pos, 1.5, Color(Color("#FFFDF2"), pulse_alpha))
+			else:
+				draw_circle(pulse_pos, 2.6, Color(Color("#FFF2C5"), 0.62 * pulse_alpha))
+				draw_circle(pulse_pos, 1.1, Color(Color("#FFFDF2"), pulse_alpha))
 		# ADR-015:谓词标签只在端点选中/悬停/聚焦时绘制(避免刷屏)
 		if is_claim_edge and lit_amount > 0.5 and (highlighted or hovered_endpoint or touches_focus):
 			var predicate := str(edge.get("predicate", ""))
@@ -893,15 +907,26 @@ func _draw() -> void:
 			elif hovered:
 				draw_circle(screen_position, radius + 4.0, Color(color, 0.16 * lit_amount * glow))
 			# 星空化·呼吸:节点底下先铺一层缓慢起伏的辉光。幽灵节点与聚焦
-			# 暗区不画(lit/in_focus 已收住范围);幅度刻意克制 —— 远看几乎
-			# 无感,盯住一颗才看到它在明灭,像沉在水下的星。
+			# 暗区不画(lit/in_focus 已收住范围)。深色画布用水下星点式微光;
+			# 浅色画布白底吃光,用水彩晕染(压深一档+峰值翻倍+节点微胀大),
+			# 否则浅色主题下完全看不出明灭(2026-10-06 用户实测反馈)。
+			var core_radius := radius
 			if lit_amount > 0.5 and in_focus:
 				var breath := _breath_amount(node_id)
-				var halo_alpha := (BREATH_HALO_ALPHA + BREATH_HALO_ALPHA * breath) * lit_amount * focus_mul
-				draw_circle(screen_position, radius + 2.5 + 3.0 * breath, Color(color, halo_alpha))
+				if _light_canvas:
+					var wash_alpha := (
+						(BREATH_LIGHT_FLOOR + (BREATH_LIGHT_PEAK - BREATH_LIGHT_FLOOR) * breath)
+						* lit_amount * focus_mul
+					)
+					var wash := Color(color.darkened(0.18), wash_alpha)
+					draw_circle(screen_position, radius + 3.0 + BREATH_LIGHT_SWELL * breath, wash)
+					core_radius = radius * (1.0 + 0.07 * breath)
+				else:
+					var halo_alpha := (BREATH_HALO_ALPHA + BREATH_HALO_ALPHA * breath) * lit_amount * focus_mul
+					draw_circle(screen_position, radius + 2.5 + 3.0 * breath, Color(color, halo_alpha))
 			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
 			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
-			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
+			draw_circle(screen_position, core_radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
 			if bool(node.get("always_active", false)) and lit_amount > 0.02 and in_focus:
 				draw_arc(screen_position, radius + 2.5, 0.0, TAU, 24, Color(Color("#FFF0A8"), 0.88 * lit_amount), 1.5, true)
 			# 二手传闻(heard_from)节点:右上角细线空心菱形标记
