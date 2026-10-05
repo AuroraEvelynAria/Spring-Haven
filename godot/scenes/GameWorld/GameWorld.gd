@@ -6,6 +6,7 @@ const MEMORY_NETWORK_SCENE := preload("res://scenes/MemoryNetwork/MemoryNetworkP
 const LIFE_REVIEW_SCRIPT := preload("res://scenes/LifeReview/LifeReviewPanel.gd")
 const HOUSE_EDITOR_SCRIPT := preload("res://scenes/HouseEditor/HouseLayoutEditor.gd")
 const PORTRAIT_RIG_SCENE := preload("res://scenes/Portrait/PortraitRig2D.tscn")
+const LIVE2D_RIG_SCRIPT := preload("res://scripts/ui/Live2DRig.gd")
 const EXPLORATION_SCENE_PATH := "res://scenes/Exploration/ExplorationWorld.tscn"
 const GLOW_SHADER := preload("res://shaders/glow.gdshader")
 const GROUND_FADE_SHADER := preload("res://shaders/ground_fade.gdshader")
@@ -691,7 +692,10 @@ func _build_sidebar(parent: BoxContainer) -> void:
 	_stage_shadow.offset_right = -34.0
 	_stage_shadow.offset_top = -24.0
 	_stage_portrait_holder.add_child(_stage_shadow)
-	_portrait_rig = PORTRAIT_RIG_SCENE.instantiate()
+	# 表现后端选择:gd_cubism 扩展与本地模型齐备(非 headless)时走 Live2D,
+	# 否则回退程序化分层立绘——两套实现同一调用面,GameWorld 其余逻辑无感
+	var live2d_rig: Control = LIVE2D_RIG_SCRIPT.create_for_role(_current_role)
+	_portrait_rig = live2d_rig if live2d_rig != null else PORTRAIT_RIG_SCENE.instantiate()
 	_portrait_rig.name = "ActivePortraitRig"
 	_portrait_rig.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_portrait_rig.offset_left = 14.0
