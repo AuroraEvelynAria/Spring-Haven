@@ -207,6 +207,15 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	# #11：背景底色/柔光晕/54 粒子的逐帧动画已迁至 BackgroundFX 子层，
 	# 本节点不再每帧 queue_redraw()，界面刷新与背景动画解耦。
+	# Live2D 立绘挂起：任一全屏面板盖在上方时停掉它的重绘与逐帧处理。
+	if _portrait_rig != null and _portrait_rig.has_method("set_active"):
+		_portrait_rig.call("set_active", not (
+			_memory_network_panel.visible
+			or _archive_panel.visible
+			or _settings.visible
+			or _life_review_panel.visible
+			or _house_editor.visible
+		))
 	_life_mini_elapsed += delta
 	if _life_mini_elapsed >= 10.0:
 		_life_mini_elapsed = 0.0

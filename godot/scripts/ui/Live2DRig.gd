@@ -82,6 +82,14 @@ static func _role_model_map() -> Dictionary:
 var role_id := ""
 var model_path := ""
 
+# 渲染结构:Control → SubViewportContainer → SubViewport → 模型。
+# v0.9 起 gd_cubism 给部件网格设 z_index=renderOrder(可达上百),直接挂在
+# Control 下会穿透后续 UI(实测压住心织面板蒙纱);纹理化后天然被 UI 覆盖,
+# 且暂停渲染只需 UPDATE_DISABLED + process_mode——面板/3D 模式下零 GPU 成本。
+var _viewport_container: SubViewportContainer
+var _viewport: SubViewport
+var _active := true
+
 # GDCubismUserModel 与参数对象一律以 Object 动态持有（无静态类型依赖）
 var _model: Object = null
 var _mouth_param: Object = null
@@ -99,11 +107,48 @@ var _tts_mouth_level := -1.0
 
 
 func _ready() -> void:
+	clip_contents = true
+	_viewport_container = SubViewportContainer.new()
+	_viewport_container.stretch = true
+	_viewport_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_viewport_container)
+	_viewport = SubViewport.new()
+	_viewport.transparent_bg = true
+	_viewport_container.add_child(_viewport)
 	if model_path.is_empty():
 		return
 	_expression_map = _load_expression_map()
 	_build_model()
 	resized.connect(_fit_model)
+
+
+## 挂起/恢复渲染:全屏面板盖在上方或 3D 模式时由 GameWorld 调 false,
+## 立绘槽对全年龄内容也随时可关。挂起 = 停止重绘 + 停止模型与 Effect 的 _process。
+func set_active(active: bool) -> void:
+	if _active == active:
+		return
+	_active = active
+	_update_render_state()
+
+
+func _update_render_state() -> void:
+	if _viewport == null or _viewport_container == null:
+		return
+	var should_render: bool = _active and is_visible_in_tree()
+	_viewport_container.visible = should_render
+	_viewport.render_target_update_mode = (
+		SubViewport.UPDATE_ALWAYS if should_render else SubViewport.UPDATE_DISABLED
+	)
+	if _model != null:
+		_model.process_mode = (
+			Node.PROCESS_MODE_INHERIT if should_render else Node.PROCESS_MODE_DISABLED
+		)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_update_render_state()
 
 
 func _build_model() -> void:
@@ -113,7 +158,7 @@ func _build_model() -> void:
 	_model = ClassDB.instantiate("GDCubismUserModel")
 	if _model == null:
 		return
-	add_child(_model)
+	_viewport.add_child(_model)
 	_model.assets = model_path
 	# 呼吸/眨眼/视线：框架自带 Effect，作为模型子节点接入
 	for effect_type in ["GDCubismEffectBreath", "GDCubismEffectEyeBlink", "GDCubismEffectTargetPoint"]:
@@ -163,11 +208,10 @@ func _on_motion_finished() -> void:
 
 
 func _process(delta: float) -> void:
-	if _model == null:
+	if _model == null or not _active or not is_visible_in_tree():
 		return
-	if is_visible_in_tree():
-		_update_mouth(delta)
-		_follow_mouse()
+	_update_mouth(delta)
+	_follow_mouse()
 
 
 func _update_mouth(delta: float) -> void:
