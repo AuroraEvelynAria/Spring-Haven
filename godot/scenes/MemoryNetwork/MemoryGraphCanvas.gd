@@ -53,6 +53,16 @@ const HARD_BOUNDARY := 4000.0
 ## 度数软上限(Obsidian「毛线球」对策):连接数超过它,相关弹簧变软
 const HUB_DEGREE_SOFT_CAP := 7
 
+# ── 星空化·呼吸与光脉 ─────────────────────────────────────────
+# 星座必须"活着":每个记忆节点按自己的相位缓慢呼吸(像沉在水下的光点),
+# 悬停/选中时一颗光脉沿连线从该节点流向邻居 —— 回想正在发生的可感知形态。
+# 节奏刻意放慢:5 秒一息,2.4 秒流完一条边,远看几乎静止,盯着看才觉察。
+const BREATH_PERIOD := 5.2
+const PULSE_PERIOD := 2.4
+const BREATH_HALO_ALPHA := 0.075
+
+var _breath_clock := 0.0
+
 var _nodes: Array[Dictionary] = []
 var _edges: Array[Dictionary] = []
 var _node_by_id: Dictionary = {}
@@ -344,6 +354,17 @@ func _wake_physics() -> void:
 	_sim_alpha = 1.0
 
 
+# 星空化·呼吸相位:由节点 id 稳定散列 —— 同一节点每次打开相位一致,
+# 不同节点彼此错开,整张图像一片缓慢明灭的星野而不是整齐的闪烁。
+func _breath_phase(node_id: String) -> float:
+	return fmod(float(node_id.hash() % 997) / 997.0, 1.0) * TAU
+
+
+# 当前呼吸量 [0,1]:慢正弦,峰值即节点最"亮"的一刻。
+func _breath_amount(node_id: String) -> float:
+	return 0.5 + 0.5 * sin(_breath_clock * TAU / BREATH_PERIOD + _breath_phase(node_id))
+
+
 func _is_ghost_node(node: Dictionary) -> bool:
 	return _ghost_target_for_node(node) >= 0.5
 
@@ -582,7 +603,12 @@ func _process(delta: float) -> void:
 	if _sim_alpha > SIM_ALPHA_MIN or _dragged_id != "":
 		_simulate(delta)
 		animating = true
-	if animating:
+	# 星空化:画布可见时推进呼吸时钟,星座永远轻微起伏;不可见时不重绘
+	var breathing := false
+	if is_visible_in_tree():
+		_breath_clock += delta
+		breathing = true
+	if animating or breathing:
 		queue_redraw()
 
 
@@ -802,6 +828,19 @@ func _draw() -> void:
 			edge_width,
 			true
 		)
+		# 星空化·光脉:悬停/选中节点的连线上,一颗光点从该节点流向邻居,
+		# 相位按边散开不齐步 —— "这段记忆正在被回忆"的可感知形态。
+		# 失效主张(dead_damp)上的光脉同步压暗;幽灵边被 lit_amount 条件挡住。
+		if highlighted or hovered_endpoint:
+			var active_is_source := source == _selected_id or source == _hovered_id
+			var from_pos := _world_to_screen(_positions[source if active_is_source else target])
+			var to_pos := _world_to_screen(_positions[target if active_is_source else source])
+			var edge_phase := fmod(float(str(edge.get("link_id", "")).hash() % 89) / 89.0, 1.0)
+			var travel := fmod(_breath_clock / PULSE_PERIOD + edge_phase, 1.0)
+			var pulse_pos := from_pos.lerp(to_pos, travel)
+			var pulse_alpha := 0.9 * lit_amount * focus_mul * dead_damp
+			draw_circle(pulse_pos, 2.6, Color(Color("#FFF2C5"), 0.62 * pulse_alpha))
+			draw_circle(pulse_pos, 1.1, Color(Color("#FFFDF2"), pulse_alpha))
 		# ADR-015:谓词标签只在端点选中/悬停/聚焦时绘制(避免刷屏)
 		if is_claim_edge and lit_amount > 0.5 and (highlighted or hovered_endpoint or touches_focus):
 			var predicate := str(edge.get("predicate", ""))
@@ -853,6 +892,13 @@ func _draw() -> void:
 				draw_arc(screen_position, radius + 3.5, 0.0, TAU, 28, Color(Color("#FFF2C5"), lit_amount), 1.8, true)
 			elif hovered:
 				draw_circle(screen_position, radius + 4.0, Color(color, 0.16 * lit_amount * glow))
+			# 星空化·呼吸:节点底下先铺一层缓慢起伏的辉光。幽灵节点与聚焦
+			# 暗区不画(lit/in_focus 已收住范围);幅度刻意克制 —— 远看几乎
+			# 无感,盯住一颗才看到它在明灭,像沉在水下的星。
+			if lit_amount > 0.5 and in_focus:
+				var breath := _breath_amount(node_id)
+				var halo_alpha := (BREATH_HALO_ALPHA + BREATH_HALO_ALPHA * breath) * lit_amount * focus_mul
+				draw_circle(screen_position, radius + 2.5 + 3.0 * breath, Color(color, halo_alpha))
 			# ADR-010:游标之后诞生的记忆 = 低亮度"幽灵";亮度经动画量平滑过渡
 			var base_alpha := 0.88 if bool(node.get("enabled", true)) else 0.38
 			draw_circle(screen_position, radius, Color(color, lerpf(base_alpha, GHOST_NODE_ALPHA, ghost_amount) * focus_mul))
