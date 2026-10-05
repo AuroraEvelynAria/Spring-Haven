@@ -31,3 +31,6 @@ issue_maint.py
 # 本地素材源（Blender 工程，不发布）
 _source_assets/
 reasonix.toml
+
+# Live2D spike (gd_cubism MIT shaders live with the gitignored extension binary)
+godot/addons/gd_cubism/
