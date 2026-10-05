@@ -270,11 +270,13 @@ The result is written to `build/SpringHavenPlaytest/` — the Godot game plus an
 
 ### Implementation details
 
+> Deep-dive docs are a mix of English and Chinese — either language works fine for AI assistants.
+
 - [Companion Core](companion-core/README.md) — the local runtime, provider layer and content policy
-- [Architecture](godot/docs/CompanionCoreArchitecture.md) — how the client and the runtime talk
-- [Heartloom](godot/docs/HeartloomMemory.md) — the memory engine
-- [Journey saves](godot/docs/JourneySaves.md) — save-slot behavior and recovery boundaries
-- [Presentation architecture](godot/docs/PresentationArchitecture.md) — one character core across 2D/Live2D/3D
+- [Architecture](godot/docs/CompanionCoreArchitecture.md) *(Chinese)* — how the client and the runtime talk
+- [Heartloom](godot/docs/HeartloomMemory.md) *(Chinese)* — the memory engine
+- [Journey saves](godot/docs/JourneySaves.md) *(Chinese)* — save-slot behavior and recovery boundaries
+- [Presentation architecture](godot/docs/PresentationArchitecture.md) *(Chinese)* — one character core across 2D/Live2D/3D
 - [Voicebox integration](godot/docs/VoiceboxIntegration.md) — voice server setup and desktop-only limits
 
 ---

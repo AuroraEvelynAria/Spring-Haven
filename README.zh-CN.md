@@ -269,12 +269,14 @@ py -3.11 -m venv .venv
 
 ### 实现文档
 
-- [Companion Core](companion-core/README.md)——本地运行时、供应商层与内容策略
+> 深入文档中英文混排，语言已在条目后标注（对 AI 助手均无阅读障碍）。
+
+- [Companion Core](companion-core/README.md) *(English)*——本地运行时、供应商层与内容策略
 - [架构](godot/docs/CompanionCoreArchitecture.md)——客户端与运行时如何通信
 - [心织](godot/docs/HeartloomMemory.md)——记忆引擎
 - [旅程存档](godot/docs/JourneySaves.md)——存档槽行为与恢复边界
 - [表现层架构](godot/docs/PresentationArchitecture.md)——一套角色核心贯穿 2D/Live2D/3D
-- [Voicebox 集成](godot/docs/VoiceboxIntegration.md)——语音服务器配置与桌面端限制
+- [Voicebox 集成](godot/docs/VoiceboxIntegration.md) *(English)*——语音服务器配置与桌面端限制
 
 ---
 
