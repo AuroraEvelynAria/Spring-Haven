@@ -152,8 +152,9 @@ func _node(
 	}
 
 
-# 观测台形态:外框可以保留庭院氛围(遮罩半透),但图内容区与详情卡必须实心,
-# 否则节点、标签与连线会跟底下的 GameWorld 糊在一起——这正是改坏时截图的样子。
+# 隔离视图形态(2026-10-06 用户定调):遮罩与图内容区、详情卡全部实心——面板
+# 打开即与主界面完全隔离,不再保留半透明遮罩。实心断言防止"节点、标签与连线
+# 跟底下的 GameWorld 糊在一起"的旧形态回归(这正是改坏时截图的样子)。
 func _expect_observation_opacity(panel: Node) -> String:
 	var scrim := panel.get("_background") as ColorRect
 	var sheet := panel.get("_sheet") as Control
@@ -175,9 +176,9 @@ func _expect_observation_opacity(panel: Node) -> String:
 		return "详情卡衬底不够实心：%s" % detail_alpha
 	if sheet_alpha < 0.82:
 		return "观测台外框仍然过透：%s" % sheet_alpha
-	if scrim.color.a < 0.45 or scrim.color.a > 0.78:
-		return "最外层遮罩不再保留庭院氛围：%s" % scrim.color.a
-	print("MEMORY_NETWORK_CHECK 观测台不透明度: 遮罩=%s 外框=%s 图衬底=%s 详情卡=%s" % [
+	if scrim.color.a < 0.995:
+		return "隔离视图遮罩必须不透明：%s" % scrim.color.a
+	print("MEMORY_NETWORK_CHECK 隔离视图不透明度: 遮罩=%s 外框=%s 图衬底=%s 详情卡=%s" % [
 		scrim.color.a, sheet_alpha, plate_alpha, detail_alpha
 	])
 	return ""

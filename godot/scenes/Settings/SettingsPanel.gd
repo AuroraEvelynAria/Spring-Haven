@@ -124,7 +124,7 @@ func close_panel() -> void:
 func _build_shell() -> void:
 	_scrim = ColorRect.new()
 	_scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_scrim.color = Color(0, 0, 0, 0.58)
+	_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg)) # 隔离视图：实心主题底色
 	_scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_scrim.gui_input.connect(_on_scrim_input)
 	add_child(_scrim)
@@ -384,6 +384,7 @@ func _update_panel_size() -> void:
 		_panel.custom_minimum_size = Vector2(minf(960.0, viewport_size.x - 24.0), minf(720.0, viewport_size.y - 24.0))
 
 func _on_theme_changed(_data: Dictionary) -> void:
+	_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg))
 	_apply_panel_style()
 	if visible:
 		call_deferred("_rebuild_content_preserving_developer_draft")

@@ -57,7 +57,7 @@ func close_panel() -> void:
 func _build_shell() -> void:
 	_scrim = ColorRect.new()
 	_scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_scrim.color = Color(0, 0, 0, 0.58)
+	_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg)) # 隔离视图：实心主题底色
 	_scrim.gui_input.connect(_on_scrim_input)
 	add_child(_scrim)
 	var center := CenterContainer.new()
@@ -345,6 +345,8 @@ func _apply_colors(_data: Dictionary = {}) -> void:
 	if not is_instance_valid(_panel):
 		return
 	var data := ThemeMgr.get_current_theme_data()
+	if is_instance_valid(_scrim):
+		_scrim.color = Color(str(data.bg))
 	_panel.add_theme_stylebox_override("panel", _style(Color(data.bg, 0.98), Color(data.text, 0.14), 8, 0))
 
 

@@ -9,7 +9,9 @@ const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈"}
 const NARROW_WIDTH := 840.0
 # 观察台形态:外框保留庭院氛围,但图内容区与详情卡必须是实心的,
 # 否则节点、标签和连线会跟底下的 GameWorld 糊在一起。
-const SCRIM_ALPHA := 0.55
+# 2026-10-06 用户定调:全屏面板是"隔离视图"——打开即与主界面完全隔离,
+# 不再保留观测台时代的半透明遮罩(底下的主界面元素会透出来造成杂讯)。
+const SCRIM_ALPHA := 1.0
 const SHEET_ALPHA := 0.88
 const PLATE_ALPHA := 0.97
 const DETAIL_ALPHA := 0.96
