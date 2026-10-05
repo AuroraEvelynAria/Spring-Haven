@@ -14,6 +14,7 @@
     <img src="https://img.shields.io/badge/语言-Python_3.11-3776AB?style=flat-square&logo=python" alt="语言"/>
     <img src="https://img.shields.io/badge/许可证-MIT_&_CC--BY--NC-8B8B8B?style=flat-square" alt="许可证"/>
     <img src="https://img.shields.io/badge/无成人内容-是-4CAF50?style=flat-square" alt="无成人内容"/>
+    <img src="https://img.shields.io/badge/版本-v0.6.0-2E7D32?style=flat-square" alt="版本"/>
   </p>
   
   <p>
@@ -149,6 +150,7 @@ Companion Core（Python，自研、独立运行）
 ### ✅ Alpha（当前阶段）
 - 双角色人格、共享上下文与命名多存档旅程
 - 心织记忆：世界时间召回、实体-主张信念修订、混合检索 + 交叉编码器重排、夜/周/季巩固、PAD 心境，以及带时间游标的记忆网络
+- **活的心织星座**：Obsidian 式有机图谱——枢纽度数上限、标签常显、邻域聚焦；每段记忆按自己的相位呼吸，选中时有暖金光脉沿连线流过（v0.6.0）
 - 本地 RAG 知识库（按角色划分范围）
 - 生理需求、经期、真实天气、自主日程与主动消息
 - DeepSeek API 集成，缓存命中率 76%+
@@ -190,8 +192,8 @@ Companion Core（Python，自研、独立运行）
 
 ```bash
 # 克隆仓库
-git clone https://github.com/AuroraEvelynAria/Spring-Haven-Core.git
-cd Spring-Haven-Core
+git clone https://github.com/AuroraEvelynAria/Spring-Haven.git
+cd Spring-Haven
 
 # 配置 Python 后端
 cd companion-core
@@ -205,12 +207,14 @@ py -3.11 -m venv .venv
 ```
 
 > 🔐 模型 API Key 使用 Windows DPAPI 加密保护，保存后永远不会回传给游戏。玩家数据库、导入的知识、对话归档与密钥均不进入版本控制与发行包。
+>
+> 🧪 十五分钟从零跑起来：按 [TESTER-GUIDE.zh-CN.md](TESTER-GUIDE.zh-CN.md) 操作；也可以直接双击仓库根目录的「运行游戏.cmd」启动（Godot 不在默认位置时先设 `GODOT_BIN` 环境变量）。
 
 ## 🤝 参与贡献
 
 我们欢迎任何形式的贡献！春日庭院目前处于 **Alpha** 阶段，正在快速演进中。
 
-1. 查看 [Issues](https://github.com/AuroraEvelynAria/Spring-Haven-Core/issues) 中带 `good-first-issue` 标签的任务
+1. 查看 [Issues](https://github.com/AuroraEvelynAria/Spring-Haven/issues) 中带 `good-first-issue` 标签的任务
     
 2. 在 Issue 下留言，或提交新的 Issue 描述你的改动
     

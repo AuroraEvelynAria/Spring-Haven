@@ -14,6 +14,7 @@
     <img src="https://img.shields.io/badge/language-Python_3.11-3776AB?style=flat-square&logo=python" alt="Language"/>
     <img src="https://img.shields.io/badge/license-MIT_&_CC--BY--NC-8B8B8B?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/adult_content-none-4CAF50?style=flat-square" alt="No Adult Content"/>
+    <img src="https://img.shields.io/badge/version-v0.6.0-2E7D32?style=flat-square" alt="Version: v0.6.0"/>
   </p>
   
   <p>
@@ -149,6 +150,7 @@ To help you get started, Spring Haven includes two fully-realized example charac
 ### ✅ Alpha (Current)
 - Dual-character personas with shared context and named multi-journey saves
 - Heartloom memory: world-time recall, entity–claim belief revision, hybrid retrieval + cross-encoder rerank, nightly/weekly/seasonal consolidation, PAD mood, and an explorable memory network with a time cursor
+- **Living memory constellation**: the network renders as an Obsidian-style organic graph — hub degree caps, always-readable labels, neighborhood focus — and every memory breathes on its own phase while recall pulses flow along the links (v0.6.0)
 - Local RAG knowledge base with role scopes
 - Physiological needs, menstrual cycles, real weather, and autonomous routines & messages
 - DeepSeek API with 76%+ prompt cache hit rate
@@ -190,8 +192,8 @@ To help you get started, Spring Haven includes two fully-realized example charac
 
 ```bash
 # Clone the repository
-git clone https://github.com/AuroraEvelynAria/Spring-Haven-Core.git
-cd Spring-Haven-Core
+git clone https://github.com/AuroraEvelynAria/Spring-Haven.git
+cd Spring-Haven
 
 # Set up the Python backend
 cd companion-core
@@ -206,12 +208,14 @@ py -3.11 -m venv .venv
 ```
 
 > 🔐 Provider API keys are protected with Windows DPAPI and are never returned to the game after saving. Player databases, imported knowledge, conversation archives, and keys are excluded from version control and release builds.
+>
+> 🧪 From zero to playing in ~15 minutes: follow [TESTER-GUIDE.zh-CN.md](TESTER-GUIDE.zh-CN.md). On Windows you can also double-click `运行游戏.cmd` in the repo root to launch without opening the editor (set `GODOT_BIN` if Godot is not in its default location).
 
 ## 🤝 Contributing
 
 We welcome contributions! Spring Haven is currently in **Alpha** and actively evolving.
 
-1. Check [Issues](https://github.com/AuroraEvelynAria/Spring-Haven-Core/issues) for `good-first-issue` labels
+1. Check [Issues](https://github.com/AuroraEvelynAria/Spring-Haven/issues) for `good-first-issue` labels
     
 2. Comment on an issue or open a new one describing your change
     
