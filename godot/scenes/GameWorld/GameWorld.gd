@@ -297,9 +297,17 @@ func _build_season_overlay() -> void:
 func _refresh_season_overlay() -> void:
 	if not is_instance_valid(_season_tint):
 		return
+	# 四季染色只属于深色背景:6% 的橙色秋染在默认琥珀等深色主题上是氛围,
+	# 但叠在用户选定的近白背景(纯白/樱/薄荷)上就是肉眼可见的"白得发黄"
+	# ——(255,255,255) 被罩成 (254,249,245),且半透明面板会把暖底透上来。
+	# 背景色是用户的明确选择,氛围特效不得重新给它上色。
 	var month := int(Time.get_datetime_dict_from_system().get("month", 6))
 	var season := _season_for_month(month)
-	_season_tint.color = SEASON_TINTS.get(season, Color(0, 0, 0, 0))
+	var tint: Color = SEASON_TINTS.get(season, Color(0, 0, 0, 0))
+	var bg := Color(str(ThemeMgr.get_current_theme_data().get("bg", "#FFFFFF")))
+	if bg.get_luminance() >= 0.9:
+		tint.a = 0.0
+	_season_tint.color = tint
 
 func _season_for_month(month: int) -> String:
 	if month >= 3 and month <= 5:
@@ -2704,6 +2712,7 @@ func _apply_chat_input_theme(data: Dictionary) -> void:
 func _on_theme_changed(_data: Dictionary) -> void:
 	var data := ThemeMgr.get_current_theme_data()
 	_glow.material.set_shader_parameter("glow_color", Color(data.primary, 0.09))
+	_refresh_season_overlay()
 	_nav.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0))
 	_input_panel_style = _panel_style(Color(1, 1, 1, 0.03), Color.TRANSPARENT, 0, 0)
 	_input_panel.add_theme_stylebox_override("panel", _input_panel_style)
