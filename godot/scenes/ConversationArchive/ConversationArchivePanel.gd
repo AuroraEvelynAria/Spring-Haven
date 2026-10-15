@@ -275,7 +275,8 @@ func _apply_theme() -> void:
 	_panel.add_theme_stylebox_override("panel", style)
 
 func _on_theme_changed(_data: Dictionary) -> void:
-	_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg))
+	if is_instance_valid(_scrim):
+		_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg))
 	_apply_theme()
 	if visible:
 		_refresh_results()

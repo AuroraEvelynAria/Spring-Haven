@@ -193,7 +193,8 @@ past"**. State changes get recorded, and come back as memory the next time she s
 >   0.55 rerank / 0.45 hybrid, with silent fallback when the rerank provider is off —
 >   the shortlist width was settled by an A/B on a frozen eval corpus
 > - Recall results go into a **dynamic** `<heartloom_memory_context>` that leaves the
->   **stable system prefix untouched** — measured at **76%+ prompt cache hit**
+>   **stable system prefix untouched**, so prefix caching stays reusable — hits are accounted
+>   per reply (`cached_tokens` is reported with every response)
 > - **An entity–claim layer with belief revision** (schema v8): subject–predicate–object
 >   triples over normalized entities; when a fact changes, the new claim **supersedes**
 >   the old one and a conflict audit edge is kept — "what she used to believe" stays

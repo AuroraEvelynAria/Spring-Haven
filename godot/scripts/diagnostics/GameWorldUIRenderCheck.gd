@@ -47,12 +47,11 @@ func _run() -> void:
 	world.set("_network_waiting", true)
 	world.call("_add_waiting_message", "diagnostic-wait", "nai")
 	world.call("_refresh_interaction_state")
-	# Live2D 表现后端(gd_cubism)首载 moc3/4096 贴图会拖慢头几帧,固定 12 帧
-	# 会采样在打字机中途,把"等待回复时交互保持"误判为失败。改为有界等待:
-	# ≤180 帧内等打字机结束再断言——测试意图(等待状态不锁 UI)不变。
-	for _frame in 180:
-		if not bool(world.get("_typewriter_active")):
-			break
+	# Live2D 表现后端(gd_cubism)首载 moc3/4096 贴图会拖慢头几帧,固定帧数采样会落在
+	# 打字机中途,把"等待回复时交互保持"误判为失败。改为**按时间的有界等待**(≤3 秒,
+	# 与帧率无关):测试意图(等待状态不锁 UI)不变,且不会在高帧率 CI 上误报。
+	var deadline := Time.get_ticks_msec() + 3000
+	while bool(world.get("_typewriter_active")) and Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
 
 	var failures: Array[String] = []

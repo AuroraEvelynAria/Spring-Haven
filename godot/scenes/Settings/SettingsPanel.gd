@@ -384,7 +384,8 @@ func _update_panel_size() -> void:
 		_panel.custom_minimum_size = Vector2(minf(960.0, viewport_size.x - 24.0), minf(720.0, viewport_size.y - 24.0))
 
 func _on_theme_changed(_data: Dictionary) -> void:
-	_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg))
+	if is_instance_valid(_scrim):
+		_scrim.color = Color(str(ThemeMgr.get_current_theme_data().bg))
 	_apply_panel_style()
 	if visible:
 		call_deferred("_rebuild_content_preserving_developer_draft")

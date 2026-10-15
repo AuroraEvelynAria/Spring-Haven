@@ -121,6 +121,8 @@ func _ready() -> void:
 	_expression_map = _load_expression_map()
 	_build_model()
 	resized.connect(_fit_model)
+	# 兜底:_ready 之前若已收到过 set_active(false),此刻按最终可视状态同步一次
+	_update_render_state()
 
 
 ## 挂起/恢复渲染:全屏面板盖在上方或 3D 模式时由 GameWorld 调 false,
@@ -233,9 +235,19 @@ func _update_mouth(delta: float) -> void:
 func _follow_mouse() -> void:
 	if _target_point == null or _model == null:
 		return
-	var local := (_model as Node2D).to_local(get_global_mouse_position()) * Vector2(1.0, -1.0)
-	var length := local.length()
-	_target_point.set_target(local / length if length > 1.0 else Vector2.ZERO)
+	# 坐标系:模型住在 SubViewport 里,与画布不是同一空间。必须以**立绘槽的局部**
+	# 鼠标位置计算(槽与视口同尺寸同原点),再减去模型中心、翻转 Y(Cubism 的 Y 轴
+	# 向上)。用 get_global_mouse_position() 直喂 to_local 会带上槽位的全局偏移,
+	# 视线会朝一个系统性的错误方向看。
+	var local_mouse := get_local_mouse_position()
+	if not Rect2(Vector2.ZERO, size).has_point(local_mouse):
+		# 鼠标离开立绘槽:视线回正,而不是永远盯着槽边
+		_target_point.set_target(Vector2.ZERO)
+		return
+	var offset := local_mouse - (_model as Node2D).position
+	offset.y = -offset.y
+	var length := offset.length()
+	_target_point.set_target(offset / length if length > 1.0 else Vector2.ZERO)
 
 
 func _find_parameter(parameter_id: String) -> Object:
@@ -281,6 +293,9 @@ func set_role(next_role_id: String, next_manifest_path := "") -> void:
 		model_path = candidate
 		if is_inside_tree():
 			_build_model()
+	# 与 PortraitRig2D 的已知差异(刻意为之一致性的例外):此处会发 expression_changed
+	# 并清掉进行中的说话口型——换角色等于换模型,旧的口型状态无意义。当前仓库没有该
+	# 信号的订阅者,所以差异不可观测;若将来接入订阅者,两套实现的行为需同步。
 	expression_changed.emit(_expression)
 
 

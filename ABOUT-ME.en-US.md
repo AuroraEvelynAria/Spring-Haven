@@ -200,7 +200,8 @@ time she speaks.
 >   vectors join a hybrid blend, and a **cross-encoder reranker** re-orders the top-12
 >   shortlist
 > - Recall results go into a **dynamic** `<heartloom_memory_context>` and **never pollute the
->   stable system prefix** — **76%+ measured prefix-cache hit rate**
+>   stable system prefix**, so prefix caching stays reusable — hits are accounted per reply
+>   (`cached_tokens` is reported with every response)
 > - An **entity–claim layer** (schema v8): subject–predicate–object triples with **belief
 >   revision** — when a fact changes, the new claim supersedes the old one and a conflict
 >   audit edge is kept, so "what she used to believe" stays queryable

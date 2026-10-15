@@ -153,9 +153,9 @@ To help you get started, Spring Haven includes two fully-realized example charac
 - **Living memory constellation**: the network renders as an Obsidian-style organic graph — hub degree caps, always-readable labels, neighborhood focus — and every memory breathes on its own phase while recall pulses flow along the links (v0.6.0)
 - Local RAG knowledge base with role scopes
 - Physiological needs, menstrual cycles, real weather, and autonomous routines & messages
-- DeepSeek API with 76%+ prompt cache hit rate
+- Any OpenAI-compatible endpoint (DeepSeek by default), with **per-reply prompt-cache token accounting** — cached vs uncached input tokens are reported with every response
 - Voice input/output via ASR & TTS adapters
-- 2D layered portrait rig: gaze, blink, breathing, expressions, and speech animation
+- 2D layered portrait rig: gaze, blink, breathing, expressions, and speech animation — plus an optional **Live2D (Cubism) backend** implementing the same rig interface (bring your own model; no model assets are shipped or redistributed)
 - 3D exploration prototype and a two-character Life Lab
 
 ### 🚧 Phase 2 (In Progress)
