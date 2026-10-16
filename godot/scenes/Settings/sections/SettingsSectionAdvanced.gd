@@ -603,7 +603,9 @@ func _add_runtime_control(grid: GridContainer, key: String, data: Dictionary) ->
 			spin.custom_minimum_size = Vector2(170, 32)
 			spin.value_changed.connect(func(_value: float): _update_runtime_dirty_state())
 			control = spin
-	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# 右列控件紧贴本行的标签:拉满整行会把输入框抻到面板另一端,数字与步进箭头
+	# 相距数百像素、复选框变成一整条色带——是"网页长表单"观感的主要来源。
+	control.size_flags_horizontal = Control.SIZE_SHRINK_END
 	grid.add_child(control)
 	_runtime_controls[key] = control
 

@@ -35,13 +35,28 @@ const THEMES := {
 
 var current_theme_name := "amber"
 var current_theme_data: Dictionary = {}
+var current_theme: Theme
 var default_font: Font
 
 func _ready() -> void:
 	if ResourceLoader.exists(DEFAULT_FONT_PATH):
 		default_font = load(DEFAULT_FONT_PATH)
+	# Window 家族(对话框 / PopupMenu / 工具提示)是独立视口,**不继承 root 主题**,
+	# 不逐个指派就整体落在 Godot 默认深色主题上(浅色应用里弹出黑盒子/深色下拉)。
+	get_tree().node_added.connect(_on_node_added)
 	await get_tree().process_frame
 	_apply_global_font(get_tree().root)
+
+func _on_node_added(node: Node) -> void:
+	if node is Window and current_theme != null:
+		(node as Window).theme = current_theme
+
+## 把当前主题补派给树里已存在的 Window(切换主题时调用;新窗口由 node_added 兜住)
+func _apply_theme_to_windows(node: Node) -> void:
+	if node is Window and current_theme != null:
+		(node as Window).theme = current_theme
+	for child in node.get_children():
+		_apply_theme_to_windows(child)
 
 func _apply_global_font(node: Node) -> void:
 	if node is Control and default_font and not node.has_theme_font_override("font"):
@@ -93,7 +108,10 @@ func _apply_theme_resource(data: Dictionary) -> void:
 	theme.set_color("font_focus_color", "LineEdit", text)
 	theme.set_color("font_pressed_color", "Button", Color.WHITE)
 
-	var button_normal := _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.12), 18, 14, 7)
+	# 表面色必须由 text 派生(text 与 bg 天然对立):原先写死的白色半透明
+	# Color(1,1,1,0.055) 在浅色主题上**完全隐形**——输入框与下拉框因此看起来
+	# 只是裸文字、没有任何可点击的形体。
+	var button_normal := _style(Color(text, 0.05), Color(text, 0.12), 18, 14, 7)
 	var button_hover := _style(Color(primary, 0.16), primary, 18, 14, 7)
 	var button_pressed := _style(Color(primary, 0.25), primary, 18, 14, 7)
 	theme.set_stylebox("normal", "Button", button_normal)
@@ -101,23 +119,57 @@ func _apply_theme_resource(data: Dictionary) -> void:
 	theme.set_stylebox("pressed", "Button", button_pressed)
 	# disabled 不覆盖会跌回默认主题的灰色方块,任何被禁用的按钮都会突兀地
 	# 变成"web 灰盒";取 normal 同款造型再淡一档,安静地退到背景里。
-	theme.set_stylebox("disabled", "Button", _style(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.07), 18, 14, 7))
+	theme.set_stylebox("disabled", "Button", _style(Color(text, 0.03), Color(text, 0.07), 18, 14, 7))
 	# 焦点框必须隐形:Godot 在鼠标点击后也会保留焦点,若 focus 样式可见,
 	# 每个点过的按钮都会挂着一个描边框直到点别处——是"网页感"的最大来源。
 	# 悬停/按压样式已足够给鼠标反馈;LineEdit 例外,文本输入需要可见焦点。
 	var no_focus := StyleBoxEmpty.new()
 	for focus_type in ["Button", "OptionButton", "CheckBox", "CheckButton", "MenuButton"]:
 		theme.set_stylebox("focus", focus_type, no_focus)
-	theme.set_stylebox("normal", "LineEdit", _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.12), 22, 16, 9))
-	theme.set_stylebox("focus", "LineEdit", _style(Color(1, 1, 1, 0.08), primary, 22, 16, 9))
-	theme.set_stylebox("normal", "OptionButton", _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.12), 10, 10, 6))
-	theme.set_stylebox("panel", "Panel", _style(Color(1, 1, 1, 0.055), Color(1, 1, 1, 0.1), 14, 12, 10))
+	theme.set_stylebox("normal", "LineEdit", _style(Color(text, 0.05), Color(text, 0.12), 22, 16, 9))
+	theme.set_stylebox("focus", "LineEdit", _style(Color(text, 0.07), primary, 22, 16, 9))
+	theme.set_stylebox("normal", "OptionButton", _style(Color(text, 0.05), Color(text, 0.12), 10, 10, 6))
+	theme.set_stylebox("panel", "Panel", _style(Color(text, 0.05), Color(text, 0.1), 14, 12, 10))
 	theme.set_stylebox("panel", "PopupPanel", _style(bg, Color(text, 0.22), 10, 12, 12))
 	theme.set_stylebox("panel", "PopupMenu", _style(bg, Color(text, 0.22), 10, 8, 7))
 	theme.set_stylebox("hover", "PopupMenu", _style(Color(primary, 0.16), primary, 7, 8, 5))
 	theme.set_constant("separation", "HBoxContainer", 8)
 	theme.set_constant("separation", "VBoxContainer", 8)
+
+	# ── 对话框(Window 家族)──────────────────────────────────────────
+	# ConfirmationDialog / AcceptDialog 是独立 Window,不套用普通 Control 的控件
+	# 样式:不显式覆盖就整体落回 Godot 默认**深色**主题——浅色应用里弹出一个黑盒子
+	# (旅程档案的"新建旅程"、主菜单的"新旅程"确认等全部命中)。这里按当前主题的
+	# 底色重建面板与标题色。
+	var dialog_panel := _style(bg, Color(text, 0.20), 12, 18, 16)
+	for window_type in ["Window", "AcceptDialog", "ConfirmationDialog"]:
+		theme.set_stylebox("embedded_border", window_type, dialog_panel)
+		theme.set_stylebox("panel", window_type, dialog_panel)
+		theme.set_color("title_color", window_type, text)
+
+	# ── 滚动条 ─────────────────────────────────────────────────────
+	# 不覆盖同样是默认样式(粗轨道 + 两端小箭头),在浅色界面里非常突兀。轨道留白、
+	# 滑块用正文色的低透明度;两端箭头图标用零尺寸占位贴图隐去(改用滚轮/拖拽)。
+	var scroll_track := _style(Color(text, 0.05), Color.TRANSPARENT, 8, 0, 0)
+	var scroll_grabber := _style(Color(text, 0.18), Color.TRANSPARENT, 8, 0, 0)
+	var scroll_grabber_hot := _style(Color(primary, 0.40), Color.TRANSPARENT, 8, 0, 0)
+	var no_arrow := PlaceholderTexture2D.new()
+	no_arrow.size = Vector2i.ZERO
+	for scroll_type in ["VScrollBar", "HScrollBar"]:
+		theme.set_stylebox("scroll", scroll_type, scroll_track)
+		theme.set_stylebox("scroll_focus", scroll_type, scroll_track)
+		theme.set_stylebox("grabber", scroll_type, scroll_grabber)
+		theme.set_stylebox("grabber_highlight", scroll_type, scroll_grabber_hot)
+		theme.set_stylebox("grabber_pressed", scroll_type, scroll_grabber_hot)
+		for arrow in [
+			"increment", "increment_highlight", "increment_pressed",
+			"decrement", "decrement_highlight", "decrement_pressed",
+		]:
+			theme.set_icon(arrow, scroll_type, no_arrow)
+
 	get_tree().root.theme = theme
+	current_theme = theme
+	_apply_theme_to_windows(get_tree().root)
 	get_tree().root.set_meta("theme_data", current_theme_data)
 	Global.theme_changed.emit(current_theme_data)
 
