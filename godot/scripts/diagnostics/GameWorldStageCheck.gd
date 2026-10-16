@@ -39,7 +39,11 @@ func _run() -> void:
 	var content: VBoxContainer = world.get("_sidebar_content")
 	_expect(content != null and content.get_child_count() == 4, "HUD 应为四块板(生活/周期/身心/絮语)")
 	var widgets: Dictionary = world.get("_stat_widgets")
-	_expect(widgets.size() >= 11, "需求仪表数量不足: %d" % widgets.size())
+	var expected_widgets := _expected_widget_count(world)
+	_expect(
+		expected_widgets > 0 and widgets.size() == expected_widgets,
+		"需求仪表数量不符: %d（STAT_DEFS 减去 HIDDEN_STAT_KEYS 应为 %d）" % [widgets.size(), expected_widgets]
+	)
 	var first_widget: Dictionary = widgets.get("hunger", {})
 	_expect(first_widget.get("bar") is ProgressBar, "饥饿仪表缺失")
 	var bar: ProgressBar = first_widget.get("bar")
@@ -83,7 +87,22 @@ func _run() -> void:
 
 func expect_stat_rebuilt(world: Node, _tag: String) -> void:
 	var widgets: Dictionary = world.get("_stat_widgets")
-	_expect(widgets.size() >= 11, "角色切换后仪表未重建")
+	var expected_widgets := _expected_widget_count(world)
+	_expect(
+		expected_widgets > 0 and widgets.size() == expected_widgets,
+		"角色切换后仪表未重建: %d（应为 %d）" % [widgets.size(), expected_widgets]
+	)
+
+
+## 期望的仪表数 = STAT_DEFS 全量 − 演示隐藏清单。两边都从脚本常量读:隐藏清单变动时
+## 测试自动跟随 —— 2026-10-16 CI 就是这样挂的(写死的 11 在隐藏两项后变成 9)。
+func _expected_widget_count(world: Node) -> int:
+	var constants: Dictionary = (world.get_script() as GDScript).get_script_constant_map()
+	var defs: Dictionary = constants.get("STAT_DEFS", {})
+	var hidden: Array = constants.get("HIDDEN_STAT_KEYS", [])
+	if defs.is_empty():
+		return -1
+	return defs.size() - hidden.size()
 
 
 func _expect(condition: bool, message: String) -> void:
