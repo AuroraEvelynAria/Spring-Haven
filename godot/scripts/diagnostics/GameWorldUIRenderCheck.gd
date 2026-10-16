@@ -129,8 +129,20 @@ func _run() -> void:
 			failures.append("角色表现层没有响应思考状态")
 		portrait_rig.call("set_thinking", false)
 		portrait_rig.call("speak", "今天见到你很开心。", 0.5)
-	if widgets.has("arousal") or widgets.has("climax") or not widgets.has("fertility") or not widgets.has("implantation"):
+	if widgets.has("arousal") or widgets.has("climax"):
 		failures.append("亲密字段默认显示规则错误")
+	# 2026-10-16:着床相关两项(内膜容受性 / 服药后着床倾向)处于演示隐藏清单
+	# (GameWorld.HIDDEN_STAT_KEYS)——断言它们确实不在界面上。清单是唯一真相源,
+	# 这里从脚本常量读,避免两边各写一份而漂移。
+	var hidden_keys: Array = []
+	var constants: Dictionary = (world.get_script() as GDScript).get_script_constant_map()
+	if constants.has("HIDDEN_STAT_KEYS"):
+		hidden_keys = constants["HIDDEN_STAT_KEYS"]
+	if hidden_keys.is_empty():
+		failures.append("演示隐藏清单缺失（HIDDEN_STAT_KEYS 未定义）")
+	for hidden_key in hidden_keys:
+		if widgets.has(str(hidden_key)):
+			failures.append("要求隐藏的生理指标仍然显示：%s" % str(hidden_key))
 	if widgets.has("urine_sexual"):
 		failures.append("旧亲密尿液字段仍在界面显示")
 	var sidebar_content := world.get("_sidebar_content") as VBoxContainer

@@ -59,6 +59,10 @@ const STAT_DEFS := {
 	"implantation": {"icon": "🛡️", "label": "服药后着床倾向", "warning": "high", "threshold": 100.0}
 }
 
+# 演示 / 录屏模式:这些指标不出现在界面上(仅挡显示——模拟、数值、后端事件全部照旧)。
+# 恢复显示 = 把 key 从本列表里删掉,不需要改别处(唯一消费点是 _stat_section)。
+const HIDDEN_STAT_KEYS := ["fertility", "implantation"]
+
 var _current_role := "ling"
 var _role_revision := 0
 var _stats_by_role: Dictionary = {}
@@ -991,8 +995,15 @@ func _stat_section(title_text: String, keys: Array, accent: Color) -> VBoxContai
 	var section := VBoxContainer.new()
 	section.add_theme_constant_override("separation", 6)
 	section.add_child(_hud_section_title(title_text, accent))
+	var shown := 0
 	for key in keys:
+		# 演示/录屏模式隐藏的指标(见 HIDDEN_STAT_KEYS):只挡显示,模拟与数值照旧。
+		if str(key) in HIDDEN_STAT_KEYS:
+			continue
 		section.add_child(_stat_row(str(key)))
+		shown += 1
+	# 整个分区都被藏掉时连标题一起收起,不留一个空壳
+	section.visible = shown > 0
 	return section
 
 func _life_status_card() -> PanelContainer:
