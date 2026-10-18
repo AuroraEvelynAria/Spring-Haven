@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT_&_CC--BY--NC-8B8B8B?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/adult_content-none-4CAF50?style=flat-square" alt="No Adult Content"/>
     <img src="https://img.shields.io/badge/version-v0.6.0-2E7D32?style=flat-square" alt="Version: v0.6.0"/>
-    <a href="https://deepwiki.com/AuroraEvelynAria/Spring-Haven"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"/></a>
+    <a href="https://deepwiki.com/AuroraEvelynAria/Spring-Haven"><img src="https://img.shields.io/badge/Ask-DeepWiki-6E56CF?style=flat-square" alt="Ask DeepWiki"/></a>
   </p>
   
   <p>
