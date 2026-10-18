@@ -15,6 +15,7 @@
     <img src="https://img.shields.io/badge/许可证-MIT_&_CC--BY--NC-8B8B8B?style=flat-square" alt="许可证"/>
     <img src="https://img.shields.io/badge/无成人内容-是-4CAF50?style=flat-square" alt="无成人内容"/>
     <img src="https://img.shields.io/badge/版本-v0.6.0-2E7D32?style=flat-square" alt="版本"/>
+    <a href="https://deepwiki.com/AuroraEvelynAria/Spring-Haven"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"/></a>
   </p>
   
   <p>
@@ -271,6 +272,7 @@ py -3.11 -m venv .venv
 
 > 深入文档中英文混排，语言已在条目后标注（对 AI 助手均无阅读障碍）。
 
+- [DeepWiki](https://deepwiki.com/AuroraEvelynAria/Spring-Haven)——本仓库的 AI 生成百科：可浏览代码文档，或直接用自然语言提问
 - [Companion Core](companion-core/README.md) *(English)*——本地运行时、供应商层与内容策略
 - [架构](godot/docs/CompanionCoreArchitecture.md)——客户端与运行时如何通信
 - [心织](godot/docs/HeartloomMemory.md)——记忆引擎

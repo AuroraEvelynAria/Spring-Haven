@@ -15,6 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT_&_CC--BY--NC-8B8B8B?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/adult_content-none-4CAF50?style=flat-square" alt="No Adult Content"/>
     <img src="https://img.shields.io/badge/version-v0.6.0-2E7D32?style=flat-square" alt="Version: v0.6.0"/>
+    <a href="https://deepwiki.com/AuroraEvelynAria/Spring-Haven"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"/></a>
   </p>
   
   <p>
@@ -272,6 +273,7 @@ The result is written to `build/SpringHavenPlaytest/` — the Godot game plus an
 
 > Deep-dive docs are a mix of English and Chinese — either language works fine for AI assistants.
 
+- [DeepWiki](https://deepwiki.com/AuroraEvelynAria/Spring-Haven) — an AI-generated wiki of this repository: browse the codebase docs or ask questions in natural language
 - [Companion Core](companion-core/README.md) — the local runtime, provider layer and content policy
 - [Architecture](godot/docs/CompanionCoreArchitecture.md) *(Chinese)* — how the client and the runtime talk
 - [Heartloom](godot/docs/HeartloomMemory.md) *(Chinese)* — the memory engine
