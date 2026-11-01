@@ -640,6 +640,28 @@ func get_life_status() -> Dictionary:
 		HEALTH_TIMEOUT_SECONDS
 	)
 
+func fetch_plot_state() -> Dictionary:
+	# ADR-016:「她的心事」——节拍状态、枢轴选项与时间线
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_GET,
+		_url("/plot/state") + "?save_id=" + _save_id.uri_encode(),
+		{},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
+func submit_plot_choice(plot_id: String, choice_id: String) -> Dictionary:
+	# ADR-016:枢轴节拍的玩家选择(两选项;缺席走后端超时路径,不用报)
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_POST,
+		_url("/plot/choice"),
+		{"save_id": _save_id, "plot_id": plot_id, "choice_id": choice_id},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
 func get_heartloom_graph(
 	role_id: String = "", query: String = "", limit: int = 120, cursor: String = "",
 	as_of_world: float = -1.0, include_entities: bool = false
@@ -1090,6 +1112,27 @@ func _ensure_core_runtime(template_root: String, runtime_root: String) -> bool:
 			runtime_root.path_join(destination_relative)
 		):
 			return false
+	# ADR-016:节拍剧本是目录型可选内容——逐个补缺(不覆盖已有文件,与
+	# personas 同纪律);模板目录缺失时静默跳过,没有剧本=没有故事,不算错误
+	var beats_template_dir := template_root.path_join("beats")
+	var beats_runtime_dir := runtime_root.path_join("beats")
+	if DirAccess.make_dir_recursive_absolute(beats_runtime_dir) != OK:
+		_local_runtime_error = "无法创建 Companion Core 子目录：beats"
+		return false
+	var beats_dir := DirAccess.open(beats_template_dir)
+	if beats_dir != null:
+		beats_dir.list_dir_begin()
+		var beat_file := beats_dir.get_next()
+		while not beat_file.is_empty():
+			if not beats_dir.current_is_dir() and beat_file.ends_with(".json"):
+				if not _copy_file_if_missing(
+					beats_template_dir.path_join(beat_file),
+					beats_runtime_dir.path_join(beat_file)
+				):
+					beats_dir.list_dir_end()
+					return false
+			beat_file = beats_dir.get_next()
+		beats_dir.list_dir_end()
 	# 可选模板：发行包自带知识库时复制到运行时目录，开发树缺失时跳过。
 	var optional_templates := {
 		"knowledge.sqlite3": "knowledge.sqlite3",

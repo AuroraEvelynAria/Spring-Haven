@@ -21,9 +21,9 @@
 | ADR-013 | [ADR-013-nightweave-consolidation.md](ADR-013-nightweave-consolidation.md) | 夜织——世界时间驱动的记忆巩固与蒸馏 | 已落地 |
 | ADR-014 | [ADR-014-ebbinghaus-stability.md](ADR-014-ebbinghaus-stability.md) | 艾宾浩斯正式化(intrinsic 稳定度系数与方向修正) | 已落地 |
 | ADR-015 | [ADR-015-entity-constellation.md](ADR-015-entity-constellation.md) | 实体星座图(实体-主张层进图谱) | 已落地(有修订) |
-| ADR-016 | [ADR-016-story-spine-and-beats.md](ADR-016-story-spine-and-beats.md) | 故事脊椎与节拍(作者给骨架、状态给演绎的"线性但有分支") | **草案** |
+| ADR-016 | [ADR-016-story-spine-and-beats.md](ADR-016-story-spine-and-beats.md) | 故事脊椎与节拍(作者给骨架、状态给演绎的"线性但有分支") | **部分落地**(第 1/1.5/2/3 步已实现,验收判据进 CI 未做) |
 
-> **状态统计(2026-10-13 逐条对代码复核,2026-10-16 追加 ADR-016)**:已落地 **10** · 部分落地 **1**(ADR-003 Phase 2 待定) · 参考 **1**(ADR-001 附录) · 草案(零实现) **5**(ADR-005 / 006 / 007 / 008 / 016)。
+> **状态统计(2026-10-13 逐条对代码复核,2026-11-02 ADR-016 升部分落地)**:已落地 **10** · 部分落地 **2**(ADR-003 Phase 2 待定;ADR-016 验收判据与枢轴 UI 打磨未完) · 参考 **1**(ADR-001 附录) · 草案(零实现) **4**(ADR-005 / 006 / 007 / 008)。
 > 复核方式:全量检索 `companion-core/src/` 与 `godot/` 对应实现与测试(如 `test_entity_claims.py` / `test_graph_as_of.py` / `test_ebbinghaus.py` / `test_consolidation.py`),而非依据文档自述。
 > 分布规律值得注意:**记忆与认知层(ADR-009~015)已全部落地,协议与传输层(ADR-005~008)全部未落地**。
 

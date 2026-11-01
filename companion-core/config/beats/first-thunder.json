@@ -1,0 +1,151 @@
+{
+  "plots": [
+    {
+      "plot_id": "first-thunder",
+      "title": "初雷",
+      "beats": [
+        {
+          "id": "forecast",
+          "role": "ling",
+          "title": "天气预报",
+          "goal": "不动声色地确认今年第一场雷雨的日期",
+          "enter_when": { "world_day": { "gte": 1 } },
+          "exit_when": { "world_day": { "gte": 3 } },
+          "beats_ttl_world_days": 6,
+          "on_exit": {
+            "memory": {
+              "title": "雨季快到了",
+              "content": "翻天气预告的时候,手比脑子快。今年初雷落在哪天,心里已经有数了——但这件事不需要任何人知道。",
+              "importance": 0.45,
+              "valence": -0.1,
+              "trigger_terms": ["初雷", "天气预报"]
+            },
+            "mood": { "p": -0.05, "a": 0.05, "d": 0.0 }
+          }
+        },
+        {
+          "id": "noticed",
+          "role": "nai",
+          "title": "茶多了两杯",
+          "goal": "不点破地确认姐姐是不是有心事",
+          "enter_when": { "world_day": { "gte": 3 } },
+          "exit_when": {
+            "any": [
+              { "world_day": { "gte": 5 } },
+              {
+                "life_event": {
+                  "role": "nai",
+                  "action": "quiet_time",
+                  "within_world_days": 2,
+                  "count_gte": 1
+                }
+              }
+            ]
+          },
+          "beats_ttl_world_days": 6,
+          "on_exit": {
+            "memory": {
+              "title": "姐姐好像有心事",
+              "content": "这几天姐姐看窗外的次数变多了。没有直接问——泡了壶她喜欢的茶,拉她一起看了部老剧。她嘴上说无聊,耳朵却一直没放松下来。",
+              "importance": 0.5,
+              "valence": 0.15,
+              "trigger_terms": ["小玲姐姐", "心事"]
+            },
+            "mood": { "p": 0.05, "a": 0.0, "d": 0.05 }
+          }
+        },
+        {
+          "id": "scheduled",
+          "role": "ling",
+          "title": "排好的夜晚",
+          "goal": "给初雷那晚安排一个独处的借口",
+          "enter_when": { "world_day": { "gte": 6 } },
+          "exit_when": { "world_day": { "gte": 9 } },
+          "beats_ttl_world_days": 5,
+          "on_exit": {
+            "memory": {
+              "title": "那晚的计划",
+              "content": "跟他们说初雷那天要早点睡。窗户提前关好,耳机放在床头。计划万无一失——大概吧。",
+              "importance": 0.55,
+              "valence": -0.1,
+              "trigger_terms": ["初雷", "计划"]
+            },
+            "mood": { "p": -0.05, "a": 0.08, "d": -0.02 }
+          }
+        },
+        {
+          "id": "storm-night",
+          "role": "ling",
+          "title": "初雷之夜",
+          "goal": "撑过今晚——按计划,一个人",
+          "enter_when": { "world_day": { "gte": 10 } },
+          "exit_when": null,
+          "beats_ttl_world_days": 2,
+          "choices": [
+            {
+              "id": "stay",
+              "label": "进客厅陪她",
+              "outcome": {
+                "memory": {
+                  "title": "雷雨那晚,客厅的灯",
+                  "content": "雷最响的时候,有人推门进来了。嘴上说着「谁要你陪」,尾巴却出卖了我。我们没开大灯,看了一晚上的雨。",
+                  "importance": 0.85,
+                  "valence": 0.5,
+                  "trigger_terms": ["初雷", "陪伴"]
+                },
+                "mood": { "p": 0.2, "a": -0.1, "d": 0.1 }
+              }
+            },
+            {
+              "id": "milk",
+              "label": "假装没看见,热杯牛奶留在桌上",
+              "outcome": {
+                "memory": {
+                  "title": "那杯还温着的牛奶",
+                  "content": "第二天早上,桌上有一杯还带着温度的牛奶,走廊的灯亮了一整夜。没有人提起这件事。……谢谢。",
+                  "importance": 0.8,
+                  "valence": 0.45,
+                  "trigger_terms": ["初雷", "牛奶"]
+                },
+                "mood": { "p": 0.18, "a": -0.08, "d": 0.08 }
+              }
+            }
+          ],
+          "timeout_choice": {
+            "id": "alone",
+            "label": "(她自己熬过去了)",
+            "outcome": {
+              "memory": {
+                "title": "一个人熬过的雷雨夜",
+                "content": "和计划的一样,一个人。耳机、毯子、数雨点。天亮的时候一切照旧——本来就没什么大不了的。",
+                "importance": 0.6,
+                "valence": -0.2,
+                "trigger_terms": ["初雷", "独自"]
+              },
+              "mood": { "p": -0.1, "a": 0.05, "d": -0.05 }
+            }
+          }
+        },
+        {
+          "id": "after-rain",
+          "role": "ling",
+          "title": "雨停之后",
+          "goal": "把日子过回原样——虽然有一点点不一样了",
+          "enter_when": { "world_day": { "gte": 12 } },
+          "exit_when": { "world_day": { "gte": 14 } },
+          "beats_ttl_world_days": 5,
+          "on_exit": {
+            "memory": {
+              "title": "雨停之后",
+              "content": "初雷已经过去了。今年的雷雨季才刚开始,但至少,家里好像有人在留意天气预报。下次……或许可以不用一个人数雨点。",
+              "importance": 0.65,
+              "valence": 0.2,
+              "trigger_terms": ["初雷", "雨季"]
+            },
+            "mood": { "p": 0.1, "a": 0.0, "d": 0.05 }
+          }
+        }
+      ]
+    }
+  ]
+}

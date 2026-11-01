@@ -139,6 +139,13 @@ var _portrait_rig: Control
 var _life_status_clock: Label
 var _life_status_cadence: Label
 var _life_status_elapsed := 0.0
+# ADR-016:她的心事(节拍状态)——缓存 /plot/state 载荷,折进「此刻生活」板。
+# 初值拉满让首次条件满足的 tick 立刻取一次(Core 就绪前由 is_active 拦住)。
+const PLOT_POLL_SECONDS := 60.0
+var _plot_status: Dictionary = {}
+var _plot_poll_elapsed := 999.0
+var _plot_poll_in_flight := false
+var _plot_section: VBoxContainer
 var _log_bar: PanelContainer
 var _log_label: Label
 var _settings: Control
@@ -225,6 +232,7 @@ func _process(delta: float) -> void:
 		_life_mini_elapsed = 0.0
 		_refresh_life_mini_status()
 		_refresh_season_overlay()
+	_plot_poll_tick(delta)
 	if _network_waiting:
 		_thinking_elapsed += delta
 		if _thinking_elapsed >= THINKING_STEP_SECONDS:
@@ -941,7 +949,135 @@ func _hud_life_plate_build() -> PanelContainer:
 	_life_status_cadence.add_theme_color_override("font_color", Color(data.secondary, 0.62))
 	content.add_child(_life_status_cadence)
 	_life_status_clock = _life_status_cadence
+	# ADR-016:她的心事——作为「此刻生活」的延伸小节;无数据(Core 未连/
+	# 无剧本/脊椎未启动)时整段隐藏,不留空壳
+	_plot_section = VBoxContainer.new()
+	_plot_section.add_theme_constant_override("separation", 4)
+	_plot_section.visible = false
+	content.add_child(_plot_section)
+	_render_plot_section()
 	return plate
+
+
+# ===== ADR-016:她的心事(节拍状态) =====
+
+func _plot_poll_tick(delta: float) -> void:
+	_plot_poll_elapsed += delta
+	if _plot_poll_elapsed < PLOT_POLL_SECONDS or _plot_poll_in_flight:
+		return
+	if not CompanionCore.is_active() or not Global.is_state_loaded():
+		return
+	_plot_poll_elapsed = 0.0
+	_refresh_plot_status()
+
+func _refresh_plot_status() -> void:
+	_plot_poll_in_flight = true
+	var result := await CompanionCore.fetch_plot_state()
+	_plot_poll_in_flight = false
+	if not bool(result.get("ok", false)):
+		return
+	var data = result.get("data", {})
+	if data is Dictionary:
+		_plot_status = data
+		_render_plot_section()
+
+func _submit_plot_choice(plot_id: String, choice_id: String) -> void:
+	var result := await CompanionCore.submit_plot_choice(plot_id, choice_id)
+	if bool(result.get("ok", false)):
+		var data = result.get("data", {})
+		if data is Dictionary:
+			_plot_status = data  # 响应即最新状态,免二次拉取
+	_render_plot_section()
+
+func _render_plot_section() -> void:
+	if not is_instance_valid(_plot_section):
+		return
+	for child in _plot_section.get_children():
+		child.free()
+	var data := ThemeMgr.get_current_theme_data()
+	var active := _active_plot()
+	if active.is_empty():
+		_plot_section.visible = false
+		return
+	var beat: Dictionary = active.get("current_beat", {})
+	var since := int(float(beat.get("entered_world_day", 0.0)))
+	var header := Label.new()
+	header.text = "她的心事 · 第 %d 天起" % since
+	header.add_theme_font_size_override("font_size", 11)
+	header.add_theme_color_override("font_color", Color(data.primary, 0.85))
+	_plot_section.add_child(header)
+	# 谁的心事:当前角色看自己的就不重复名字,看对方的带上名字
+	var beat_role := str(beat.get("role", ""))
+	var who := ""
+	if beat_role != "" and beat_role != _current_role:
+		var role_name := str((ROLE_DATA.get(beat_role, {}) as Dictionary).get("name", ""))
+		who = "%s的" % role_name if not role_name.is_empty() else ""
+	var title_line := Label.new()
+	title_line.text = "%s「%s」" % [who, str(beat.get("title", ""))]
+	title_line.add_theme_font_size_override("font_size", 12)
+	title_line.add_theme_color_override("font_color", Color(data.text, 0.92))
+	_plot_section.add_child(title_line)
+	var goal_line := Label.new()
+	goal_line.text = str(beat.get("goal", "")).left(60)
+	goal_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	goal_line.add_theme_font_size_override("font_size", 11)
+	goal_line.add_theme_color_override("font_color", Color(data.secondary, 0.75))
+	_plot_section.add_child(goal_line)
+	# 枢轴:二选一(缺席走后端超时,是合法结局)
+	var choices: Array = beat.get("choices", [])
+	if not choices.is_empty():
+		var plot_id := str(active.get("plot_id", ""))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		for choice_variant in choices:
+			var choice: Dictionary = choice_variant if choice_variant is Dictionary else {}
+			var choice_id := str(choice.get("id", ""))
+			if choice_id.is_empty():
+				continue
+			var button := Button.new()
+			button.text = str(choice.get("label", choice_id))
+			button.add_theme_font_size_override("font_size", 11)
+			button.pressed.connect(func(): _submit_plot_choice(plot_id, choice_id))
+			row.add_child(button)
+		_plot_section.add_child(row)
+	# 时间线:最近两条了结(库里有节拍标题,直接可读)
+	var history: Array = active.get("history", [])
+	if history is Array and not (history as Array).is_empty():
+		var tail: Array = (history as Array).slice(maxi(0, (history as Array).size() - 2))
+		for entry_variant in tail:
+			var entry: Dictionary = entry_variant if entry_variant is Dictionary else {}
+			var line := Label.new()
+			line.text = "第 %d 天 · 「%s」· %s" % [
+				int(float(entry.get("exited_world_day", 0.0))),
+				str(entry.get("title", entry.get("beat_id", ""))),
+				_plot_resolution_label(str(entry.get("resolution", ""))),
+			]
+			line.add_theme_font_size_override("font_size", 10)
+			line.add_theme_color_override("font_color", Color(data.secondary, 0.6))
+			_plot_section.add_child(line)
+	_plot_section.visible = true
+
+func _active_plot() -> Dictionary:
+	"""第一条未收束且有当前节拍的脊椎(首版单脊椎;多条时按启动日排序)。"""
+	if _plot_status.is_empty():
+		return {}
+	var plots: Array = _plot_status.get("plots", [])
+	for plot_variant in plots:
+		var plot: Dictionary = plot_variant if plot_variant is Dictionary else {}
+		var current = plot.get("current_beat", {})
+		if not bool(plot.get("finished", false)) and current is Dictionary and not (current as Dictionary).is_empty():
+			return plot
+	return {}
+
+func _plot_resolution_label(resolution: String) -> String:
+	# 只认结构性结果;枢轴的 choice_id 原样露出(它的风味由记忆承担,不进引擎)
+	match resolution:
+		"completed":
+			return "了结"
+		"expired":
+			return "不了了之"
+		_:
+			return resolution
 
 func _hud_cycle_plate_build() -> PanelContainer:
 	var data := ThemeMgr.get_current_theme_data()
