@@ -15,4 +15,19 @@ CREATE TABLE IF NOT EXISTS plot_state (
     PRIMARY KEY (save_id, plot_id)
 );
 
+-- ADR-016 修订1:导演注入账本(observation 必填校验在 service 层)
+CREATE TABLE IF NOT EXISTS director_ledger (
+    entry_id     TEXT PRIMARY KEY,
+    save_id      TEXT NOT NULL,
+    plot_id      TEXT NOT NULL,
+    beat_id      TEXT NOT NULL DEFAULT '',
+    action       TEXT NOT NULL,
+    observation  TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    world_day    REAL NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_director_ledger_save
+    ON director_ledger(save_id, created_at DESC);
+
 -- SCHEMA_VERSION 10 → 11

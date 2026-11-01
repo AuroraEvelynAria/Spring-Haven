@@ -26,6 +26,8 @@ from spring_haven_core.beats import (
     resolve_plot_choice,
 )
 from spring_haven_core.memory import HeartloomStore
+from spring_haven_core.prompting import PromptComposer
+from spring_haven_core.provider import ProviderReply
 from spring_haven_core.roles import RoleDefinition, RoleRegistry
 from spring_haven_core.service import CompanionService, RequestValidationError
 
@@ -565,6 +567,260 @@ class ServiceLoopTests(unittest.TestCase):
         # 空库在读存档清单之前就短路:零成本,自然零推进
         result = self._tick(3.0)
         self.assertEqual(result, {"due": 0, "advanced": 0, "failed": 0})
+
+
+class PreoccupationPromptTests(unittest.TestCase):
+    """ADR-016 第三步(演绎):心事渲染进提示词——只渲染说话者自己的。"""
+
+    def _registry(self) -> RoleRegistry:
+        return RoleRegistry(
+            {
+                "ling": RoleDefinition(role_id="ling", display_name="小玲",
+                                       full_name="春日铃音", aliases=(),
+                                       persona_prompt="测试人格"),
+                "nai": RoleDefinition(role_id="nai", display_name="小奈",
+                                      full_name="白濑雪奈", aliases=(),
+                                      persona_prompt="测试人格"),
+            },
+            None,
+        )
+
+    def _join(self, messages: list[dict[str, str]]) -> str:
+        return "\n".join(str(item.get("content", "")) for item in messages)
+
+    def test_renders_own_beat_with_guardrails(self) -> None:
+        registry = self._registry()
+        composer = PromptComposer(registry)
+        ling = registry.get("ling")
+        state = {
+            "current_beat": {
+                "role": "ling",
+                "title": "初雷之夜",
+                "goal": "撑过今晚——按计划，一个人",
+                "entered_world_day": 10.0,
+            }
+        }
+        joined = self._join(composer.messages(ling, "在吗", [], state))
+        self.assertIn("心事", joined)
+        self.assertIn("撑过今晚", joined)
+        self.assertIn("不要复述", joined)  # 注入必须带反念台词护栏
+
+    def test_other_role_beat_never_renders(self) -> None:
+        registry = self._registry()
+        composer = PromptComposer(registry)
+        ling = registry.get("ling")
+        state = {
+            "current_beat": {
+                "role": "nai",  # 对方角色的心事是她的隐私
+                "title": "茶多了两杯",
+                "goal": "不点破地确认姐姐是不是有心事",
+                "entered_world_day": 3.0,
+            }
+        }
+        joined = self._join(composer.messages(ling, "在吗", [], state))
+        self.assertNotIn("茶多了两杯", joined)
+        self.assertNotIn("心事", joined)
+
+    def test_malformed_beat_is_dropped(self) -> None:
+        registry = self._registry()
+        composer = PromptComposer(registry)
+        ling = registry.get("ling")
+        for bad in (None, {}, {"title": "", "goal": "g"},
+                    {"title": "t", "goal": ""}, "_string_beat"):
+            joined = self._join(
+                composer.messages(ling, "在吗", [], {"current_beat": bad})
+            )
+            self.assertNotIn("心事", joined, msg=f"bad={bad!r}")
+
+
+class _CapturingProvider:
+    """捕获提示词的假供应商:证明心事真的进了 chat 全链路。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[dict[str, str]]]] = []
+
+    async def complete(self, system: str, messages: list[dict[str, str]]) -> ProviderReply:
+        self.calls.append((system, list(messages)))
+        return ProviderReply(text="嗯。")
+
+
+class PreoccupationInjectionTests(unittest.TestCase):
+    """chat 全链路:ling 的心事进 ling 的提示词,不进 nai 的。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = HeartloomStore(Path(self._tmp.name) / "heartloom.sqlite3", ROLE_IDS)
+        registry = RoleRegistry(
+            {
+                "ling": RoleDefinition(role_id="ling", display_name="小玲",
+                                       full_name="春日铃音", aliases=(),
+                                       persona_prompt="测试人格"),
+                "nai": RoleDefinition(role_id="nai", display_name="小奈",
+                                      full_name="白濑雪奈", aliases=(),
+                                      persona_prompt="测试人格"),
+            },
+            None,
+        )
+        self.provider = _CapturingProvider()
+        self.service = CompanionService(
+            registry, self.provider, self.store,
+            beats=BeatLibrary({"p1": ServiceLoopTests.PLOT}),
+        )
+        now = int(time.time())
+        self.store.set_journey_rate(SAVE, 1.0)
+        self.t0 = now
+        self.store.sync_life_state(
+            save_id=SAVE,
+            selected_role_id="ling",
+            snapshot={"roles": {"ling": {"stats": {}}, "nai": {"stats": {}}}},
+            last_user_activity_at=now,
+            next_event_at=now,
+            now=now,
+        )
+
+    def tearDown(self) -> None:
+        self.service.close()
+        self._tmp.cleanup()
+
+    def _chat(self, role: str) -> None:
+        asyncio.run(
+            self.service.chat(
+                {
+                    "request_id": f"req-{role}-{len(self.provider.calls)}",
+                    "role_id": role,
+                    "save_id": SAVE,
+                    "text": "嗯",
+                    "event_type": "chat",
+                    "history": [],
+                    "state": {},
+                }
+            )
+        )
+
+    def test_chat_carries_own_preoccupation_only(self) -> None:
+        # 推进到 b1(ling 的节拍)
+        asyncio.run(self.service.run_due_beats(now=self.t0 + int(1.5 * DAY)))
+        self._chat("ling")
+        _, ling_messages = self.provider.calls[-1]
+        ling_joined = "\n".join(str(m.get("content", "")) for m in ling_messages)
+        self.assertIn("心事", ling_joined)
+        self.assertIn('"title":"b1"', ling_joined)
+        # 同一时刻 nai 说话:ling 的心事不进 nai 的提示词
+        self._chat("nai")
+        _, nai_messages = self.provider.calls[-1]
+        nai_joined = "\n".join(str(m.get("content", "")) for m in nai_messages)
+        self.assertNotIn('"title":"b1"', nai_joined)
+        self.assertNotIn("心事", nai_joined)
+
+    def test_no_beat_no_preoccupation(self) -> None:
+        # 世界日 0:脊椎还没启动,任何人的提示词里都没有心事
+        self._chat("ling")
+        _, messages = self.provider.calls[-1]
+        joined = "\n".join(str(m.get("content", "")) for m in messages)
+        self.assertNotIn("心事", joined)
+
+
+class DirectorLayerTests(unittest.TestCase):
+    """ADR-016 修订1:最小导演注入——observation 铁律、跳拍不造假记忆、账本。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = HeartloomStore(Path(self._tmp.name) / "heartloom.sqlite3", ROLE_IDS)
+        registry = RoleRegistry(
+            {
+                "ling": RoleDefinition(role_id="ling", display_name="小玲",
+                                       full_name="春日铃音", aliases=(),
+                                       persona_prompt="测试人格"),
+                "nai": RoleDefinition(role_id="nai", display_name="小奈",
+                                      full_name="白濑雪奈", aliases=(),
+                                      persona_prompt="测试人格"),
+            },
+            None,
+        )
+        self.service = CompanionService(
+            registry, _StubProvider(), self.store,
+            beats=BeatLibrary({"p1": ServiceLoopTests.PLOT}),
+        )
+        now = int(time.time())
+        self.store.set_journey_rate(SAVE, 1.0)
+        self.t0 = now
+        self.store.sync_life_state(
+            save_id=SAVE,
+            selected_role_id="ling",
+            snapshot={"roles": {"ling": {"stats": {}}}},
+            last_user_activity_at=now,
+            next_event_at=now,
+            now=now,
+        )
+
+    def tearDown(self) -> None:
+        self.service.close()
+        self._tmp.cleanup()
+
+    def test_observation_is_mandatory(self) -> None:
+        for bad in (
+            {"save_id": SAVE, "plot_id": "p1", "action": "enter", "beat_id": "b2"},
+            {"save_id": SAVE, "plot_id": "p1", "action": "enter",
+             "beat_id": "b2", "observation": "   "},
+        ):
+            with self.assertRaises(RequestValidationError):
+                self.service.direct_plot(bad)
+
+    def test_enter_jumps_and_skips_without_fake_memories(self) -> None:
+        result = self.service.direct_plot(
+            {
+                "save_id": SAVE,
+                "plot_id": "p1",
+                "action": "enter",
+                "beat_id": "pivot",
+                "observation": "初雷之夜到了，客厅只剩她一个人",
+                "now": self.t0 + int(6.0 * DAY),
+            }
+        )
+        plot_status = result["status"]["plots"][0]
+        self.assertEqual(plot_status["current_beat"]["id"], "pivot")
+        skipped = {entry["beat_id"]: entry["resolution"]
+                   for entry in plot_status["history"]}
+        self.assertEqual(skipped, {"b1": "skipped", "b2": "skipped"})
+        # 跳过的节拍不写记忆(没经历过的日子不造假回忆)
+        self.assertEqual(self.store.beat_memory_terms(SAVE, "ling"), set())
+        # 她的感知入事件流(action=director),导演入账本
+        actions = {row["action"] for row in self.store.list_life_events(save_id=SAVE)}
+        self.assertIn("director", actions)
+        self.assertIn("plot", actions)  # 进场事件照常
+        ledger = self.store.list_director_ledger(SAVE)
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["action"], "enter")
+        self.assertEqual(ledger[0]["beat_id"], "pivot")
+        self.assertIn("初雷之夜", ledger[0]["observation"])
+
+    def test_resolve_via_director_lands_choice(self) -> None:
+        self.service.direct_plot(
+            {"save_id": SAVE, "plot_id": "p1", "action": "enter", "beat_id": "pivot",
+             "observation": "初雷之夜到了", "now": self.t0 + int(6.0 * DAY)}
+        )
+        self.service.direct_plot(
+            {"save_id": SAVE, "plot_id": "p1", "action": "resolve", "choice_id": "stay",
+             "observation": "主人推门进了客厅，陪她看雨",
+             "now": self.t0 + int(6.2 * DAY)}
+        )
+        history = self.service.plot_status(SAVE)["plots"][0]["history"]
+        self.assertEqual(history[-1]["resolution"], "stay")
+        self.assertIn(f"{BEAT_TERM_PREFIX}p1/pivot", self.store.beat_memory_terms(SAVE, "ling"))
+        ledger = self.store.list_director_ledger(SAVE)
+        self.assertEqual([entry["action"] for entry in ledger], ["resolve", "enter"])
+
+    def test_unknown_beat_and_action_rejected(self) -> None:
+        with self.assertRaises(RequestValidationError):
+            self.service.direct_plot(
+                {"save_id": SAVE, "plot_id": "p1", "action": "enter", "beat_id": "ghost",
+                 "observation": "obs", "now": self.t0}
+            )
+        with self.assertRaises(RequestValidationError):
+            self.service.direct_plot(
+                {"save_id": SAVE, "plot_id": "p1", "action": "rewind",
+                 "observation": "obs", "now": self.t0}
+            )
 
 
 if __name__ == "__main__":

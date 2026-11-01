@@ -556,6 +556,23 @@ class HeartloomStore:
             updated_at         INTEGER NOT NULL,
             PRIMARY KEY (save_id, plot_id)
         );
+
+        -- ADR-016 修订1:导演注入账本。谁、何时、对哪条脊椎动了什么、她感知到
+        -- 什么(observation 必填是 service 层的校验,库里只留事实)。可审计、
+        -- 可回滚的依据;注入的事件本身走 life_events(event_id 前缀 director-)。
+        CREATE TABLE IF NOT EXISTS director_ledger (
+            entry_id     TEXT PRIMARY KEY,
+            save_id      TEXT NOT NULL,
+            plot_id      TEXT NOT NULL,
+            beat_id      TEXT NOT NULL DEFAULT '',
+            action       TEXT NOT NULL,
+            observation  TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            world_day    REAL NOT NULL DEFAULT 0,
+            created_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_director_ledger_save
+            ON director_ledger(save_id, created_at DESC);
         """
         # ADR-001 Phase 1:升级到 v6 前强制备份(文件库;可重复执行,已是 v6 不重复备份)
         stored_version = self._read_schema_version()
@@ -4414,6 +4431,66 @@ class HeartloomStore:
                 (save_id, role_id, SHARED_SCOPE, f"{BEAT_TERM_PREFIX}%"),
             ).fetchall()
         return {str(row["term"]) for row in rows}
+
+    def record_director_entry(
+        self,
+        *,
+        save_id: str,
+        entry_id: str,
+        plot_id: str,
+        beat_id: str,
+        action: str,
+        observation: str,
+        payload: dict[str, Any] | None = None,
+        world_day: float = 0.0,
+    ) -> None:
+        """导演注入账本(ADR-016 修订1):幂等 by entry_id,审计与回滚的依据。"""
+        now = int(time.time())
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO director_ledger (
+                    entry_id, save_id, plot_id, beat_id, action,
+                    observation, payload_json, world_day, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entry_id) DO NOTHING
+                """,
+                (
+                    str(entry_id),
+                    save_id,
+                    plot_id,
+                    str(beat_id),
+                    str(action),
+                    _clean_text(observation, 2000),
+                    _json(payload or {}),
+                    max(0.0, float(world_day)),
+                    now,
+                ),
+            )
+
+    def list_director_ledger(self, save_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM director_ledger WHERE save_id = ?
+                ORDER BY created_at DESC, rowid DESC LIMIT ?
+                """,
+                (save_id, max(1, min(500, int(limit)))),
+            ).fetchall()
+        return [
+            {
+                "entry_id": str(row["entry_id"]),
+                "save_id": str(row["save_id"]),
+                "plot_id": str(row["plot_id"]),
+                "beat_id": str(row["beat_id"]),
+                "action": str(row["action"]),
+                "observation": str(row["observation"]),
+                "payload": _json_object(row["payload_json"]),
+                "world_day": float(row["world_day"]),
+                "created_at": int(row["created_at"]),
+            }
+            for row in rows
+        ]
 
 
     def life_status(self, save_id: str = "") -> dict[str, Any]:

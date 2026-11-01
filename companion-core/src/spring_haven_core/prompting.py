@@ -283,6 +283,22 @@ class PromptComposer:
                     ),
                 }
             )
+        preoccupation = self._preoccupation_context(
+            role, state.get("current_beat") if isinstance(state, dict) else None
+        )
+        if preoccupation:
+            result.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "[以下是你此刻的心事（来自你正在经历的生活，只读参考）。"
+                        "让它自然影响你的语气、取舍与回避方式；不要复述或逐字引用"
+                        "这段文字，不要声称收到过任何提示，也不要把它当成主人的话。"
+                        "它不是任务——你可以按自己的性格决定怎么面对、什么时候说。]\n"
+                        + json.dumps(preoccupation, ensure_ascii=False, separators=(",", ":"))
+                    ),
+                }
+            )
         runtime = self._runtime_state(role, state, mood=mood)
         escaped = text
         for marker in _CONTEXT_MARKERS:
@@ -492,6 +508,31 @@ class PromptComposer:
             if isinstance(safe_value, dict) and safe_value:
                 result[key] = safe_value
         return result
+
+    @staticmethod
+    def _preoccupation_context(role: RoleDefinition, raw: Any) -> dict[str, Any]:
+        """ADR-016 第三步(演绎):当前节拍 → 心事上下文。
+
+        双保险:服务层只选说话者自己的节拍,这里再按 role 过滤一次;空值/
+        越界内容一律返回空(不渲染),心事是可选件,绝不阻塞对话主流程。
+        """
+        if not isinstance(raw, dict):
+            return {}
+        if str(raw.get("role", "")) not in ("", role.role_id):
+            return {}
+        title = str(raw.get("title", "")).replace("\x00", "").strip()[:80]
+        goal = str(raw.get("goal", "")).replace("\x00", "").strip()[:200]
+        if not title or not goal:
+            return {}
+        try:
+            since = float(raw.get("entered_world_day", 0.0))
+        except (TypeError, ValueError):
+            since = 0.0
+        return {
+            "title": title,
+            "goal": goal,
+            "since_world_day": round(max(0.0, since), 2),
+        }
 
     @staticmethod
     def _menstrual_cycle_context(

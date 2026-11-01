@@ -135,6 +135,7 @@ def build_app(
     app.router.add_get("/life/events", _life_events)
     app.router.add_get("/plot/state", _plot_state)
     app.router.add_post("/plot/choice", _plot_choice)
+    app.router.add_post("/plot/direct", _plot_direct)
     app.router.add_get("/maintenance/status", _maintenance_status)
     app.router.add_post("/maintenance/run", _maintenance_run)
     app.router.add_get("/maintenance/backups", _maintenance_backups)
@@ -838,6 +839,19 @@ async def _plot_choice(request: web.Request) -> web.Response:
     try:
         payload: Any = await request.json()
         data = await asyncio.to_thread(request.app[SERVICE_KEY].apply_plot_choice, payload)
+        return _ok(data)
+    except (RequestValidationError, BeatConfigurationError, ValueError) as exc:
+        return _error(400, str(exc), retryable=False)
+    except MemoryStoreError as exc:
+        return _error(500, str(exc), retryable=True)
+
+
+async def _plot_direct(request: web.Request) -> web.Response:
+    """ADR-016 修订1:导演注入。observation 必填,缺失一律 400——
+    导演只能通过她能感知到的东西改变世界。"""
+    try:
+        payload: Any = await request.json()
+        data = await asyncio.to_thread(request.app[SERVICE_KEY].direct_plot, payload)
         return _ok(data)
     except (RequestValidationError, BeatConfigurationError, ValueError) as exc:
         return _error(400, str(exc), retryable=False)

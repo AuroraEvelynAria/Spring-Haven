@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import replace
 from typing import Any
@@ -319,6 +320,10 @@ class CompanionService:
         except Exception as exc:  # 心境水合失败不阻塞对话主流程
             LOGGER.warning("mood hydration degraded: %s", type(exc).__name__)
             mood_values = None
+        # ADR-016 第三步(演绎):她的心事进提示词;可选内容,失败静默降级
+        preoccupation = self._current_beat_for_role(save_id, role.role_id)
+        if preoccupation and isinstance(state, dict):
+            state = {**state, "current_beat": preoccupation}
         messages = self.prompts.messages(
             role,
             payload["text"],
@@ -745,6 +750,131 @@ class CompanionService:
             ],
         )
 
+    def direct_plot(self, raw: Any) -> dict[str, Any]:
+        """ADR-016 修订1:最小导演注入层(节拍级)。
+
+        铁律:observation 必填——导演只能通过「她能感知到的东西」改变世界,
+        没有 observation 的改动在入口就被拒绝(那正是「设定感」的来源)。
+        action:
+          enter   — 强制把脊椎推进到指定节拍;中间节拍按 skipped 记账,
+                    但不写它们的记忆/事件(没经历过的日子不造假回忆)
+          resolve — 以指定选项落当前枢轴(等效玩家选择,但入导演账本)
+        """
+        if not isinstance(raw, dict):
+            raise RequestValidationError("request body must be a JSON object")
+        save_id = self.validate_save_id(raw.get("save_id"))
+        plot_id = str(raw.get("plot_id", "")).strip()
+        action = str(raw.get("action", "")).strip()
+        observation = str(raw.get("observation", "")).replace("\x00", "").strip()
+        if not observation:
+            raise RequestValidationError(
+                "observation is required: director changes must be perceivable to her"
+            )
+        now = max(1, int(raw.get("now") or time.time()))
+        world_day = self.memory.world_from_real(save_id, now)
+        entry_id = uuid.uuid4().hex
+        try:
+            plot = self.beats.get(plot_id)
+        except BeatConfigurationError as exc:
+            raise RequestValidationError(str(exc)) from exc
+        state = self.memory.get_plot_state(save_id, plot_id) or {
+            "current_beat_id": "",
+            "entered_world_day": 0.0,
+            "started_world_day": 0.0,
+            "history": [],
+        }
+        history: list[dict[str, Any]] = [
+            dict(item) for item in state.get("history", []) if isinstance(item, dict)
+        ]
+        payload: dict[str, Any] = {}
+        if action == "enter":
+            beat_id = str(raw.get("beat_id", "")).strip()
+            target = plot.beat(beat_id)
+            if target is None:
+                raise RequestValidationError(f"unknown beat_id: {beat_id!r}")
+            # 跳过的节拍:记账为 skipped,不产生记忆/事件(不造假经历)
+            exited = {str(item.get("beat_id", "")) for item in history}
+            for beat in plot.beats:
+                if beat.beat_id in exited or beat.beat_id == target.beat_id:
+                    continue
+                history.append(
+                    {
+                        "beat_id": beat.beat_id,
+                        "entered_world_day": 0.0,
+                        "exited_world_day": world_day,
+                        "resolution": "skipped",
+                    }
+                )
+            new_state = {
+                "current_beat_id": target.beat_id,
+                "entered_world_day": world_day,
+                "started_world_day": float(state.get("started_world_day", 0.0)) or world_day,
+                "history": history,
+            }
+            payload = {"beat_id": target.beat_id}
+            self.memory.save_plot_state(
+                save_id=save_id,
+                plot_id=plot.plot_id,
+                spine=[beat.beat_id for beat in plot.beats],
+                current_beat_id=str(new_state["current_beat_id"]),
+                entered_world_day=float(new_state["entered_world_day"]),
+                started_world_day=float(new_state["started_world_day"]),
+                history=list(new_state["history"]),
+            )
+            transition = BeatTransition(
+                "enter", plot.plot_id, target.beat_id, target.role, target.title,
+                "", world_day, None, "",
+            )
+            self._apply_beat_transition(save_id, transition, now)
+        elif action == "resolve":
+            choice_id = str(raw.get("choice_id", "")).strip()
+            exited = frozenset(str(item.get("beat_id", "")) for item in history)
+            facts = replace(
+                self._beat_facts_base(save_id, world_day), exited_beats=exited
+            )
+            try:
+                new_state, transition = resolve_plot_choice(plot, state, choice_id, facts)
+            except BeatConfigurationError as exc:
+                raise RequestValidationError(str(exc)) from exc
+            payload = {"choice_id": choice_id}
+            self._apply_beat_transition(save_id, transition, now)
+            self.memory.save_plot_state(
+                save_id=save_id,
+                plot_id=plot.plot_id,
+                spine=[beat.beat_id for beat in plot.beats],
+                current_beat_id=str(new_state.get("current_beat_id", "")),
+                entered_world_day=float(new_state.get("entered_world_day", 0.0)),
+                started_world_day=float(new_state.get("started_world_day", 0.0)),
+                history=list(new_state.get("history", [])),
+            )
+        else:
+            raise RequestValidationError("action must be 'enter' or 'resolve'")
+        # 她的感知:observation 走 life_events(action=director),归到节拍角色名下,
+        # 与普通事件同构、可检可回滚
+        self.memory.record_life_events(
+            save_id=save_id,
+            events=[
+                {
+                    "event_id": f"director-{entry_id}",
+                    "role_id": transition.role,
+                    "action": "director",
+                    "description": observation[:500],
+                    "occurred_at_unix": now,
+                }
+            ],
+        )
+        self.memory.record_director_entry(
+            save_id=save_id,
+            entry_id=entry_id,
+            plot_id=plot.plot_id,
+            beat_id=str(payload.get("beat_id", "")),
+            action=action,
+            observation=observation,
+            payload=payload,
+            world_day=world_day,
+        )
+        return {"entry_id": entry_id, "status": self.plot_status(save_id)}
+
     def apply_plot_choice(self, raw: Any) -> dict[str, Any]:
         """枢轴节拍的玩家选择(POST /plot/choice)。非法选择一律 400,不静默。"""
         if not isinstance(raw, dict):
@@ -827,6 +957,33 @@ class CompanionService:
                 }
             )
         return {"world_day": world_day, "plots": payload}
+
+    def _current_beat_for_role(self, save_id: str, role_id: str) -> dict[str, Any] | None:
+        """ADR-016 第三步(演绎):说话者自己的当前节拍。
+
+        只取 beat.role == role_id 的心事:对方角色的节拍对她是隐私,不进
+        她的提示词(人设隔离红线:绝不替对方宣称感受)。节拍内容是可选件,
+        任何失败都静默降级为「没有心事」,绝不阻塞对话。
+        """
+        try:
+            rows = self.memory.list_plot_states(save_id)
+        except MemoryStoreError:
+            return None
+        for row in rows:
+            try:
+                plot = self.beats.get(str(row["plot_id"]))
+            except BeatConfigurationError:
+                continue
+            beat = plot.beat(str(row["current_beat_id"]))
+            if beat is None or beat.role != role_id:
+                continue
+            return {
+                "role": beat.role,
+                "title": beat.title,
+                "goal": beat.goal,
+                "entered_world_day": float(row["entered_world_day"]),
+            }
+        return None
 
     async def run_due_weekly_insights(self, *, now: int | None = None) -> dict[str, Any]:
         """Phase 4a: condense the last world-week of daily-digest memories into one
@@ -1711,14 +1868,20 @@ class CompanionService:
         offline_facts = self._current_facts(
             save_id, role_id, str(event["memory_query"]), memories
         )
+        # ADR-016 第三步(演绎):离线主动消息同样带着心事——她想念主人时,
+        # 知道自己正在惦记什么,而不是凭空唠嗑
+        offline_state: dict[str, Any] = {
+            "body_state": body_state,
+            "conversation_visibility": {"audience_roles": self.roles.ids()},
+        }
+        preoccupation = self._current_beat_for_role(save_id, role_id)
+        if preoccupation:
+            offline_state["current_beat"] = preoccupation
         messages = self.prompts.messages(
             role,
             prompt,
             history,
-            {
-                "body_state": body_state,
-                "conversation_visibility": {"audience_roles": self.roles.ids()},
-            },
+            offline_state,
             memories,
             [],
             current_facts=offline_facts,
