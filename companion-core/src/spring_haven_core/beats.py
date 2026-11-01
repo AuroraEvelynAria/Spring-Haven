@@ -144,6 +144,12 @@ def evaluate_condition(condition: Any, facts: WorldFacts) -> bool:
     """纯函数条件求值。未知算子抛 BeatConfigurationError(装配期已校验,这里是兜底)。"""
     if not isinstance(condition, dict) or not condition:
         raise BeatConfigurationError("condition must be a non-empty object")
+    if len(condition) > 1:
+        # 多键条件会在"只求值第一个算子"下静默丢失另一半——装配期同样拒绝,
+        # 组合语义一律用 all/any 写明白
+        raise BeatConfigurationError(
+            "condition must have exactly one operator; combine with all/any"
+        )
     for operator, operand in condition.items():
         if operator == "all":
             return all(evaluate_condition(item, facts) for item in _as_list(operand, "all"))
@@ -488,6 +494,11 @@ def _validate_condition(condition: Any, where: str) -> None:
     """装配期结构校验(与求值同一套算子表),坏内容在启动时炸而不是运行时。"""
     if not isinstance(condition, dict) or not condition:
         raise BeatConfigurationError(f"{where}: condition must be a non-empty object")
+    if len(condition) > 1:
+        # 求值器只认单算子(多键会静默丢一半);组合一律用 all/any 表达
+        raise BeatConfigurationError(
+            f"{where}: condition must have exactly one operator; combine with all/any"
+        )
     for operator, operand in condition.items():
         if operator in {"all", "any"}:
             items = _as_list(operand, operator)

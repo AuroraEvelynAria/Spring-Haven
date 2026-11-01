@@ -342,6 +342,12 @@ class PlotLoadingTests(unittest.TestCase):
                      "exit_when": {"world_day": {"gte": 1}}},
                     {"id": "b", "role": "ling", "title": "t", "goal": "g",
                      "exit_when": {"world_day": {"gte": 2}}}]},
+                # 多键条件(求值器只认单算子,组合一律 all/any)
+                {"plot_id": "p", "title": "t", "beats": [
+                    {"id": "b", "role": "ling", "title": "t", "goal": "g",
+                     "enter_when": {"world_day": {"gte": 1},
+                                     "stat": {"role": "ling", "key": "stress", "gte": 50}},
+                     "exit_when": {"world_day": {"gte": 2}}}]},
             ]
             for index, payload in enumerate(cases):
                 path = root / f"bad{index}.json"
@@ -809,6 +815,25 @@ class DirectorLayerTests(unittest.TestCase):
         self.assertIn(f"{BEAT_TERM_PREFIX}p1/pivot", self.store.beat_memory_terms(SAVE, "ling"))
         ledger = self.store.list_director_ledger(SAVE)
         self.assertEqual([entry["action"] for entry in ledger], ["resolve", "enter"])
+
+    def test_enter_middle_beat_keeps_future_spine(self) -> None:
+        """跳到中间拍只补它之前的 skipped;之后的节拍由脊椎自然接棒。"""
+        self.service.direct_plot(
+            {"save_id": SAVE, "plot_id": "p1", "action": "enter", "beat_id": "b2",
+             "observation": "小奈提前进入了观察位", "now": self.t0 + int(1.0 * DAY)}
+        )
+        status = self.service.plot_status(SAVE)["plots"][0]
+        self.assertEqual(status["current_beat"]["id"], "b2")
+        # b2 自然退出后,枢轴(未来拍)照常进场——脊椎没有被打断
+        asyncio.run(self.service.run_due_beats(now=self.t0 + int(5.0 * DAY)))
+        history = self.service.plot_status(SAVE)["plots"][0]["history"]
+        self.assertEqual(
+            [(entry["beat_id"], entry["resolution"]) for entry in history],
+            [("b1", "skipped"), ("b2", "completed")],
+        )
+        self.assertEqual(
+            self.service.plot_status(SAVE)["plots"][0]["current_beat"]["id"], "pivot"
+        )
 
     def test_unknown_beat_and_action_rejected(self) -> None:
         with self.assertRaises(RequestValidationError):

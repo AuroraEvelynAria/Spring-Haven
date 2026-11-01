@@ -792,10 +792,13 @@ class CompanionService:
             target = plot.beat(beat_id)
             if target is None:
                 raise RequestValidationError(f"unknown beat_id: {beat_id!r}")
-            # 跳过的节拍:记账为 skipped,不产生记忆/事件(不造假经历)
+            # 目标之前的未走节拍:记账为 skipped,不产生记忆/事件(不造假经历);
+            # 目标之后的留给脊椎自然推进——导演只是把「现在」搬到位,不截断未来
             exited = {str(item.get("beat_id", "")) for item in history}
             for beat in plot.beats:
-                if beat.beat_id in exited or beat.beat_id == target.beat_id:
+                if beat.beat_id == target.beat_id:
+                    break
+                if beat.beat_id in exited:
                     continue
                 history.append(
                     {
