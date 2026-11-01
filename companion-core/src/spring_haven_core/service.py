@@ -807,12 +807,21 @@ class CompanionService:
                         for choice in beat.choices
                     ],
                 }
+            # 历史条目补上节拍标题(库里只存 beat_id;时间线直接可读,
+            # 不用客户端再猜 id -> 标题)
+            history: list[dict[str, Any]] = []
+            for item in row["history"]:
+                entry = dict(item)
+                beat_def = plot.beat(str(entry.get("beat_id", "")))
+                if beat_def is not None:
+                    entry["title"] = beat_def.title
+                history.append(entry)
             payload.append(
                 {
                     "plot_id": plot.plot_id,
                     "title": plot.title,
                     "current_beat": current,
-                    "history": list(row["history"]),
+                    "history": history,
                     "started_world_day": float(row["started_world_day"]),
                     "finished": plot_finished(row, plot),
                 }

@@ -640,6 +640,28 @@ func get_life_status() -> Dictionary:
 		HEALTH_TIMEOUT_SECONDS
 	)
 
+func fetch_plot_state() -> Dictionary:
+	# ADR-016:「她的心事」——节拍状态、枢轴选项与时间线
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_GET,
+		_url("/plot/state") + "?save_id=" + _save_id.uri_encode(),
+		{},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
+func submit_plot_choice(plot_id: String, choice_id: String) -> Dictionary:
+	# ADR-016:枢轴节拍的玩家选择(两选项;缺席走后端超时路径,不用报)
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_POST,
+		_url("/plot/choice"),
+		{"save_id": _save_id, "plot_id": plot_id, "choice_id": choice_id},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
 func get_heartloom_graph(
 	role_id: String = "", query: String = "", limit: int = 120, cursor: String = "",
 	as_of_world: float = -1.0, include_entities: bool = false
