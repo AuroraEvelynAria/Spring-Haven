@@ -15,6 +15,7 @@ var _start_button: Button
 var _new_game_button: Button
 var _journey_library_button: Button
 var _life_lab_button: Button
+var _studio_button: Button
 var _settings_button: Button
 var _version: Label
 var _glow: ColorRect
@@ -181,6 +182,10 @@ func _build_menu() -> void:
 	_life_lab_button.name = "LifeLabButton"
 	_life_lab_button.pressed.connect(_on_life_lab_pressed)
 	menu.add_child(_life_lab_button)
+	_studio_button = _make_menu_button("🎭 角色工坊", false)
+	_studio_button.name = "CharacterStudioButton"
+	_studio_button.pressed.connect(_on_studio_pressed)
+	menu.add_child(_studio_button)
 	_settings_button = _make_menu_button("⚙️ 设置", false)
 	_settings_button.name = "SettingsButton"
 	_settings_button.pressed.connect(_on_settings_pressed)
@@ -374,6 +379,8 @@ func _set_navigation_disabled(disabled: bool) -> void:
 		_settings_button.disabled = disabled
 	if _life_lab_button:
 		_life_lab_button.disabled = disabled
+	if _studio_button:
+		_studio_button.disabled = disabled
 
 func _show_save_error(message: String) -> void:
 	var detail := message.strip_edges()
@@ -442,6 +449,11 @@ func _on_life_lab_pressed() -> void:
 		return
 	_set_navigation_disabled(true)
 	UI.switch_scene("res://scenes/LifeLab/LifeLabWorld.tscn")
+
+func _on_studio_pressed() -> void:
+	# 角色工坊是纯表现层(不读写存档),不需要 is_state_loaded 闸
+	_set_navigation_disabled(true)
+	UI.switch_scene("res://scenes/CharacterStudio/CharacterStudio.tscn")
 
 func _on_theme_changed(_data: Dictionary) -> void:
 	_update_visuals()
