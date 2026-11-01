@@ -8,8 +8,21 @@ import math
 import re
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from typing import Any
 
+from .beats import (
+    BEAT_TERM_PREFIX,
+    PLOT_ACTION,
+    BeatConfigurationError,
+    BeatLibrary,
+    BeatTransition,
+    PlotDefinition,
+    WorldFacts,
+    advance_plot_state,
+    plot_finished,
+    resolve_plot_choice,
+)
 from .memory import (
     AUTONOMOUS_SCAFFOLD_SIGNATURES,
     HeartloomStore,
@@ -58,9 +71,12 @@ class CompanionService:
         weather_location: str = "",
         state_truth_source: str = "client",
         memory_rerank_enabled: bool = True,
+        beats: BeatLibrary | None = None,
     ):
         self.roles = roles
         self.provider = provider
+        # ADR-016:节拍内容是可选件(缺目录 → 空库,不影响其余功能)
+        self.beats = beats if beats is not None else BeatLibrary.empty()
         self.state_truth_source = (
             "backend" if state_truth_source == "backend" else "client"
         )
@@ -557,6 +573,251 @@ class CompanionService:
     def life_status(self, save_id: str = "") -> dict[str, Any]:
         normalized = self.validate_save_id(save_id) if save_id else ""
         return self.memory.life_status(normalized)
+
+    # ===== ADR-016:故事脊椎与节拍 =====
+
+    async def run_due_beats(self, *, now: int | None = None) -> dict[str, Any]:
+        """节拍求值:纯规则、零 LLM,挂 60s 生命周期循环。
+
+        只对有过生命同步的存档跑(新存档等首次 /life/sync);世界时按注入的
+        now 折算(与 run_due_life_events 同款可测试性)。演绎(LLM 台词)不在这
+        条路径上——求值器只决定「她的心事走到哪一步了」。
+        """
+        plots = self.beats.plots()
+        if not plots:
+            return {"due": 0, "advanced": 0, "failed": 0}
+        timestamp = max(1, int(now or time.time()))
+        save_ids = self.memory.life_save_ids()
+        advanced = 0
+        failed = 0
+        for save_id in save_ids:
+            lock = self._save_locks.setdefault(save_id, asyncio.Lock())
+            try:
+                async with lock:
+                    advanced += self._evaluate_beats_for_save(save_id, plots, timestamp)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.warning(
+                    "beat evaluation failed for save %s", save_id, exc_info=True
+                )
+                failed += 1
+        return {"due": len(save_ids), "advanced": advanced, "failed": failed}
+
+    def _evaluate_beats_for_save(
+        self, save_id: str, plots: list[PlotDefinition], timestamp: int
+    ) -> int:
+        # 世界日必须从注入的 timestamp 折算(可测试性);直接 world_now() 会
+        # 让求值永远停在「现在」——离线推演/回放时全部条件失真。
+        world_day = self.memory.world_from_real(save_id, timestamp)
+        facts_base = self._beat_facts_base(save_id, world_day)
+        advanced = 0
+        for plot in plots:
+            state = self.memory.get_plot_state(save_id, plot.plot_id) or {
+                "current_beat_id": "",
+                "entered_world_day": 0.0,
+                "started_world_day": 0.0,
+                "history": [],
+            }
+            exited = frozenset(
+                str(item.get("beat_id", ""))
+                for item in state.get("history", [])
+                if isinstance(item, dict)
+            )
+            facts = replace(facts_base, exited_beats=exited)
+            new_state, transitions = advance_plot_state(plot, state, facts)
+            if not transitions:
+                continue
+            for transition in transitions:
+                self._apply_beat_transition(save_id, transition, timestamp)
+            self.memory.save_plot_state(
+                save_id=save_id,
+                plot_id=plot.plot_id,
+                spine=[beat.beat_id for beat in plot.beats],
+                current_beat_id=str(new_state.get("current_beat_id", "")),
+                entered_world_day=float(new_state.get("entered_world_day", 0.0)),
+                started_world_day=float(new_state.get("started_world_day", 0.0)),
+                history=list(new_state.get("history", [])),
+            )
+            advanced += len(transitions)
+        return advanced
+
+    def _beat_facts_base(self, save_id: str, world_day: float) -> WorldFacts:
+        """收集一次求值要用的全部事实(每存档每 tick 一次;各剧本共用)。"""
+        states = self.memory.life_status(save_id).get("states", [])
+        snapshot = states[0].get("snapshot", {}) if states else {}
+        roles_raw = snapshot.get("roles", {}) if isinstance(snapshot, dict) else {}
+        stats: dict[str, dict[str, float]] = {}
+        if isinstance(roles_raw, dict):
+            for role_id, role_state in roles_raw.items():
+                role_stats = (
+                    role_state.get("stats", {}) if isinstance(role_state, dict) else {}
+                )
+                if not isinstance(role_stats, dict):
+                    continue
+                clean: dict[str, float] = {}
+                for key, value in role_stats.items():
+                    try:
+                        clean[str(key)] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                stats[str(role_id)] = clean
+        events = self.memory.list_life_events(save_id=save_id, limit=200)
+        terms = {
+            role_id: frozenset(self.memory.beat_memory_terms(save_id, role_id))
+            for role_id in self.roles.ids()
+        }
+        return WorldFacts(
+            world_day=world_day,
+            stats=stats,
+            life_events=tuple(events),
+            memory_terms=terms,
+            exited_beats=frozenset(),
+        )
+
+    def _apply_beat_transition(
+        self, save_id: str, transition: BeatTransition, timestamp: int
+    ) -> None:
+        """把一步决策落成副作用:事件必写;记忆/心境按剧本动作执行。
+
+        全部写入都带确定性 id(event_id / source_event_id),崩溃重放幂等——
+        与自主事件/夜织同一纪律。
+        """
+        if transition.kind == "enter":
+            self.memory.record_life_events(
+                save_id=save_id,
+                events=[
+                    {
+                        "event_id": f"plot-{transition.plot_id}-{transition.beat_id}-enter",
+                        "role_id": transition.role,
+                        "action": PLOT_ACTION,
+                        "description": f"她心里开始惦记「{transition.title}」",
+                        "occurred_at_unix": timestamp,
+                    }
+                ],
+            )
+            return
+        # exit:剧本动作(先记忆/心境,后事件,顺序只影响展示)
+        outcome = transition.outcome
+        if outcome is not None:
+            if outcome.memory:
+                raw = dict(outcome.memory)
+                raw["save_id"] = save_id
+                raw["scope_role_id"] = transition.role
+                raw.setdefault("kind", "episodic")
+                terms = [f"{BEAT_TERM_PREFIX}{transition.plot_id}/{transition.beat_id}"]
+                for term in raw.get("trigger_terms") or []:
+                    term = str(term).strip()
+                    if term:
+                        terms.append(term)
+                raw["trigger_terms"] = terms
+                raw["source_event_id"] = (
+                    f"{transition.plot_id}:{transition.beat_id}:{transition.resolution}"
+                )
+                try:
+                    self.memory.put_memory(raw, source="plot")
+                except MemoryStoreError:
+                    LOGGER.warning(
+                        "plot memory write failed: %s", raw.get("source_event_id")
+                    )
+            if outcome.mood:
+                try:
+                    self.memory.apply_mood_delta(save_id, transition.role, outcome.mood)
+                except MemoryStoreError:
+                    LOGGER.warning(
+                        "plot mood delta failed: %s/%s",
+                        transition.plot_id,
+                        transition.beat_id,
+                    )
+        self.memory.record_life_events(
+            save_id=save_id,
+            events=[
+                {
+                    "event_id": (
+                        f"plot-{transition.plot_id}-{transition.beat_id}-"
+                        f"{transition.resolution}"
+                    ),
+                    "role_id": transition.role,
+                    "action": PLOT_ACTION,
+                    "description": f"「{transition.title}」了结({transition.resolution})",
+                    "occurred_at_unix": timestamp,
+                }
+            ],
+        )
+
+    def apply_plot_choice(self, raw: Any) -> dict[str, Any]:
+        """枢轴节拍的玩家选择(POST /plot/choice)。非法选择一律 400,不静默。"""
+        if not isinstance(raw, dict):
+            raise RequestValidationError("request body must be a JSON object")
+        save_id = self.validate_save_id(raw.get("save_id"))
+        plot_id = str(raw.get("plot_id", "")).strip()
+        choice_id = str(raw.get("choice_id", "")).strip()
+        now = max(1, int(raw.get("now") or time.time()))
+        try:
+            plot = self.beats.get(plot_id)
+        except BeatConfigurationError as exc:
+            raise RequestValidationError(str(exc)) from exc
+        state = self.memory.get_plot_state(save_id, plot_id)
+        if state is None:
+            raise RequestValidationError(f"plot {plot_id} is not active for this save")
+        world_day = self.memory.world_from_real(save_id, now)
+        exited = frozenset(
+            str(item.get("beat_id", ""))
+            for item in state.get("history", [])
+            if isinstance(item, dict)
+        )
+        facts = replace(self._beat_facts_base(save_id, world_day), exited_beats=exited)
+        try:
+            new_state, transition = resolve_plot_choice(plot, state, choice_id, facts)
+        except BeatConfigurationError as exc:
+            raise RequestValidationError(str(exc)) from exc
+        self._apply_beat_transition(save_id, transition, now)
+        self.memory.save_plot_state(
+            save_id=save_id,
+            plot_id=plot.plot_id,
+            spine=[beat.beat_id for beat in plot.beats],
+            current_beat_id=str(new_state.get("current_beat_id", "")),
+            entered_world_day=float(new_state.get("entered_world_day", 0.0)),
+            started_world_day=float(new_state.get("started_world_day", 0.0)),
+            history=list(new_state.get("history", [])),
+        )
+        return self.plot_status(save_id)
+
+    def plot_status(self, save_id: str = "") -> dict[str, Any]:
+        """"她的心事"载荷(GET /plot/state):dashboard 与时间线的唯一数据源。"""
+        normalized = self.validate_save_id(save_id) if save_id else ""
+        world_day = self.memory.world_now(normalized) if normalized else 0.0
+        payload: list[dict[str, Any]] = []
+        for row in self.memory.list_plot_states(normalized):
+            try:
+                plot = self.beats.get(str(row["plot_id"]))
+            except BeatConfigurationError:
+                continue  # 内容被移除的旧状态:留库不展示
+            beat = plot.beat(str(row["current_beat_id"]))
+            current: dict[str, Any] | None = None
+            if beat is not None:
+                current = {
+                    "id": beat.beat_id,
+                    "title": beat.title,
+                    "goal": beat.goal,
+                    "role": beat.role,
+                    "entered_world_day": float(row["entered_world_day"]),
+                    "choices": [
+                        {"id": choice.choice_id, "label": choice.label}
+                        for choice in beat.choices
+                    ],
+                }
+            payload.append(
+                {
+                    "plot_id": plot.plot_id,
+                    "title": plot.title,
+                    "current_beat": current,
+                    "history": list(row["history"]),
+                    "started_world_day": float(row["started_world_day"]),
+                    "finished": plot_finished(row, plot),
+                }
+            )
+        return {"world_day": world_day, "plots": payload}
 
     async def run_due_weekly_insights(self, *, now: int | None = None) -> dict[str, Any]:
         """Phase 4a: condense the last world-week of daily-digest memories into one

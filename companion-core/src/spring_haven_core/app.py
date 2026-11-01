@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from .beats import BeatConfigurationError, BeatLibrary
 from .config import CoreConfig
 from .document_import import DocumentImportError, extract_document, extract_web_document
 from .memory import HeartloomStore, MemoryStoreError
@@ -51,6 +52,8 @@ def build_app(
             config.provider_credential_path,
         )
         provider = OpenAICompatibleProvider(config, provider_settings)
+        # ADR-016:节拍内容可选;坏内容在启动时炸(fail loud),与 roles 同纪律
+        beats = BeatLibrary.load_dir(config.beats_path, roles.ids())
         runtime = CompanionService(
             roles,
             provider,
@@ -63,6 +66,7 @@ def build_app(
             memory_rerank_enabled=config.memory_rerank_enabled,
             weather_location=config.weather_location,
             state_truth_source=config.state_truth_source,
+            beats=beats,
         )
     else:
         runtime = service
@@ -129,6 +133,8 @@ def build_app(
     app.router.add_get("/life/outbox", _life_outbox)
     app.router.add_post("/life/outbox/ack", _life_outbox_ack)
     app.router.add_get("/life/events", _life_events)
+    app.router.add_get("/plot/state", _plot_state)
+    app.router.add_post("/plot/choice", _plot_choice)
     app.router.add_get("/maintenance/status", _maintenance_status)
     app.router.add_post("/maintenance/run", _maintenance_run)
     app.router.add_get("/maintenance/backups", _maintenance_backups)
@@ -817,6 +823,28 @@ async def _life_events(request: web.Request) -> web.Response:
         return _error(400, str(exc), retryable=False)
 
 
+async def _plot_state(request: web.Request) -> web.Response:
+    """"她的心事"(ADR-016):dashboard 露出与节拍时间线的数据源。"""
+    try:
+        return _ok(
+            request.app[SERVICE_KEY].plot_status(request.query.get("save_id", ""))
+        )
+    except (RequestValidationError, MemoryStoreError, ValueError) as exc:
+        return _error(400, str(exc), retryable=False)
+
+
+async def _plot_choice(request: web.Request) -> web.Response:
+    """枢轴节拍的玩家选择;空转(无枢轴激活)按 400 报错,不静默。"""
+    try:
+        payload: Any = await request.json()
+        data = await asyncio.to_thread(request.app[SERVICE_KEY].apply_plot_choice, payload)
+        return _ok(data)
+    except (RequestValidationError, BeatConfigurationError, ValueError) as exc:
+        return _error(400, str(exc), retryable=False)
+    except MemoryStoreError as exc:
+        return _error(500, str(exc), retryable=True)
+
+
 def _validated_import_url(value: Any) -> str:
     normalized = str(value).strip()
     if not normalized or len(normalized) > 2_048:
@@ -922,6 +950,15 @@ async def _life_scheduler_loop(app: web.Application) -> None:
             raise
         except Exception:
             LOGGER.exception("unexpected life decay failure")
+        try:
+            # ADR-016:节拍求值(纯规则,零 LLM)——世界时由时钟派生,60s tick 即世界时 tick
+            beats_result = await app[SERVICE_KEY].run_due_beats()
+            if int(beats_result.get("advanced", 0)) > 0:
+                LOGGER.info("story beats advanced: %s", beats_result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("unexpected story beat scheduler failure")
         digest_ticks += 1
         if digest_ticks >= 15:  # every ~15 minutes
             digest_ticks = 0
