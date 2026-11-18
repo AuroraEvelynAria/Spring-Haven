@@ -3,7 +3,7 @@ extends Control
 signal closed
 
 const ARCHIVE := preload("res://scripts/domain/ConversationArchive.gd")
-const ROLE_NAMES := {"ling": "🐾 小玲", "nai": "🐇 小奈"}
+const ROLE_NAMES := {"ling": "🐾 小玲", "nai": "🐇 小奈", "xixi": "🐋 汐汐"}
 
 var _scrim: ColorRect
 var _panel: PanelContainer
@@ -108,6 +108,7 @@ func _build_shell() -> void:
 	_add_option(_role_select, "全部角色", "")
 	_add_option(_role_select, "🐾 小玲", "ling")
 	_add_option(_role_select, "🐇 小奈", "nai")
+	_add_option(_role_select, "🐋 汐汐", "xixi")
 	_role_select.item_selected.connect(func(_index: int): _refresh_results())
 	filters.add_child(_role_select)
 	_sender_select = OptionButton.new()

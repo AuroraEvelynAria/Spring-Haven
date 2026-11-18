@@ -352,6 +352,7 @@ func _build_rag_editor(parent: VBoxContainer, data: Dictionary, subcategory: Str
 		{"label": "共享 (*)", "value": "*"},
 		{"label": "小玲 (ling)", "value": "ling"},
 		{"label": "小奈 (nai)", "value": "nai"},
+		{"label": "汐汐 (xixi)", "value": "xixi"},
 	]:
 		var index := _rag_scope_filter.item_count
 		_rag_scope_filter.add_item(str(option.label))
@@ -499,13 +500,17 @@ func _create_rag_scope_select(for_search: bool = false) -> OptionButton:
 		select.set_item_metadata(0, "ling")
 		select.add_item("以小奈身份检索")
 		select.set_item_metadata(1, "nai")
+		select.add_item("以汐汐身份检索")
+		select.set_item_metadata(2, "xixi")
 	else:
-		select.add_item("两位角色共享")
+		select.add_item("全部角色共享")
 		select.set_item_metadata(0, "*")
 		select.add_item("仅小玲")
 		select.set_item_metadata(1, "ling")
 		select.add_item("仅小奈")
 		select.set_item_metadata(2, "nai")
+		select.add_item("仅汐汐")
+		select.set_item_metadata(3, "xixi")
 	select.custom_minimum_size = Vector2(144, 34)
 	return select
 

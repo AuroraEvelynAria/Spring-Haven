@@ -68,7 +68,7 @@ func _notification(what: int) -> void:
 
 func set_role(next_role_id: String, next_manifest_path := "") -> void:
 	var normalized := next_role_id.strip_edges().to_lower()
-	if normalized not in ["ling", "nai"]:
+	if normalized not in ["ling", "nai", "xixi"]:
 		return
 	role_id = normalized
 	manifest_path = next_manifest_path.strip_edges()
@@ -543,8 +543,26 @@ func _palette() -> Dictionary:
 	return _palette_cache
 
 func _build_palette() -> Dictionary:
-	var fallback := (
-		{
+	# 无外部美术 manifest 时的程序化回退调色板；正式立绘落地后由
+	# assets/characters/{role}/portrait_manifest.json 覆盖。
+	var fallback: Dictionary
+	if role_id == "xixi":
+		fallback = {
+			"background": Color("#12222E"),
+			"accent": Color("#7EC8E8"),
+			"secondary": Color("#9FC4D8"),
+			"hair": Color("#B8D4E0"),
+			"hair_shadow": Color("#7A9CAC"),
+			"skin": Color("#F7D9CC"),
+			"skin_shadow": Color("#DCB2A6"),
+			"eye": Color("#3E7A9C"),
+			"line": Color("#31424E"),
+			"outfit": Color("#5B84A6"),
+			"blush": Color("#E8A0B4"),
+			"mouth": Color("#7A4458"),
+		}
+	elif role_id == "ling":
+		fallback = {
 			"background": Color("#182126"),
 			"accent": Color("#F29A7D"),
 			"secondary": Color("#6FB7A7"),
@@ -558,8 +576,8 @@ func _build_palette() -> Dictionary:
 			"blush": Color("#E97E92"),
 			"mouth": Color("#7A394B"),
 		}
-		if role_id == "ling"
-		else {
+	else:
+		fallback = {
 			"background": Color("#1C1D2A"),
 			"accent": Color("#B8A6D9"),
 			"secondary": Color("#E2A6B4"),
@@ -573,7 +591,6 @@ func _build_palette() -> Dictionary:
 			"blush": Color("#E585A2"),
 			"mouth": Color("#763C58"),
 		}
-	)
 	var raw_palette = _manifest.get("palette", {})
 	if not raw_palette is Dictionary:
 		return fallback

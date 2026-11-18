@@ -6,7 +6,7 @@ const KIT := preload("res://scenes/Settings/sections/SettingsUIKit.gd")
 const RUNTIME_TUNING := preload("res://scripts/domain/DeveloperRuntimeTuning.gd")
 const INTERACTION_RULES := preload("res://scripts/domain/InteractionRules.gd")
 const PLAYTEST_DIAGNOSTICS := preload("res://scripts/domain/PlaytestDiagnostics.gd")
-const DEVELOPER_ROLES := ["ling", "nai"]
+const DEVELOPER_ROLES := ["ling", "nai", "xixi"]
 const STAT_LABELS := {
 	"health": "健康", "stamina": "体力", "hunger": "饥饿", "thirst": "口渴",
 	"awake": "清醒", "urine": "尿液", "intimacy": "好感度", "mood": "心情",

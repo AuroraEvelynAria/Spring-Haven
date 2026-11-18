@@ -4,7 +4,7 @@ signal closed
 
 const GRAPH_CANVAS := preload("res://scenes/MemoryNetwork/MemoryGraphCanvas.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
-const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈"}
+const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈", "xixi": "汐汐"}
 # 低于这个宽度就不再并排:改成"画布聚焦 / 详情聚焦"二选一。
 const NARROW_WIDTH := 840.0
 # 观察台形态:外框保留庭院氛围,但图内容区与详情卡必须是实心的,
@@ -170,6 +170,7 @@ func _build_interface() -> void:
 	_add_scope_option("共享记忆", "*")
 	_add_scope_option("仅小玲", "ling")
 	_add_scope_option("仅小奈", "nai")
+	_add_scope_option("仅汐汐", "xixi")
 	_scope_select.item_selected.connect(func(_index: int): _load_graph())
 	filters.add_child(_scope_select)
 	_search_input = LineEdit.new()

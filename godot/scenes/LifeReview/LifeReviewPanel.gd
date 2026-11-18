@@ -3,8 +3,8 @@ extends Control
 
 """生活回顾面板：展示角色自主生活的时间线（来自 Core GET /life/events）。"""
 
-const ROLE_NAMES := {"ling": "小玲", "nai": "小奈"}
-const ROLE_COLORS := {"ling": "#E8A0BF", "nai": "#A0C4E8"}
+const ROLE_NAMES := {"ling": "小玲", "nai": "小奈", "xixi": "汐汐"}
+const ROLE_COLORS := {"ling": "#E8A0BF", "nai": "#A0C4E8", "xixi": "#7EC8E8"}
 
 var _scrim: ColorRect
 var _panel: PanelContainer

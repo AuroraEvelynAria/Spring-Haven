@@ -185,7 +185,7 @@ static func journey_summaries() -> Array[Dictionary]:
 			summary.updated_at = maxi(int(summary.updated_at), created_at)
 			var role := str(entry.get("role", ""))
 			var roles: Array = summary.role_ids
-			if role in ["ling", "nai"] and role not in roles:
+			if role in ["ling", "nai", "xixi"] and role not in roles:
 				roles.append(role)
 			summary.role_ids = roles
 			grouped[journey_id] = summary
