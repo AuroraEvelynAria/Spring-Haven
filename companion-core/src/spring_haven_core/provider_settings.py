@@ -8,7 +8,7 @@ import platform
 import re
 import threading
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -37,6 +37,7 @@ class CapabilitySnapshot:
     protocol: str
     inherit_chat_key: bool
     allow_insecure_http: bool
+    extra_headers: dict[str, str] = field(default_factory=dict)
     candidate_id: str = "primary"
     label: str = "Primary"
     is_fallback: bool = False
@@ -45,7 +46,7 @@ class CapabilitySnapshot:
 CAPABILITIES = ("chat", "vision", "embedding", "rerank", "asr", "tts")
 CAPABILITY_PROTOCOLS = {
     "chat": {"openai_chat"},
-    "vision": {"openai_chat_vision"},
+    "vision": {"openai_chat_vision", "anthropic_messages_vision"},
     "embedding": {"openai_embeddings"},
     "rerank": {"jina_v1", "cohere_v2"},
     "asr": {"openai_transcriptions"},
@@ -122,6 +123,10 @@ DEFAULT_NETWORK_PROXY = {
 }
 MAX_FALLBACK_CANDIDATES = 6
 FALLBACK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$")
+# extra_headers 不允许覆盖的保留头(鉴权/协议版本/内容类型由请求层统一管理)。
+RESERVED_EXTRA_HEADERS = {
+    "authorization", "x-api-key", "anthropic-version", "content-type",
+}
 
 
 class ProviderSettingsStore:
@@ -220,6 +225,7 @@ class ProviderSettingsStore:
                         defaults.get("allow_insecure_http", False),
                     )
                 ),
+                extra_headers=raw_profile.get("extra_headers"),
             )
             if environment_key:
                 validated_environment_key = self._validate_key(environment_key)
@@ -321,6 +327,7 @@ class ProviderSettingsStore:
                 protocol=str(profile["protocol"]),
                 inherit_chat_key=bool(profile["inherit_chat_key"]),
                 allow_insecure_http=bool(profile.get("allow_insecure_http", False)),
+                extra_headers=dict(profile.get("extra_headers", {})),
             )
 
     def candidate_snapshots(self, capability: str) -> list[CapabilitySnapshot]:
@@ -348,6 +355,7 @@ class ProviderSettingsStore:
                         allow_insecure_http=bool(
                             candidate.get("allow_insecure_http", False)
                         ),
+                        extra_headers=dict(candidate.get("extra_headers", {})),
                         candidate_id=candidate_id,
                         label=str(candidate["label"]),
                         is_fallback=True,
@@ -507,6 +515,7 @@ class ProviderSettingsStore:
         protocol: Any = "",
         inherit_chat_key: Any = False,
         allow_insecure_http: Any = None,
+        extra_headers: Any = None,
     ) -> dict[str, Any]:
         normalized_capability = self._validate_capability(capability)
         previous_profile = self._profiles[normalized_capability]
@@ -523,6 +532,11 @@ class ProviderSettingsStore:
                 previous_profile.get("allow_insecure_http", False)
                 if allow_insecure_http is None
                 else allow_insecure_http
+            ),
+            extra_headers=(
+                previous_profile.get("extra_headers", {})
+                if extra_headers is None
+                else extra_headers
             ),
         )
         if clear_api_key and api_key not in {None, ""}:
@@ -865,6 +879,7 @@ class ProviderSettingsStore:
                 ),
                 inherit_chat_key=item.get("inherit_chat_key", True),
                 allow_insecure_http=item.get("allow_insecure_http", False),
+                extra_headers=item.get("extra_headers"),
             )
             label = str(item.get("label", f"备用 {index + 1}")).replace("\x00", " ").strip()
             if not label or len(label) > 80:
@@ -890,6 +905,7 @@ class ProviderSettingsStore:
         protocol: Any,
         inherit_chat_key: Any,
         allow_insecure_http: Any,
+        extra_headers: Any = None,
     ) -> dict[str, Any]:
         normalized_protocol = str(protocol).strip()
         if normalized_protocol not in CAPABILITY_PROTOCOLS[capability]:
@@ -910,7 +926,40 @@ class ProviderSettingsStore:
                 inherit_chat_key, "inherit_chat_key"
             ),
             "allow_insecure_http": normalized_allow_http,
+            "extra_headers": cls._validated_extra_headers(extra_headers),
         }
+
+    @staticmethod
+    def _validated_extra_headers(raw: Any) -> dict[str, str]:
+        """Anthropic 方言的自定义路由头(如 opencode 网关的 x-opencode-session)。
+
+        只做白名单式限制:键名合法、值短、不与鉴权/协议头冲突——头只发给
+        配置的那个供应商主机,作用域天然受限。
+        """
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ProviderConfigurationError("extra_headers must be a JSON object")
+        if len(raw) > 8:
+            raise ProviderConfigurationError("extra_headers supports at most 8 entries")
+        result: dict[str, str] = {}
+        for key, value in raw.items():
+            name = str(key).strip()
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name):
+                raise ProviderConfigurationError(
+                    f"invalid extra header name: {name!r}"
+                )
+            if name.lower() in RESERVED_EXTRA_HEADERS:
+                raise ProviderConfigurationError(
+                    f"extra header {name} is managed by the provider layer"
+                )
+            text = str(value)
+            if not text or len(text) > 256:
+                raise ProviderConfigurationError(
+                    f"extra header {name} must be 1-256 characters"
+                )
+            result[name] = text
+        return result
 
     @classmethod
     def _validated_rag(cls, raw: dict[str, Any]) -> dict[str, Any]:

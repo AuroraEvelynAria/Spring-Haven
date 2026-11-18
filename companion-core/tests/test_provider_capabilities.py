@@ -13,7 +13,10 @@ from aiohttp.test_utils import TestServer
 
 from spring_haven_core.config import CoreConfig
 from spring_haven_core.provider import OpenAICompatibleProvider, ProviderError, _usage_snapshot
-from spring_haven_core.provider_settings import ProviderSettingsStore
+from spring_haven_core.provider_settings import (
+    ProviderConfigurationError,
+    ProviderSettingsStore,
+)
 
 
 class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -47,10 +50,13 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.empty_reply_payloads = []
         self.invalid_json_calls = 0
         self.invalid_embedding_calls = 0
+        self.anthropic_headers: dict[str, str] = {}
+        self.anthropic_payloads: list[dict] = []
         app = web.Application()
         app.router.add_post("/v1/chat/completions", self.chat)
         app.router.add_post("/v1/embeddings", self.embeddings)
         app.router.add_post("/v1/rerank", self.rerank)
+        app.router.add_post("/v1/messages", self.anthropic_messages)
         app.router.add_post("/v1/fail", self.fail)
         app.router.add_post("/v1/client-fail", self.client_fail)
         app.router.add_post("/v1/nul-json", self.nul_json)
@@ -250,6 +256,71 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
         await response.write(body[23:])
         await response.write_eof()
         return response
+
+    async def anthropic_messages(self, request):
+        self.anthropic_headers = dict(request.headers)
+        self.anthropic_payloads.append(await request.json())
+        return web.json_response(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"observations":["测试图"],"entities":[],"changes":[],"confidence":0.9}',
+                    }
+                ],
+                "stop_reason": "end_turn",
+            }
+        )
+
+    async def test_anthropic_messages_vision_protocol(self):
+        base_url = str(self.server.make_url("/v1")).rstrip("/")
+        self.settings.update_profile(
+            "vision",
+            base_url=base_url,
+            model="anthropic-vision-model",
+            enabled=True,
+            protocol="anthropic_messages_vision",
+            api_key="sk-anthropic-not-a-real-credential",
+            inherit_chat_key=False,
+            persist=False,
+            extra_headers={"x-opencode-session": "spring-haven-test"},
+        )
+        reply = await self.provider.describe_image(
+            image_base64="aW1hZ2U=",
+            mime_type="image/png",
+            question="看到了什么？",
+        )
+        self.assertEqual(reply.structured["confidence"], 0.9)
+        self.assertEqual(
+            self.anthropic_headers.get("x-api-key"),
+            "sk-anthropic-not-a-real-credential",
+        )
+        self.assertEqual(
+            self.anthropic_headers.get("anthropic-version"), "2023-06-01"
+        )
+        self.assertEqual(
+            self.anthropic_headers.get("x-opencode-session"), "spring-haven-test"
+        )
+        self.assertNotIn("Authorization", self.anthropic_headers)
+        payload = self.anthropic_payloads[-1]
+        self.assertTrue(str(payload.get("system", "")).startswith("你是"))
+        image_block = payload["messages"][0]["content"][0]
+        self.assertEqual(image_block["type"], "image")
+        self.assertEqual(image_block["source"]["media_type"], "image/png")
+        self.assertEqual(image_block["source"]["data"], "aW1hZ2U=")
+        self.assertEqual(payload["messages"][0]["content"][1]["text"], "看到了什么？")
+
+    async def test_anthropic_extra_headers_reject_reserved_names(self):
+        with self.assertRaises(ProviderConfigurationError):
+            self.settings.update_profile(
+                "vision",
+                base_url=str(self.server.make_url("/v1")).rstrip("/"),
+                model="anthropic-vision-model",
+                enabled=True,
+                protocol="anthropic_messages_vision",
+                persist=False,
+                extra_headers={"x-api-key": "nope"},
+            )
 
     async def test_openai_compatible_vision_embedding_and_rerank(self):
         vision = await self.provider.describe_image(

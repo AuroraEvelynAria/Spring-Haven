@@ -256,6 +256,7 @@ async def _provider_profile_config(request: web.Request) -> web.Response:
             protocol=payload.get("protocol", ""),
             inherit_chat_key=inherit_chat_key,
             allow_insecure_http=allow_insecure_http,
+            extra_headers=payload.get("extra_headers"),
         )
         return _ok(status)
     except (ProviderConfigurationError, ValueError) as exc:

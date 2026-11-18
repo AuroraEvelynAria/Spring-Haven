@@ -130,7 +130,7 @@ const CAPABILITY_PROVIDER_UI := {
 		"description": "用于场景截图、视频通话和桌面视觉转述",
 		"base_url": "https://api.openai.com/v1",
 		"model": "gpt-4.1-mini",
-		"protocols": {"openai_chat_vision": "OpenAI 视觉对话"},
+		"protocols": {"openai_chat_vision": "OpenAI 视觉对话", "anthropic_messages_vision": "Anthropic 视觉对话"},
 	},
 	"embedding": {
 		"label": "嵌入模型",
