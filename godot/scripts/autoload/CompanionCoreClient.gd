@@ -19,7 +19,7 @@ const HEALTH_INTERVAL_SECONDS := 8.0
 const MEMORY_INTERVAL_SECONDS := 6.0
 const MAX_HEALTH_RETRY_SECONDS := 30.0
 const DEFAULT_SAVE_ID := "default"
-const CHARACTERS := ["ling", "nai"]
+const CHARACTERS := ["ling", "nai", "xixi"]
 const MANAGED_CORE_HEALTH_DELAY_SECONDS := 1.5
 const CORE_KEY_FILE := "user://companion_core_key.txt"
 const USER_CORE_RUNTIME_DIR := "user://companion-core"
@@ -1080,8 +1080,10 @@ func _ensure_core_runtime(template_root: String, runtime_root: String) -> bool:
 		"roles.example.json": "roles.json",
 		"personas/ling.md": "personas/ling.md",
 		"personas/nai.md": "personas/nai.md",
+		"personas/xixi.md": "personas/xixi.md",
 		"memory_prompts/ling.md": "memory_prompts/ling.md",
 		"memory_prompts/nai.md": "memory_prompts/nai.md",
+		"memory_prompts/xixi.md": "memory_prompts/xixi.md",
 	}
 	for source_relative in required_templates:
 		var destination_relative := str(required_templates[source_relative])

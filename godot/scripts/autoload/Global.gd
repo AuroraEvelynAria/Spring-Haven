@@ -24,7 +24,8 @@ signal save_slot_loaded(save_id: String)
 # ===== Character definitions =====
 const ROLES = {
 	ling = { name = "小玲", full_name = "春日 鈴音", icon = "🐾", sub = "猫娘 · 21岁", mood = "☀️ 暖洋洋", color = "#F5A97F" },
-	nai  = { name = "小奈", full_name = "白瀬 雪奈", icon = "🐇", sub = "兔娘 · 19岁", mood = "🌸 活力满满", color = "#B8A6D9" }
+	nai  = { name = "小奈", full_name = "白瀬 雪奈", icon = "🐇", sub = "兔娘 · 19岁", mood = "🌸 活力满满", color = "#B8A6D9" },
+	xixi = { name = "汐汐", full_name = "汐汐", icon = "🐋", sub = "鲸鱼兽娘 · 20岁", mood = "🌊 温温柔柔", color = "#7EC8E8" }
 }
 
 const SAVE_VERSION := 6
@@ -63,6 +64,19 @@ const ROLE_DEFAULT_STATS := {
 		"stress": 30.0,
 		"fertility": 14.0,
 		"implantation": 0.7
+	},
+	"xixi": {
+		"health": 74.0,
+		"stamina": 58.0,
+		"hunger": 40.0,
+		"thirst": 38.0,
+		"awake": 66.0,
+		"urine": 22.0,
+		"intimacy": 100.0,
+		"mood": 68.0,
+		"stress": 14.0,
+		"fertility": 12.0,
+		"implantation": 0.6
 	}
 }
 
@@ -1400,7 +1414,7 @@ func _normalize_life_runtime(raw_value: Variant) -> Dictionary:
 		else {}
 	)
 	var last_starter_role := str(raw_ambient.get("last_starter_role", ""))
-	if last_starter_role not in ["ling", "nai"]:
+	if not ROLES.has(last_starter_role):
 		last_starter_role = ""
 	var completed_sessions := 0
 	var raw_completed_sessions = raw_ambient.get("completed_sessions", 0)
@@ -1506,7 +1520,7 @@ func _normalize_life_intent(raw_value: Variant, role: String) -> Dictionary:
 	]:
 		return {}
 	var target_role := str(raw.get("target_role", ""))
-	if target_role not in ["", "ling", "nai"] or target_role == role:
+	if (target_role != "" and not ROLES.has(target_role)) or target_role == role:
 		target_role = ""
 	return {
 		"id": intent_id,

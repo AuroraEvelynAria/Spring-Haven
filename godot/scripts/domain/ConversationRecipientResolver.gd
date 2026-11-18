@@ -7,12 +7,22 @@ const ROUTE_PROTOCOL := "spring_heaven.conversation_route.v1"
 const ROLE_ALIASES := {
 	"ling": ["小玲", "铃音", "鈴音", "春日铃音", "春日鈴音"],
 	"nai": ["小奈", "雪奈", "白瀬雪奈", "白濑雪奈"],
+	"xixi": ["汐汐", "小汐"],
 }
 
-const DUAL_MARKERS := [
+# 三角色时代的群回标记分两层：
+# PAIR_ROLE_MARKERS——点名某一对接到的就只回那两位（保留双角色时代的精确语义）；
+# ALL_ROLE_MARKERS——泛指全员的口语（「两个/都/一起」是双角色时代的说法，
+# 说话人要的是"大家回答"，点名谁就另用 PAIR 层）。
+const PAIR_ROLE_MARKERS := {
+	"小玲和小奈都": ["ling", "nai"],
+	"小奈和小玲都": ["nai", "ling"],
+}
+
+const ALL_ROLE_MARKERS := [
 	"你们都回答", "你们两个都回答", "两个人都回答", "兩個人都回答",
 	"你们都说说", "你们两个都说说", "两个人都说说", "一起回答",
-	"小玲和小奈都", "小奈和小玲都",
+	"大家都回答", "你们仨都回答", "你们三个都回答", "你们三个都说说",
 ]
 
 const DIRECTIVE_TEMPLATES := [
@@ -49,9 +59,12 @@ static func resolve(text: String, selected_role: String, conversational_role := 
 	if normalized.is_empty():
 		return _result([fallback], "selected")
 
-	for marker in DUAL_MARKERS:
+	for marker in PAIR_ROLE_MARKERS:
 		if normalized.findn(marker) >= 0:
-			return _result([fallback, _other_role(fallback)], "explicit_dual")
+			return _result(PAIR_ROLE_MARKERS[marker], "explicit_dual")
+	for marker in ALL_ROLE_MARKERS:
+		if normalized.findn(marker) >= 0:
+			return _result(ROLE_ALIASES.keys(), "explicit_all")
 
 	var compact := _compact_for_routing(normalized)
 	var delegation := _resolve_delegation(compact, fallback, context_role)
@@ -89,10 +102,14 @@ static func _result(roles: Array, reason: String, route: Dictionary = {}) -> Dic
 		var role := str(role_variant)
 		if ROLE_ALIASES.has(role) and role not in normalized_roles:
 			normalized_roles.append(role)
+	# 共享房间：在场名单从注册表派生，加角色不需要回来改这里。
+	var all_roles: Array[String] = []
+	for role_variant in ROLE_ALIASES:
+		all_roles.append(str(role_variant))
 	var result := {
 		"roles": normalized_roles,
 		"reason": reason,
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": all_roles,
 		"visibility": "shared_room",
 	}
 	if not route.is_empty():
@@ -158,6 +175,3 @@ static func _compact_for_routing(text: String) -> String:
 	for separator in [" ", "\t", "\r", "\n", "，", ",", "。", "！", "!"]:
 		compact = compact.replace(str(separator), "")
 	return compact
-
-static func _other_role(role: String) -> String:
-	return "nai" if role == "ling" else "ling"

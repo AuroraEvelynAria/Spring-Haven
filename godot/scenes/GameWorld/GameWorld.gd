@@ -42,6 +42,11 @@ const ROLE_DATA := {
 		"name": "小奈", "full_name": "白瀬 雪奈", "icon": "🐇", "sub": "兔娘 · 19岁", "mood": "🌸 活力满满", "color": "#B8A6D9",
 		"diary": "“嗯～今天排练的时候一直在想主人，跳错了好几个拍子。回来看到主人在，就对了。”",
 		"diary_footer": "—— 雪奈 · 傍晚"
+	},
+	"xixi": {
+		"name": "汐汐", "full_name": "汐汐", "icon": "🐋", "sub": "鲸鱼兽娘 · 20岁", "mood": "🌊 温温柔柔", "color": "#7EC8E8",
+		"diary": "“趴在窗边听了好久的水声……其实是雨啦。但一想到主人在这个家里，整片海都是暖的。”",
+		"diary_footer": "—— 汐汐 · 夜潮"
 	}
 }
 
@@ -99,8 +104,8 @@ var _connection_status: Label
 var _memory_status: Label
 var _memory_state := "idle"
 var _memory_pulse_elapsed := 0.0
-var _ling_button: Button
-var _nai_button: Button
+# 角色切换按钮（role_id -> Button），随 ROLE_DATA 数据驱动生成与同步。
+var _role_buttons: Dictionary = {}
 var _explore_button: Button
 var _archive_button: Button
 var _memory_network_button: Button
@@ -475,10 +480,12 @@ func _build_nav(parent: VBoxContainer) -> void:
 	var roles := HBoxContainer.new()
 	roles.add_theme_constant_override("separation", 3)
 	_role_switch_panel.add_child(roles)
-	_ling_button = _role_button("🐾 小玲", "ling")
-	_nai_button = _role_button("🐇 小奈", "nai")
-	roles.add_child(_ling_button)
-	roles.add_child(_nai_button)
+	for role_variant in ROLE_DATA:
+		var role := str(role_variant)
+		var role_entry := ROLE_DATA[role] as Dictionary
+		var button := _role_button("%s %s" % [str(role_entry.icon), str(role_entry.name)], role)
+		_role_buttons[role] = button
+		roles.add_child(button)
 
 	_archive_button = Button.new()
 	_archive_button.text = "📚"
@@ -1582,8 +1589,8 @@ func _refresh_interaction_state() -> void:
 	# Role selection is a user preference, not part of the in-flight payload.
 	# It remains available while waiting; revision tracking protects it from a
 	# late callback that would otherwise apply the automatic next turn.
-	_ling_button.disabled = _intro_active
-	_nai_button.disabled = _intro_active
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).disabled = _intro_active
 	if is_instance_valid(_explore_button):
 		_explore_button.disabled = presentation_locked
 	if is_instance_valid(_voice_button):
@@ -2027,14 +2034,14 @@ func _send_message() -> void:
 		reply_roles.append(_current_role)
 	var reply_role := reply_roles[0]
 	var audience_roles: Array[String] = []
-	var audience_variant = recipient_result.get("audience_roles", ["ling", "nai"])
+	var audience_variant = recipient_result.get("audience_roles", ROLE_DATA.keys())
 	if audience_variant is Array:
 		for audience_role_variant in audience_variant:
 			var audience_role := str(audience_role_variant)
 			if ROLE_DATA.has(audience_role) and audience_role not in audience_roles:
 				audience_roles.append(audience_role)
 	if audience_roles.is_empty():
-		audience_roles.assign(["ling", "nai"])
+		audience_roles.assign(ROLE_DATA.keys())
 	var message_id := Global.new_local_id("user")
 	var event_type := "chat"
 	var action := ""
@@ -2148,7 +2155,7 @@ func _apply_action(action: String) -> void:
 		"sender": "user",
 		"role": response_role,
 		"target_role": response_role,
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": ROLE_DATA.keys(),
 		"text": user_message,
 		"status": "pending",
 		"kind": "action",
@@ -2182,8 +2189,8 @@ func _switch_role(role: String, _announce: bool, persist := true) -> bool:
 		_show_persistence_failure(Global.get_last_save_error(), "角色切换未保存")
 		return false
 	_current_role = role
-	_ling_button.button_pressed = role == "ling"
-	_nai_button.button_pressed = role == "nai"
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).button_pressed = str(role_variant) == role
 	_update_role_button_styles()
 	_apply_chat_input_theme(ThemeMgr.get_current_theme_data())
 	_refresh_sidebar()
@@ -2195,9 +2202,9 @@ func _switch_role(role: String, _announce: bool, persist := true) -> bool:
 
 func _update_role_button_styles() -> void:
 	var data := ThemeMgr.get_current_theme_data()
-	for entry in [[_ling_button, "ling"], [_nai_button, "nai"]]:
-		var button: Button = entry[0]
-		var active := str(entry[1]) == _current_role
+	for role_variant in _role_buttons:
+		var button: Button = _role_buttons[role_variant]
+		var active := str(role_variant) == _current_role
 		button.add_theme_color_override("font_color", Color.WHITE if active else Color(data.secondary))
 		button.add_theme_stylebox_override("normal", _panel_style(Color(data.primary) if active else Color.TRANSPARENT, Color.TRANSPARENT, 16, 3))
 		button.add_theme_stylebox_override("pressed", _panel_style(Color(data.primary), Color.TRANSPARENT, 16, 3))
@@ -2208,19 +2215,26 @@ func _intro_sequence() -> void:
 	var intro_lines: Array[Dictionary] = [
 		{"role": "ling", "text": "喵～你来了。我在窗台上晒了好一会儿太阳了。"},
 		{"role": "nai", "text": "嗯～小玲姐姐！主人来了怎么不叫我！"},
-		{"role": "ling", "text": "喵……你急什么，主人又不会跑。"}
+		{"role": "ling", "text": "喵……你急什么，主人又不会跑。"},
+		{"role": "xixi", "text": "呐呐……主人、小玲姐姐、小奈，晚上好呀。我是汐汐，今晚刚刚搬进来，请多照顾……尾巴有点紧张，啪嗒。"},
+		{"role": "nai", "text": "哇，汐汐的鲸鱼尾巴在拍诶！主人，以后家里更热闹啦！"}
 	]
 	await get_tree().create_timer(0.35).timeout
-	for line in intro_lines:
+	for line_index in intro_lines.size():
 		if _scene_exiting:
 			return
+		var line := intro_lines[line_index] as Dictionary
 		var role := str(line.get("role", "ling"))
 		var text := str(line.get("text", ""))
 		_switch_role(role, false, false)
 		var message_id := _append_history_message(
 			"ai", role, text, "sent", {"kind": "intro", "event_type": "intro"}
 		)
-		var next_role := _other_role(role)
+		# 引导序列的「下一角色」取下一句台词本身（双角色时代是二元翻转，
+		# 三角色起以台词顺序为准），最后一句收在它自己的角色上。
+		var next_role := role
+		if line_index + 1 < intro_lines.size():
+			next_role = str((intro_lines[line_index + 1] as Dictionary).get("role", role))
 		var next_role_saved := Global.set_current_character(next_role, true)
 		if not next_role_saved:
 			_show_persistence_failure(Global.get_last_save_error(), "引导轮次未保存")
@@ -2328,7 +2342,7 @@ func _on_core_reply(request_id: String, text: String, _attachments: Array) -> vo
 		"in_reply_to": history_id,
 		"event_type": event_type,
 		"kind": "action_reply" if event_type == "action" else "reply",
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": ROLE_DATA.keys(),
 	}
 	var reply_target_role := ""
 	var pending_state_variant = pending.get("state", {})
@@ -2539,7 +2553,7 @@ func _update_recipient_hint() -> void:
 			if ROLE_DATA.has(role):
 				names.append(str((ROLE_DATA[role] as Dictionary).name))
 	var audience_names: Array[String] = []
-	var audience_variant = resolved.get("audience_roles", ["ling", "nai"])
+	var audience_variant = resolved.get("audience_roles", ROLE_DATA.keys())
 	if audience_variant is Array:
 		for role_variant in audience_variant:
 			var role := str(role_variant)
@@ -2561,26 +2575,27 @@ func _resolve_recipients(
 	if resolved.has("route"):
 		return resolved
 	var reason := str(resolved.get("reason", "selected"))
+	var default_reply_mode := str(Settings.get_runtime_tuning_value("default_reply_mode", "selected"))
+	var mentioned := CHAT_PIPELINE.mentioned_roles(text)
 	var should_reply_together := (
 		reason == "selected"
 		and (
-			str(Settings.get_runtime_tuning_value("default_reply_mode", "selected")) == "both"
+			default_reply_mode == "both"
 			or (
 				bool(Settings.get_runtime_tuning_value("both_names_trigger_dual", false))
-				and _message_mentions_both_roles(text)
+				and mentioned.size() >= 2
 			)
 		)
 	)
 	if should_reply_together:
-		resolved["roles"] = [selected_role, _other_role(selected_role)]
+		# 三角色时代：群回不再做 ling↔nai 二元翻转——默认 both 回全员，
+		# 点名 ≥2 位就回被点名的那几位。
+		if default_reply_mode == "both":
+			resolved["roles"] = ROLE_DATA.keys()
+		else:
+			resolved["roles"] = mentioned
 		resolved["reason"] = "developer_dual"
 	return resolved
-
-func _message_mentions_both_roles(text: String) -> bool:
-	return CHAT_PIPELINE.message_mentions_both_roles(text)
-
-func _other_role(role: String) -> String:
-	return "nai" if role == "ling" else "ling"
 
 func _add_waiting_message(request_id: String, role: String) -> void:
 	_remove_waiting_message(request_id)
@@ -2690,8 +2705,8 @@ func _apply_responsive_layout() -> void:
 	_connection_status.visible = width > 600.0
 	_memory_status.visible = width > 720.0
 	_explore_button.visible = width > 560.0
-	_ling_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
-	_nai_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).custom_minimum_size = Vector2(70 if narrow else 84, 28)
 	_settings_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
 	_archive_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
 	_memory_network_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
