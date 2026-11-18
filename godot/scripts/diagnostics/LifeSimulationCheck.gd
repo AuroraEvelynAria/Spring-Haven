@@ -80,14 +80,14 @@ func _run() -> void:
 
 	var scheduled_runtime := Global.life_runtime.duplicate(true)
 	var scheduled_roles: Dictionary = scheduled_runtime.get("roles", {})
-	for role in ["ling", "nai"]:
+	for role in ["ling", "nai", "xixi"]:
 		var role_runtime: Dictionary = scheduled_roles.get(role, {}).duplicate(true)
 		role_runtime["next_proactive_unix"] = 0
 		scheduled_roles[role] = role_runtime
 	scheduled_runtime["roles"] = scheduled_roles
 	Global.life_runtime = scheduled_runtime
 	LifeSim.call("_schedule_missing_proactive_times", now)
-	for role in ["ling", "nai"]:
+	for role in ["ling", "nai", "xixi"]:
 		var next_time := int((Global.life_runtime.roles[role] as Dictionary).next_proactive_unix)
 		_expect(next_time >= now + 3600 and next_time <= now + 10800, "%s 主动消息时间不在 1-3 小时" % role)
 
@@ -213,7 +213,7 @@ func _run() -> void:
 	Global.stats_by_role["nai"] = nai_for_intent
 	var intent_runtime := Global.life_runtime.duplicate(true)
 	var intent_roles: Dictionary = intent_runtime.get("roles", {})
-	for role in ["ling", "nai"]:
+	for role in ["ling", "nai", "xixi"]:
 		var role_runtime: Dictionary = intent_roles.get(role, {}).duplicate(true)
 		role_runtime["last_personality_action_unix"] = 0
 		role_runtime["active_intent"] = ""
