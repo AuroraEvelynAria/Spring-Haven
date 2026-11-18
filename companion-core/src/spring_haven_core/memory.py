@@ -13,10 +13,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
+# ADR-016:节拍触发词前缀的唯一定义在 beats.py(写入/求值/清理共用,不许各写
+# 一份;beats.py 零内部依赖,这里反向引用不会成环)。
+from .beats import BEAT_TERM_PREFIX
+
 
 HEARTLOOM_NAME = "Heartloom Memory"
 HEARTLOOM_DISPLAY_NAME = "心织记忆"
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 # 离线投递 TTL:7 世界天(#23 迁移后按 world_time 计算,不再使用现实时间)。
 LIFE_OUTBOX_TTL_WORLD_DAYS = 7.0
 # 三态生命周期阈值(ADR-001 D5,后端常量,不开放 UI 配置;Phase 3 启用)。
@@ -537,6 +541,38 @@ class HeartloomStore:
             updated_at       INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (save_id, role_id)
         );
+
+        -- ADR-016(schema v11):故事脊椎运行时状态。剧本内容在 JSON 文件里
+        -- (beats_path),库里只存按存档的推进状态与历史;spine_json 冻结装载
+        -- 时的节拍序号快照,便于追溯"当时她按什么顺序经历"。
+        CREATE TABLE IF NOT EXISTS plot_state (
+            save_id            TEXT NOT NULL,
+            plot_id            TEXT NOT NULL,
+            spine_json         TEXT NOT NULL DEFAULT '[]',
+            current_beat_id    TEXT NOT NULL DEFAULT '',
+            entered_world_day  REAL NOT NULL DEFAULT 0,
+            started_world_day  REAL NOT NULL DEFAULT 0,
+            history_json       TEXT NOT NULL DEFAULT '[]',
+            updated_at         INTEGER NOT NULL,
+            PRIMARY KEY (save_id, plot_id)
+        );
+
+        -- ADR-016 修订1:导演注入账本。谁、何时、对哪条脊椎动了什么、她感知到
+        -- 什么(observation 必填是 service 层的校验,库里只留事实)。可审计、
+        -- 可回滚的依据;注入的事件本身走 life_events(event_id 前缀 director-)。
+        CREATE TABLE IF NOT EXISTS director_ledger (
+            entry_id     TEXT PRIMARY KEY,
+            save_id      TEXT NOT NULL,
+            plot_id      TEXT NOT NULL,
+            beat_id      TEXT NOT NULL DEFAULT '',
+            action       TEXT NOT NULL,
+            observation  TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            world_day    REAL NOT NULL DEFAULT 0,
+            created_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_director_ledger_save
+            ON director_ledger(save_id, created_at DESC);
         """
         # ADR-001 Phase 1:升级到 v6 前强制备份(文件库;可重复执行,已是 v6 不重复备份)
         stored_version = self._read_schema_version()
@@ -554,6 +590,9 @@ class HeartloomStore:
         # v10(ADR-014):艾宾浩斯正式化,存量 intrinsic 按倒数重映射,升级前备份
         if stored_version is not None and stored_version < 10 and self.path != ":memory:":
             self.backup_to(str(self.path) + ".pre-v10.backup")
+        # v11(ADR-016):节拍状态,纯新增表零回填,备份惯例照旧
+        if stored_version is not None and stored_version < 11 and self.path != ":memory:":
+            self.backup_to(str(self.path) + ".pre-v11.backup")
         with self._lock, self._connection:
             self._connection.executescript(schema)
             stored_version = self._read_schema_version()
@@ -4277,9 +4316,181 @@ class HeartloomStore:
             "action": str(row["action"]),
             "description": str(row["description"]),
             "occurred_at_unix": int(row["occurred_at_unix"]),
+            # ADR-016:节拍条件的 life_event 窗口按世界日判定,时间线展示也要它
+            "world_occurred_at": float(row["world_occurred_at"]),
             "stat_changes": _json_object(row["stat_changes_json"]),
             "created_at": int(row["created_at"]),
         }
+
+    # ===== ADR-016:故事脊椎运行时状态 =====
+
+    def get_plot_state(self, save_id: str, plot_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM plot_state WHERE save_id = ? AND plot_id = ?",
+                (save_id, plot_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "save_id": str(row["save_id"]),
+            "plot_id": str(row["plot_id"]),
+            "spine": _json_list(row["spine_json"]),
+            "current_beat_id": str(row["current_beat_id"]),
+            "entered_world_day": float(row["entered_world_day"]),
+            "started_world_day": float(row["started_world_day"]),
+            "history": _json_object_list(row["history_json"]),
+            "updated_at": int(row["updated_at"]),
+        }
+
+    def save_plot_state(
+        self,
+        *,
+        save_id: str,
+        plot_id: str,
+        spine: list[str],
+        current_beat_id: str,
+        entered_world_day: float,
+        started_world_day: float,
+        history: list[dict[str, Any]],
+    ) -> None:
+        """整行 upsert:状态机由 beats.py 纯函数推进,这里只负责落盘。"""
+        now = int(time.time())
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO plot_state (
+                    save_id, plot_id, spine_json, current_beat_id,
+                    entered_world_day, started_world_day, history_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(save_id, plot_id) DO UPDATE SET
+                    spine_json = excluded.spine_json,
+                    current_beat_id = excluded.current_beat_id,
+                    entered_world_day = excluded.entered_world_day,
+                    started_world_day = excluded.started_world_day,
+                    history_json = excluded.history_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    save_id,
+                    plot_id,
+                    _json([str(item) for item in spine]),
+                    str(current_beat_id),
+                    max(0.0, float(entered_world_day)),
+                    max(0.0, float(started_world_day)),
+                    _json(history),
+                    now,
+                ),
+            )
+
+    def list_plot_states(self, save_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM plot_state WHERE save_id = ? ORDER BY started_world_day",
+                (save_id,),
+            ).fetchall()
+        return [
+            {
+                "save_id": str(row["save_id"]),
+                "plot_id": str(row["plot_id"]),
+                "spine": _json_list(row["spine_json"]),
+                "current_beat_id": str(row["current_beat_id"]),
+                "entered_world_day": float(row["entered_world_day"]),
+                "started_world_day": float(row["started_world_day"]),
+                "history": _json_object_list(row["history_json"]),
+                "updated_at": int(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def life_save_ids(self) -> list[str]:
+        """有过生命状态同步的存档(节拍调度只看这些;新存档等首次 sync)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT save_id FROM life_state ORDER BY save_id"
+            ).fetchall()
+        return [str(row["save_id"]) for row in rows]
+
+    def beat_memory_terms(self, save_id: str, role_id: str) -> set[str]:
+        """某角色可见的 beat:* 触发词(含共享 scope),供 memory_term 条件判定。
+
+        与求值器共用 BEAT_TERM_PREFIX 口径:条件只认这个前缀,避免全量
+        trigger_terms 进内存。
+        """
+        if role_id not in self.role_ids:
+            return set()
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT mt.term FROM memory_terms mt
+                JOIN memory_entries me ON me.memory_id = mt.memory_id
+                WHERE me.save_id = ? AND me.enabled = 1
+                  AND me.scope_role_id IN (?, ?)
+                  AND mt.term LIKE ?
+                """,
+                (save_id, role_id, SHARED_SCOPE, f"{BEAT_TERM_PREFIX}%"),
+            ).fetchall()
+        return {str(row["term"]) for row in rows}
+
+    def record_director_entry(
+        self,
+        *,
+        save_id: str,
+        entry_id: str,
+        plot_id: str,
+        beat_id: str,
+        action: str,
+        observation: str,
+        payload: dict[str, Any] | None = None,
+        world_day: float = 0.0,
+    ) -> None:
+        """导演注入账本(ADR-016 修订1):幂等 by entry_id,审计与回滚的依据。"""
+        now = int(time.time())
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO director_ledger (
+                    entry_id, save_id, plot_id, beat_id, action,
+                    observation, payload_json, world_day, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entry_id) DO NOTHING
+                """,
+                (
+                    str(entry_id),
+                    save_id,
+                    plot_id,
+                    str(beat_id),
+                    str(action),
+                    _clean_text(observation, 2000),
+                    _json(payload or {}),
+                    max(0.0, float(world_day)),
+                    now,
+                ),
+            )
+
+    def list_director_ledger(self, save_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM director_ledger WHERE save_id = ?
+                ORDER BY created_at DESC, rowid DESC LIMIT ?
+                """,
+                (save_id, max(1, min(500, int(limit)))),
+            ).fetchall()
+        return [
+            {
+                "entry_id": str(row["entry_id"]),
+                "save_id": str(row["save_id"]),
+                "plot_id": str(row["plot_id"]),
+                "beat_id": str(row["beat_id"]),
+                "action": str(row["action"]),
+                "observation": str(row["observation"]),
+                "payload": _json_object(row["payload_json"]),
+                "world_day": float(row["world_day"]),
+                "created_at": int(row["created_at"]),
+            }
+            for row in rows
+        ]
 
 
     def life_status(self, save_id: str = "") -> dict[str, Any]:
@@ -4713,6 +4924,14 @@ def _json_object(value: Any) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_object_list(value: Any) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
 
 
 def _safe_int(value: Any) -> int:

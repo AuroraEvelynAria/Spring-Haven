@@ -26,6 +26,7 @@ class CoreConfig:
     temperature: float = 0.8
     memory_db_path: str = "user_data/heartloom.sqlite3"
     rag_db_path: str = "user_data/knowledge.sqlite3"
+    beats_path: str = "user_data/beats"  # ADR-016:节拍剧本目录(可选内容)
     memory_recall_limit: int = 8
     memory_recent_messages: int = 24
     memory_organizer_enabled: bool = True
@@ -63,6 +64,14 @@ class CoreConfig:
         rag_path = Path(rag_path_value)
         if not rag_path.is_absolute():
             rag_path = source.parent / rag_path
+        # ADR-016:节拍剧本目录,相对 core_config.json 所在目录(惯例 = user_data/beats)
+        beats_path_value = os.getenv(
+            "SPRING_HAVEN_BEATS_DIR",
+            str(raw.get("beats_path", "beats")),
+        ).strip()
+        beats_path = Path(beats_path_value)
+        if not beats_path.is_absolute():
+            beats_path = source.parent / beats_path
 
         config = cls(
             host="127.0.0.1",
@@ -95,6 +104,7 @@ class CoreConfig:
             ),
             memory_db_path=str(memory_path.resolve()),
             rag_db_path=str(rag_path.resolve()),
+            beats_path=str(beats_path.resolve()),
             memory_recall_limit=_bounded_int(
                 raw.get("memory_recall_limit", 8), 1, 24, "memory recall limit"
             ),
