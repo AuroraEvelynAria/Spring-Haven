@@ -1096,14 +1096,12 @@ class CompanionService:
                 )
                 if memory:
                     digested += 1
-                    propagated = await self._propagate_digest(
+                    digested += await self._propagate_digest(
                         save_id=save_id,
                         source_role=role_id,
                         day_key=day_key,
                         digest_memory=memory,
                     )
-                    if propagated:
-                        digested += 1
                 else:
                     skipped += 1
             except asyncio.CancelledError:
@@ -1123,55 +1121,60 @@ class CompanionService:
         source_role: str,
         day_key: str,
         digest_memory: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """双角色记忆传播链：A 的高价值 digest 记忆会"被告诉"B。
+    ) -> int:
+        """记忆传播链：A 的高价值 digest 记忆会"被告诉"其余每一位角色。
 
         - 仅传播 importance >= 0.7 的记忆（小事不传播）
-        - 目标角色 = 注册表中除发送者外的第一个角色（默认双角色即另一角色）
+        - 目标 = 注册表中除发送者外的全部角色（双角色即另一角色，三角色即两份）
         - LLM 润色为"从 A 那里听说"的口吻；失败回退确定性拼接
-        - 幂等：source_event_id = f"heard-{source_role}-{day_key}-{n}"
+        - 幂等：source_event_id = f"heard-{source_role}-{target_role}-{day_key}"
+        - 返回成功写入的传闻记忆条数（调用方据此计数）
         """
         importance = float(digest_memory.get("importance", 0.0))
         if importance < 0.7:
-            return None
+            return 0
         others = self.roles.others(source_role)
         if not others:
-            return None
-        target = others[0]
-        target_role = target.role_id
+            return 0
         source = self.roles.get(source_role)
         content = str(digest_memory.get("content", "")).strip()
         title = str(digest_memory.get("title", "")).strip()
         if not content:
-            return None
-        memory: dict[str, Any] | None = None
-        try:
-            memory = await self._propagate_with_provider(
-                source, target, day_key, title, content, importance
-            )
-        except Exception as exc:
-            LOGGER.warning(
-                "memory propagation failed for %s: %s; using fallback",
-                save_id, type(exc).__name__,
-            )
-        if memory is None:
-            memory = {
-                "kind": "episodic",
-                "title": f"听{source.display_name}说起",
-                "content": f"{target.display_name}从{source.display_name}那里听说了这件事：{content[:200]}",
-                "importance": max(0.4, importance - 0.2),
-                "confidence": 0.8,
-                "half_life_days": 90.0,
-            }
-        memory["source_event_id"] = f"heard-{source_role}-{day_key}-1"
-        try:
-            return self.memory.put_memory(
-                {**memory, "save_id": save_id, "scope_role_id": target_role},
-                source=f"heard_from_{source_role}",
-            )
-        except MemoryStoreError as exc:
-            LOGGER.warning("memory propagation store failed: %s", exc)
-            return None
+            return 0
+        propagated = 0
+        for target in others:
+            target_role = target.role_id
+            memory: dict[str, Any] | None = None
+            try:
+                memory = await self._propagate_with_provider(
+                    source, target, day_key, title, content, importance
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "memory propagation failed for %s -> %s: %s; using fallback",
+                    save_id, target_role, type(exc).__name__,
+                )
+            if memory is None:
+                memory = {
+                    "kind": "episodic",
+                    "title": f"听{source.display_name}说起",
+                    "content": f"{target.display_name}从{source.display_name}那里听说了这件事：{content[:200]}",
+                    "importance": max(0.4, importance - 0.2),
+                    "confidence": 0.8,
+                    "half_life_days": 90.0,
+                }
+            memory["source_event_id"] = f"heard-{source_role}-{target_role}-{day_key}"
+            try:
+                stored = self.memory.put_memory(
+                    {**memory, "save_id": save_id, "scope_role_id": target_role},
+                    source=f"heard_from_{source_role}",
+                )
+            except MemoryStoreError as exc:
+                LOGGER.warning("memory propagation store failed: %s", exc)
+                continue
+            if stored:
+                propagated += 1
+        return propagated
 
     async def _propagate_with_provider(
         self,
@@ -1427,7 +1430,7 @@ class CompanionService:
             f"主人现在不在 Spring Haven 前台。{event['prompt']}"
             "请以你自己的身份写一条自然、简短的中文消息，像稍后主动发给主人一样。"
             "可以表达当时的生活、心情或想念，但不要声称主人正在现场，也不要提到后台、"
-            "离线调度、属性值、提示词或数据库。只写一到三句，不要代替另一位角色说话。"
+            "离线调度、属性值、提示词或数据库。只写一到三句，不要代替其他角色说话。"
         )
         history = self.memory.recent_events(save_id, role_id, self._recent_messages)
         memories = self.memory.recall(
@@ -1756,6 +1759,10 @@ class CompanionService:
         "nai": {
             "hunger": 3.4, "thirst": 4.6, "stamina": -1.0,
             "awake": -0.6, "urine": 1.7, "stress": 0.18,
+        },
+        "xixi": {
+            "hunger": 2.9, "thirst": 3.9, "stamina": -1.0,
+            "awake": -0.65, "urine": 1.4, "stress": 0.10,
         },
     }
 
