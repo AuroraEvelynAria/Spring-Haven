@@ -279,11 +279,12 @@ func _fit_model() -> void:
 
 func set_role(next_role_id: String, next_manifest_path := "") -> void:
 	var normalized := next_role_id.strip_edges().to_lower()
-	if normalized not in ["ling", "nai"]:
-		return
+	# 没有模型路径的角色(当前=xixi,尚无 Live2D 资产)静默保持旧模型,会让
+	# 侧栏显示错误的人物立绘。这里直接 return,由 GameWorld 侧在切换时
+	# 检测"rig 角色没跟上"并回退 PortraitRig2D。
 	var next_path := next_manifest_path.strip_edges()
 	var candidate := next_path if not next_path.is_empty() else model_path_for_role(normalized)
-	if candidate.is_empty():
+	if not _role_model_map().has(normalized) or candidate.is_empty():
 		return
 	role_id = normalized
 	_expression = "neutral"

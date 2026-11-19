@@ -58,8 +58,9 @@ func _run() -> void:
 		return
 	# 网络等待期间保留原色和交互入口；处理函数本身会阻止重复提交。
 	var send_button := world.get("_send_button") as Button
-	var ling_button := world.get("_ling_button") as Button
-	var nai_button := world.get("_nai_button") as Button
+	var role_buttons: Dictionary = world.get("_role_buttons")
+	var ling_button := role_buttons.get("ling") as Button
+	var nai_button := role_buttons.get("nai") as Button
 	if send_button.disabled or ling_button.disabled or nai_button.disabled or not chat_input.editable:
 		await _finish(world, 6, "waiting_controls_disabled")
 		return

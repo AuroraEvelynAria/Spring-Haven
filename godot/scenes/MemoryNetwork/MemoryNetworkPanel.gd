@@ -143,11 +143,11 @@ func _build_interface() -> void:
 	legend.bbcode_enabled = true
 	legend.fit_content = true
 	legend.scroll_active = false
-	legend.custom_minimum_size = Vector2(268, 28)
+	legend.custom_minimum_size = Vector2(340, 28)
 	# 颜色必须与 MemoryGraphCanvas.DEFAULT_SCOPE_COLORS 逐字一致:
 	# 图例与图里的点对不上色,比没有图例更误导。
-	legend.text = "[color=#E8C97A]●[/color] 共享  [color=#72C7B8]●[/color] 小玲  [color=#E6A4BD]●[/color] 小奈  [color=#9A93A8]○[/color] 实体"
-	legend.tooltip_text = "金=共享记忆，青=小玲，粉=小奈；空心环=实体，实心圆=记忆主题（越大重要度越高）；半透明=时间游标之后的记忆。"
+	legend.text = "[color=#E8C97A]●[/color] 共享  [color=#72C7B8]●[/color] 小玲  [color=#E6A4BD]●[/color] 小奈  [color=#7EC8E8]●[/color] 汐汐  [color=#9A93A8]○[/color] 实体"
+	legend.tooltip_text = "金=共享记忆，青=小玲，粉=小奈，海蓝=汐汐；空心环=实体，实心圆=记忆主题（越大重要度越高）；半透明=时间游标之后的记忆。"
 	legend.add_theme_font_size_override("font_size", 12)
 	header.add_child(legend)
 	var reset_button := _icon_button("reset", "重置网络视角")

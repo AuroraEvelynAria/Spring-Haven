@@ -58,7 +58,8 @@ func _run() -> void:
 	_check_developer_reply_tuning(world, failures)
 	var send_button := world.get("_send_button") as Button
 	var chat_input := world.get("_chat_input") as LineEdit
-	var ling_button := world.get("_ling_button") as Button
+	var role_buttons: Dictionary = world.get("_role_buttons")
+	var ling_button := role_buttons.get("ling") as Button
 	var thinking_strip := world.get("_thinking_strip") as ColorRect
 	var thinking_material := world.get("_thinking_strip_material") as ShaderMaterial
 	var log_label := world.get("_log_label") as Label

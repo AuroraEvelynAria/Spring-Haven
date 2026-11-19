@@ -820,6 +820,20 @@ func _refresh_sidebar() -> void:
 		child.free()
 	var role: Dictionary = ROLE_DATA[_current_role]
 	if is_instance_valid(_portrait_rig):
+		# Live2D rig 的角色跟不上切换(该角色无 Live2D 资产,set_role 静默不动)
+		# 时,换装成程序化立绘——每位角色都该有正确的"脸"。
+		var rig_role := str(_portrait_rig.get("role_id"))
+		if rig_role != _current_role and _portrait_rig.get_script() == LIVE2D_RIG_SCRIPT:
+			var fallback_rig := PORTRAIT_RIG_SCENE.instantiate()
+			fallback_rig.name = "ActivePortraitRig"
+			fallback_rig.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+			fallback_rig.offset_left = 14.0
+			fallback_rig.offset_right = -14.0
+			fallback_rig.offset_top = -272.0
+			fallback_rig.offset_bottom = -18.0
+			_stage_portrait_holder.add_child(fallback_rig)
+			_portrait_rig.queue_free()
+			_portrait_rig = fallback_rig
 		_portrait_rig.call("set_role", _current_role)
 		_portrait_rig.call("set_body_state", LifeSim.build_role_state(_current_role))
 	_refresh_stage_identity()
