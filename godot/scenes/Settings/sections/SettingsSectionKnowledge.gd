@@ -320,7 +320,7 @@ func _build_rag_editor(parent: VBoxContainer, data: Dictionary, subcategory: Str
 	)
 	library_heading.add_child(_rag_import_scope)
 	var file_button := Button.new()
-	file_button.text = "📄 导入文件"
+	file_button.text = "导入文件"
 	file_button.tooltip_text = "支持 TXT、Markdown、JSON、CSV、HTML、DOCX 和 PDF；使用左侧选择的导入作用域"
 	file_button.pressed.connect(func(): _rag_file_dialog.popup_centered_ratio(0.72))
 	library_heading.add_child(file_button)
@@ -614,7 +614,7 @@ func _render_rag_document_list() -> void:
 		detail.add_theme_font_size_override("font_size", 10)
 		row.add_child(detail)
 		var delete_button := Button.new()
-		delete_button.text = "🗑"
+		delete_button.text = "删除"
 		delete_button.tooltip_text = "删除此文档"
 		delete_button.pressed.connect(func(): _request_delete_rag_document(document_id))
 		row.add_child(delete_button)

@@ -875,7 +875,7 @@ func _build_provider_fallback_row(parent: VBoxContainer, capability: String, ind
 	move_down.disabled = index >= (_provider_fallback_drafts.get(capability, []) as Array).size() - 1
 	first.add_child(move_down)
 	var remove := Button.new()
-	remove.text = "🗑"
+	remove.text = "移除"
 	remove.tooltip_text = "移除此备用项"
 	first.add_child(remove)
 	var second := HBoxContainer.new()

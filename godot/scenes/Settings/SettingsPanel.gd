@@ -9,11 +9,11 @@ const SECTION_KNOWLEDGE := preload("res://scenes/Settings/sections/SettingsSecti
 const SECTION_PROVIDER := preload("res://scenes/Settings/sections/SettingsSectionProvider.gd")
 const SECTION_GENERAL := preload("res://scenes/Settings/sections/SettingsSectionGeneral.gd")
 const SETTINGS_CATEGORIES := [
-	{"id": "general", "icon": "🎨", "label": "体验"},
-	{"id": "ai", "icon": "✨", "label": "AI 服务"},
-	{"id": "knowledge", "icon": "📚", "label": "记忆与知识"},
-	{"id": "life", "icon": "🌿", "label": "生活与世界"},
-	{"id": "advanced", "icon": "🧰", "label": "高级"},
+	{"id": "general", "icon": "theme", "label": "体验"},
+	{"id": "ai", "icon": "spark", "label": "AI 服务"},
+	{"id": "knowledge", "icon": "book", "label": "记忆与知识"},
+	{"id": "life", "icon": "leaf", "label": "生活与世界"},
+	{"id": "advanced", "icon": "sliders", "label": "高级"},
 ]
 const SETTINGS_SUBCATEGORIES := {
 	"general": [
@@ -207,22 +207,26 @@ func _rebuild_content() -> void:
 
 func _build_header(data: Dictionary) -> void:
 	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
 	_content.add_child(header)
+	var title_icon := LineIcon.new()
+	title_icon.icon_id = "settings"
+	title_icon.icon_size = 20.0
+	title_icon.icon_stroke = 1.9
+	title_icon.tint = Color(data.primary)
+	header.add_child(title_icon)
 	var title := Label.new()
-	title.text = "⚙️ 设置"
+	title.text = "设置"
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color(data.text))
 	header.add_child(title)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(spacer)
-	var close_button := Button.new()
-	close_button.text = "✕"
-	close_button.flat = true
+	var close_button := LineIconButton.new()
+	close_button.set_icon("close")
 	close_button.tooltip_text = "关闭"
-	close_button.custom_minimum_size = Vector2(36, 36)
-	close_button.add_theme_color_override("font_color", Color(data.text))
-	close_button.add_theme_color_override("font_hover_color", Color(data.primary))
+	close_button.flat = true
 	close_button.pressed.connect(_request_close_panel)
 	header.add_child(close_button)
 
@@ -235,8 +239,11 @@ func _build_category_navigation(data: Dictionary) -> void:
 	for category_variant in SETTINGS_CATEGORIES:
 		var category: Dictionary = category_variant
 		var category_id := str(category.id)
-		var button := Button.new()
-		button.text = "%s  %s" % [str(category.icon), str(category.label)]
+		var button := LineIconButton.new()
+		button.icon_only = false
+		button.icon_id = str(category.icon)
+		button.icon_size = 16.0
+		button.button_label = str(category.label)
 		button.toggle_mode = true
 		button.button_pressed = category_id == _settings_category
 		button.custom_minimum_size = Vector2(128, 38)

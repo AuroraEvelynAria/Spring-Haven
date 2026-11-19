@@ -212,12 +212,12 @@ func _build_core_reliability_section(parent: VBoxContainer, data: Dictionary) ->
 	diagnostics_row.add_theme_constant_override("separation", 10)
 	parent.add_child(diagnostics_row)
 	_diagnostic_bundle_button = Button.new()
-	_diagnostic_bundle_button.text = "🧰 生成脱敏诊断包"
+	_diagnostic_bundle_button.text = "生成脱敏诊断包"
 	_diagnostic_bundle_button.tooltip_text = "导出运行状态和日志清单，不包含聊天正文、Persona、知识库、数据库或密钥"
 	_diagnostic_bundle_button.pressed.connect(_create_playtest_diagnostic_bundle, CONNECT_DEFERRED)
 	diagnostics_row.add_child(_diagnostic_bundle_button)
 	_diagnostic_open_button = Button.new()
-	_diagnostic_open_button.text = "📂 打开目录"
+	_diagnostic_open_button.text = "打开目录"
 	_diagnostic_open_button.tooltip_text = "打开本机诊断包目录"
 	_diagnostic_open_button.disabled = _last_diagnostic_bundle_path.is_empty()
 	_diagnostic_open_button.pressed.connect(_open_playtest_diagnostic_directory, CONNECT_DEFERRED)
@@ -752,7 +752,7 @@ func _build_developer_interaction_section(parent: VBoxContainer, data: Dictionar
 	parent.add_child(notice)
 	var notice_label := Label.new()
 	notice_label.text = (
-		"⚙ 高级参数：数值按旅程独立保存；修改每次互动对属性的最终 delta。"
+		"高级参数：数值按旅程独立保存；修改每次互动对属性的最终 delta。"
 		+ "仅影响保存之后的新互动，不会重算现有属性、历史事件或正在等待的请求。"
 	)
 	notice_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

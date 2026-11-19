@@ -64,7 +64,7 @@ func _build_2d_presentation_section(parent: VBoxContainer, data: Dictionary) -> 
 	column.add_theme_constant_override("separation", 9)
 	card.add_child(column)
 	var title := Label.new()
-	title.text = "🎭 2D 对话舞台"
+	title.text = "2D 对话舞台"
 	title.add_theme_font_size_override("font_size", 15)
 	title.add_theme_color_override("font_color", Color(data.primary))
 	column.add_child(title)
