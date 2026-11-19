@@ -17,6 +17,16 @@
       "aliases": ["小奈", "雪奈", "白濑雪奈"],
       "prompt_file": "personas/nai.md",
       "memory_prompt_file": "memory_prompts/nai.md"
+    },
+    {
+      "role_id": "xixi",
+      "display_name": "汐汐",
+      "full_name": "汐汐",
+      "age": 20,
+      "aliases": ["汐汐", "小汐"],
+      "prompt_file": "personas/xixi.md",
+      "memory_prompt_file": "memory_prompts/xixi.md",
+      "mood_home": [0.2, -0.05, 0.05]
     }
   ]
 }

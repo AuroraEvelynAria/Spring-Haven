@@ -7,6 +7,8 @@ const GLOW_SHADER := preload("res://shaders/glow.gdshader")
 const TITLE_SHADER := preload("res://shaders/gradient_text.gdshader")
 const BACKGROUND_SHADER := preload("res://shaders/menu_background.gdshader")
 const UIBREATH := preload("res://scripts/domain/UIBreath.gd")
+const BUTTON_TWEEN_META := "_menu_button_tween"
+const BUTTON_FLOAT_META := "_menu_button_float"
 
 var _content: VBoxContainer
 var _title: Label
@@ -15,6 +17,7 @@ var _start_button: Button
 var _new_game_button: Button
 var _journey_library_button: Button
 var _life_lab_button: Button
+var _studio_button: Button
 var _settings_button: Button
 var _version: Label
 var _glow: ColorRect
@@ -29,6 +32,9 @@ var _model_setup_checked := false
 var _particles: Array = []
 var _rng := RandomNumberGenerator.new()
 var _intro_tween: Tween
+var _startup_status: StartupStatusLine
+var _first_run_wizard: FirstRunWizard
+var _core_ready_for_journeys := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -49,6 +55,15 @@ func _ready() -> void:
 	_refresh_active_journey_hint()
 	_animate_intro()
 	Audio.play_default_music()
+	# 启动状态行:Core 启动过程第一次有了看得见的反馈;就绪前旅程入口
+	# 不放出半成品体验(生活实验室/角色工坊/设置不依赖 Core,不受限)。
+	_startup_status = StartupStatusLine.new()
+	_startup_status.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_startup_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_startup_status.detail_requested.connect(func() -> void: _show_core_startup_failure())
+	add_child(_startup_status)
+	CompanionCore.health_changed.connect(_on_core_health_for_navigation)
+	_update_journey_navigation()
 	_check_first_run_model_setup.call_deferred()
 
 func _initialize_particles() -> void:
@@ -165,23 +180,27 @@ func _build_menu() -> void:
 	menu.add_theme_constant_override("separation", 12)
 	_content.add_child(menu)
 
-	_start_button = _make_menu_button("🌸 继续旅程", true)
+	_start_button = _make_menu_button("❀ 继续旅程", true)
 	_start_button.name = "StartButton"
 	_start_button.pressed.connect(_on_start_pressed)
 	menu.add_child(_start_button)
-	_new_game_button = _make_menu_button("↻ 新旅程", false)
+	_new_game_button = _make_menu_button("◇ 新旅程", false)
 	_new_game_button.name = "NewGameButton"
 	_new_game_button.pressed.connect(_on_new_game_pressed)
 	menu.add_child(_new_game_button)
-	_journey_library_button = _make_menu_button("📚 旅程档案", false)
+	_journey_library_button = _make_menu_button("▤ 旅程档案", false)
 	_journey_library_button.name = "JourneyLibraryButton"
 	_journey_library_button.pressed.connect(_on_journey_library_pressed)
 	menu.add_child(_journey_library_button)
-	_life_lab_button = _make_menu_button("🍡 团子生活实验室", false)
+	_life_lab_button = _make_menu_button("◎ 团子生活实验室", false)
 	_life_lab_button.name = "LifeLabButton"
 	_life_lab_button.pressed.connect(_on_life_lab_pressed)
 	menu.add_child(_life_lab_button)
-	_settings_button = _make_menu_button("⚙️ 设置", false)
+	_studio_button = _make_menu_button("◆ 角色工坊", false)
+	_studio_button.name = "CharacterStudioButton"
+	_studio_button.pressed.connect(_on_studio_pressed)
+	menu.add_child(_studio_button)
+	_settings_button = _make_menu_button("☰ 设置", false)
 	_settings_button.name = "SettingsButton"
 	_settings_button.pressed.connect(_on_settings_pressed)
 	menu.add_child(_settings_button)
@@ -210,6 +229,7 @@ func _build_menu() -> void:
 	_core_startup_dialog.title = "Companion Core 未启动"
 	_core_startup_dialog.ok_button_text = "知道了"
 	_core_startup_dialog.add_button("📂 打开游戏目录", true, "open_game_directory")
+	_core_startup_dialog.add_button("🔄 重试连接", true, "retry_core_connection")
 	_core_startup_dialog.custom_action.connect(_on_core_startup_dialog_action)
 	add_child(_core_startup_dialog)
 
@@ -249,8 +269,9 @@ func _make_menu_button(text: String, filled: bool) -> Button:
 	disabled_style.border_color = Color(disabled_style.border_color, 0.35)
 	disabled_style.shadow_color = Color(disabled_style.shadow_color, disabled_style.shadow_color.a * 0.5)
 	button.add_theme_stylebox_override("disabled", disabled_style)
-	button.mouse_entered.connect(func(): _scale_button(button, 1.04))
+	button.mouse_entered.connect(func(): _scale_button(button, 1.05))
 	button.mouse_exited.connect(func(): _scale_button(button, 1.0))
+	button.pressed.connect(func(): _press_bounce(button))
 	return button
 
 func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
@@ -285,18 +306,38 @@ func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
 
 func _animate_intro() -> void:
 	await get_tree().process_frame
-	# 入场阶梯:标题→副标题→按钮逐个浮入,替代整块淡入
+	# 入场阶梯:标题→副标题→按钮逐个浮入,替代整块淡入;
+	# 按钮走 BACK 过冲——落位时轻微弹一下,像鱼入水。
 	var delay := 0.0
+	var menu_buttons: Array[Button] = []
+	# 重放入场(主题切换/回归主菜单)前先杀掉旧的浮动与缩放 tween,
+	# 防止两套动画叠乘。
+	for stale in _content.get_children():
+		if stale is Button:
+			(stale as Button).scale = Vector2.ONE
+			if (stale as Button).has_meta(BUTTON_FLOAT_META):
+				var old_float: Tween = (stale as Button).get_meta(BUTTON_FLOAT_META)
+				if old_float is Tween and old_float.is_valid():
+					old_float.kill()
+				(stale as Button).remove_meta(BUTTON_FLOAT_META)
+			_kill_button_tween(stale as Button)
 	for child in _content.get_children():
 		if not child is Control:
 			continue
+		var is_menu_button := child is Button
+		if is_menu_button:
+			menu_buttons.append(child)
 		var target_position: Vector2 = child.position
 		child.modulate.a = 0.0
 		child.position = target_position + Vector2(0, 22)
 		var tween := create_tween()
 		tween.tween_interval(delay)
 		tween.tween_property(child, "modulate:a", 1.0, 0.55).set_ease(Tween.EASE_OUT)
-		tween.tween_property(child, "position", target_position, 0.55).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tween.tween_property(
+			child, "position", target_position, 0.55
+		).set_ease(Tween.EASE_OUT).set_trans(
+			Tween.TRANS_BACK if is_menu_button else Tween.TRANS_CUBIC
+		)
 		delay += 0.09
 	# 呼吸感:入场结束后,标题与主按钮进入亮度呼吸(纯 modulate,零几何变化)
 	var breath_timer := create_tween()
@@ -306,11 +347,80 @@ func _animate_intro() -> void:
 			UIBREATH.breathe(_title, 0.05, 4.2)
 		if is_instance_valid(_start_button) and not _start_button.disabled:
 			UIBREATH.breathe(_start_button, 0.04, 2.8)
+		_start_button_float(menu_buttons)
 	)
 
+
+## 待机"水面脉动":入场后每颗菜单按钮以错开相位做极轻缩放呼吸
+## (1.0↔1.012,绕中心)。不碰 position——按钮在 VBox 里,任何 position
+## 写入都会与容器布局打架(实拍评审逮到的整列位移真凶);scale 绕
+## pivot_offset 转,零布局扰动。悬停/按压时由 _scale_button/_press_bounce
+## 接管(同一 meta 互斥)。
+func _start_button_float(buttons: Array[Button]) -> void:
+	for index in buttons.size():
+		var button := buttons[index]
+		if not is_instance_valid(button):
+			continue
+		button.pivot_offset = button.size / 2.0
+		var float_tween := create_tween().set_loops()
+		float_tween.tween_property(button, "scale", Vector2(1.012, 1.012), 1.9) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE) \
+			.set_delay(0.22 * index)
+		float_tween.tween_property(button, "scale", Vector2.ONE, 1.9) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		button.set_meta(BUTTON_FLOAT_META, float_tween)
+
 func _scale_button(button: Button, scale_value: float) -> void:
+	# Control.scale 绕 pivot_offset 转,默认在左上角——不把支点同步到中心,
+	# hover 放大就往右下歪着长(按钮"歪掉了"的真凶)。size 在布局后才稳定,
+	# 所以每次动画前同步而不是只设一次。
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size / 2.0
+	_kill_button_tween(button)
+	# 悬停接管时暂停待机漂浮;离开时恢复,让按钮重新浮起来。
+	if scale_value != 1.0:
+		_set_button_float(button, false)
+	else:
+		_set_button_float(button, true)
 	var tween := create_tween()
-	tween.tween_property(button, "scale", Vector2(scale_value, scale_value), 0.18).set_ease(Tween.EASE_OUT)
+	tween.tween_property(
+		button, "scale", Vector2(scale_value, scale_value), 0.24
+	).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	button.set_meta(BUTTON_TWEEN_META, tween)
+
+
+func _set_button_float(button: Button, floating: bool) -> void:
+	if not button.has_meta(BUTTON_FLOAT_META):
+		return
+	var float_tween: Tween = button.get_meta(BUTTON_FLOAT_META)
+	if float_tween is Tween and float_tween.is_valid():
+		if floating:
+			float_tween.play()
+		else:
+			float_tween.pause()
+
+
+## 按压果冻感:快速压扁 → 弹性回正。压扁走快出,回正带轻微过冲。
+func _press_bounce(button: Button) -> void:
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size / 2.0
+	_kill_button_tween(button)
+	var tween := create_tween()
+	tween.tween_property(button, "scale", Vector2(0.95, 0.95), 0.07) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_property(button, "scale", Vector2.ONE, 0.22) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	button.set_meta(BUTTON_TWEEN_META, tween)
+
+
+func _kill_button_tween(button: Button) -> void:
+	if button.has_meta(BUTTON_TWEEN_META):
+		var old: Tween = button.get_meta(BUTTON_TWEEN_META)
+		if old is Tween and old.is_valid():
+			old.kill()
+		button.remove_meta(BUTTON_TWEEN_META)
 
 func _on_start_pressed() -> void:
 	if not Global.is_state_loaded():
@@ -374,6 +484,8 @@ func _set_navigation_disabled(disabled: bool) -> void:
 		_settings_button.disabled = disabled
 	if _life_lab_button:
 		_life_lab_button.disabled = disabled
+	if _studio_button:
+		_studio_button.disabled = disabled
 
 func _show_save_error(message: String) -> void:
 	var detail := message.strip_edges()
@@ -413,7 +525,36 @@ func _check_first_run_model_setup() -> void:
 		return
 	var provider_data = result.get("data", {})
 	if provider_data is Dictionary and not bool((provider_data as Dictionary).get("api_key_configured", false)):
-		_model_setup_dialog.popup_centered(Vector2i(540, 220))
+		_open_first_run_wizard()
+
+
+## 首启三步向导:替代旧的"连接聊天模型"弹窗惊吓(该对话框成员保留,
+## MainMenuStartupCheck 断言依赖,但不再是首启主动路径)。
+func _open_first_run_wizard() -> void:
+	if not is_instance_valid(_first_run_wizard):
+		_first_run_wizard = FirstRunWizard.new()
+		_first_run_wizard.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_first_run_wizard.wizard_completed.connect(func() -> void:
+			_refresh_active_journey_hint()
+		)
+		add_child(_first_run_wizard)
+	_first_run_wizard.open_wizard()
+
+
+func _on_core_health_for_navigation(active: bool, _message: String) -> void:
+	if active == _core_ready_for_journeys:
+		return
+	_core_ready_for_journeys = active
+	_update_journey_navigation()
+
+
+func _update_journey_navigation() -> void:
+	# Core 未就绪时只锁「继续旅程/新旅程」——点进去只会得到没有对话与
+	# 记忆的半成品;其余入口不依赖 Core,保持可用。
+	if _start_button:
+		_start_button.disabled = not _core_ready_for_journeys
+	if _new_game_button:
+		_new_game_button.disabled = not _core_ready_for_journeys
 
 func _show_core_startup_failure() -> void:
 	if not is_instance_valid(_core_startup_dialog):
@@ -432,9 +573,15 @@ func _show_core_startup_failure() -> void:
 	_core_startup_dialog.popup_centered(Vector2i(590, 280))
 
 func _on_core_startup_dialog_action(action: StringName) -> void:
-	if action != &"open_game_directory":
+	if action == &"open_game_directory":
+		OS.shell_open(OS.get_executable_path().get_base_dir())
 		return
-	OS.shell_open(OS.get_executable_path().get_base_dir())
+	if action == &"retry_core_connection":
+		# 重试不再需要重启游戏:health 轮询发现连不上会自动重新拉起本地
+		# Core;这里显式 reconnect 立即触发一轮,状态行会跟着回到启动中。
+		_core_startup_dialog.hide()
+		CompanionCore.connect_to_core()
+		return
 
 func _on_life_lab_pressed() -> void:
 	if not Global.is_state_loaded():
@@ -442,6 +589,11 @@ func _on_life_lab_pressed() -> void:
 		return
 	_set_navigation_disabled(true)
 	UI.switch_scene("res://scenes/LifeLab/LifeLabWorld.tscn")
+
+func _on_studio_pressed() -> void:
+	# 角色工坊是纯表现层(不读写存档),不需要 is_state_loaded 闸
+	_set_navigation_disabled(true)
+	UI.switch_scene("res://scenes/CharacterStudio/CharacterStudio.tscn")
 
 func _on_theme_changed(_data: Dictionary) -> void:
 	_update_visuals()

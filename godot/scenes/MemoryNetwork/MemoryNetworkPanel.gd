@@ -4,7 +4,7 @@ signal closed
 
 const GRAPH_CANVAS := preload("res://scenes/MemoryNetwork/MemoryGraphCanvas.gd")
 const LINE_ICON_BUTTON := preload("res://scripts/ui/LineIconButton.gd")
-const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈"}
+const SCOPE_NAMES := {"*": "共享记忆", "ling": "小玲", "nai": "小奈", "xixi": "汐汐"}
 # 低于这个宽度就不再并排:改成"画布聚焦 / 详情聚焦"二选一。
 const NARROW_WIDTH := 840.0
 # 观察台形态:外框保留庭院氛围,但图内容区与详情卡必须是实心的,
@@ -143,11 +143,11 @@ func _build_interface() -> void:
 	legend.bbcode_enabled = true
 	legend.fit_content = true
 	legend.scroll_active = false
-	legend.custom_minimum_size = Vector2(268, 28)
+	legend.custom_minimum_size = Vector2(340, 28)
 	# 颜色必须与 MemoryGraphCanvas.DEFAULT_SCOPE_COLORS 逐字一致:
 	# 图例与图里的点对不上色,比没有图例更误导。
-	legend.text = "[color=#E8C97A]●[/color] 共享  [color=#72C7B8]●[/color] 小玲  [color=#E6A4BD]●[/color] 小奈  [color=#9A93A8]○[/color] 实体"
-	legend.tooltip_text = "金=共享记忆，青=小玲，粉=小奈；空心环=实体，实心圆=记忆主题（越大重要度越高）；半透明=时间游标之后的记忆。"
+	legend.text = "[color=#E8C97A]●[/color] 共享  [color=#72C7B8]●[/color] 小玲  [color=#E6A4BD]●[/color] 小奈  [color=#7EC8E8]●[/color] 汐汐  [color=#9A93A8]○[/color] 实体"
+	legend.tooltip_text = "金=共享记忆，青=小玲，粉=小奈，海蓝=汐汐；空心环=实体，实心圆=记忆主题（越大重要度越高）；半透明=时间游标之后的记忆。"
 	legend.add_theme_font_size_override("font_size", 12)
 	header.add_child(legend)
 	var reset_button := _icon_button("reset", "重置网络视角")
@@ -170,6 +170,7 @@ func _build_interface() -> void:
 	_add_scope_option("共享记忆", "*")
 	_add_scope_option("仅小玲", "ling")
 	_add_scope_option("仅小奈", "nai")
+	_add_scope_option("仅汐汐", "xixi")
 	_scope_select.item_selected.connect(func(_index: int): _load_graph())
 	filters.add_child(_scope_select)
 	_search_input = LineEdit.new()

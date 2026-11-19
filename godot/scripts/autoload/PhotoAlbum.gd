@@ -7,7 +7,7 @@ const ROOT_PATH := "user://SpringHaven/photos"
 func save_image(image: Image, role: String, label := "photo") -> Dictionary:
 	if image == null or image.is_empty():
 		return {"ok": false, "message": "照片图像为空"}
-	var safe_role := role if role in ["ling", "nai", "player"] else "shared"
+	var safe_role := role if role in ["ling", "nai", "xixi", "player"] else "shared"
 	var safe_label := _safe_file_part(label, "photo")
 	var save_id := Global.get_active_save_id()
 	var directory := ROOT_PATH.path_join(save_id).path_join(safe_role)

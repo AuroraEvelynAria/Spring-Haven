@@ -40,6 +40,9 @@ const MAX_HISTORY_ITEMS := 20
 const CORE_LIFE_SYNC_SECONDS := 60.0
 const CORE_OUTBOX_POLL_SECONDS := 20.0
 
+# 全体角色清单（与 Global.ROLES 保持一致；const 期不能引用 autoload，故手工同步）。
+const ROLE_IDS := ["ling", "nai", "xixi"]
+
 const HOURLY_RATES := {
 	"ling": {
 		"hunger": 3.0, "thirst": 4.2, "stamina": -1.2,
@@ -48,6 +51,10 @@ const HOURLY_RATES := {
 	"nai": {
 		"hunger": 3.4, "thirst": 4.6, "stamina": -1.0,
 		"awake": -0.6, "urine": 1.7, "stress": 0.18,
+	},
+	"xixi": {
+		"hunger": 2.9, "thirst": 3.9, "stamina": -1.0,
+		"awake": -0.65, "urine": 1.4, "stress": 0.10,
 	},
 }
 
@@ -124,12 +131,17 @@ func _sync_core_life_state() -> void:
 	var weather := WEATHER_SYSTEM.current_weather(
 		Global.life_runtime.get("weather", {})
 	)
+	var role_states := {}
+	for role in ROLE_IDS:
+		role_states[role] = build_role_state(role)
+	var role_decay_scales := {}
+	for role in ROLE_IDS:
+		role_decay_scales[role] = float(
+			Settings.get_runtime_tuning_value("%s_need_rate_scale" % role, 1.0)
+		)
 	var snapshot := {
 		"protocol": "spring_haven.life_snapshot.v1",
-		"roles": {
-			"ling": build_role_state("ling"),
-			"nai": build_role_state("nai"),
-		},
+		"roles": role_states,
 		"current_role": Global.current_character,
 		"captured_at": int(Time.get_unix_time_from_system()),
 		"local_time": Time.get_datetime_dict_from_system(),
@@ -138,10 +150,7 @@ func _sync_core_life_state() -> void:
 		"stat_deltas": _pending_stat_deltas.duplicate(true),
 		"decay_scales": {
 			"life_time_scale": float(Settings.get_runtime_tuning_value("life_time_scale", 1.0)),
-			"role_scales": {
-				"ling": float(Settings.get_runtime_tuning_value("ling_need_rate_scale", 1.0)),
-				"nai": float(Settings.get_runtime_tuning_value("nai_need_rate_scale", 1.0)),
-			},
+			"role_scales": role_decay_scales,
 		},
 	}
 	var recent_events := _drain_reported_life_events()
@@ -165,7 +174,7 @@ func _sync_core_life_state() -> void:
 func _on_stat_updates_applied(role: String, updates: Dictionary, event_id: String) -> void:
 	if event_id.begins_with("core-decay-"):
 		return
-	if role not in ["ling", "nai"] or updates.is_empty():
+	if role not in ROLE_IDS or updates.is_empty():
 		return
 	var role_deltas: Dictionary = _pending_stat_deltas.get(role, {})
 	for stat_variant in updates:
@@ -185,7 +194,7 @@ func _apply_backend_truth(data: Dictionary) -> void:
 		return
 	for role_variant in (decay_state as Dictionary):
 		var role := str(role_variant)
-		if role not in ["ling", "nai"]:
+		if role not in ROLE_IDS:
 			continue
 		var authoritative = (decay_state as Dictionary).get(role_variant, {})
 		var stats = (authoritative as Dictionary).get("stats", {}) if authoritative is Dictionary else {}
@@ -256,7 +265,7 @@ func _on_runtime_tuning_changed(config: Dictionary) -> void:
 	MENSTRUAL_CYCLE.configure_runtime_tuning(config)
 
 func build_role_state(role: String) -> Dictionary:
-	if role not in ["ling", "nai"]:
+	if role not in ROLE_IDS:
 		return {}
 	var stats := Global.get_role_stats(role).duplicate(true)
 	var runtime: Dictionary = Global.life_runtime
@@ -292,7 +301,7 @@ func build_role_state(role: String) -> Dictionary:
 	}
 
 func build_menstrual_state(role: String) -> Dictionary:
-	if role not in ["ling", "nai"]:
+	if role not in ROLE_IDS:
 		return {}
 	var roles_runtime: Dictionary = Global.life_runtime.get("roles", {})
 	var role_runtime: Dictionary = roles_runtime.get(role, {})
@@ -305,7 +314,7 @@ func build_menstrual_state(role: String) -> Dictionary:
 	return MENSTRUAL_CYCLE.public_snapshot(snapshot)
 
 func force_proactive_message(role: String, reason := "diagnostic") -> bool:
-	if role not in ["ling", "nai"] or _generation_busy():
+	if role not in ROLE_IDS or _generation_busy():
 		return false
 	return _request_proactive_message(role, reason)
 
@@ -314,14 +323,14 @@ func request_proactive_message(
 	reason: String,
 	local_context: Dictionary = {}
 ) -> bool:
-	if role not in ["ling", "nai"] or _generation_busy():
+	if role not in ROLE_IDS or _generation_busy():
 		return false
 	return _request_proactive_message(role, reason, local_context)
 
 func force_ambient_dialogue(turn_count := 2, starter_role := "ling") -> bool:
 	var ambient_config := Settings.get_ambient_dialogue_settings()
 	if (
-		starter_role not in ["ling", "nai"]
+		starter_role not in ROLE_IDS
 		or _generation_busy()
 		or not bool(ambient_config.get("enabled", true))
 		or not CompanionCore.has_credentials()
@@ -415,13 +424,13 @@ func _household_prompt_context() -> String:
 	return ""
 
 func _advance_goal(role: String, action: String, now: int) -> void:
-	if role not in ["ling", "nai"]:
+	if role not in ROLE_IDS:
 		return
 	var runtime := Global.life_runtime.duplicate(true)
 	var goals: Dictionary = GOAL_SYSTEM.normalize_runtime(runtime.get("goals", {}))
 	var result := GOAL_SYSTEM.advance(goals, role, action)
 	var changed := false
-	for r in ["ling", "nai"]:
+	for r in ROLE_IDS:
 		if float((result.get("goals", {}) as Dictionary).get(r, {}).get("progress", 0.0)) != float(goals.get(r, {}).get("progress", 0.0)):
 			changed = true
 	if not changed:
@@ -453,7 +462,7 @@ func _goal_prompt_context() -> String:
 	var runtime := Global.life_runtime
 	var goals: Dictionary = GOAL_SYSTEM.normalize_runtime(runtime.get("goals", {}))
 	var parts: Array[String] = []
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var label := GOAL_SYSTEM.progress_label(goals, role)
 		if not label.is_empty():
 			parts.append("%s：%s" % [_role_name(role), label])
@@ -469,7 +478,7 @@ func _update_health(now: int) -> void:
 		int(local.get("year", 2000)), int(local.get("month", 1)), int(local.get("day", 1))
 	]
 	var changed := false
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var previous_entry: Dictionary = (
 			(health.get(role, {}) as Dictionary).duplicate(true)
 			if health.get(role, {}) is Dictionary else {}
@@ -568,7 +577,7 @@ func _update_weather(now: int) -> void:
 		runtime["weather"] = fresh
 		# 换天时应用当天天气的情绪影响
 		var effect := WEATHER_SYSTEM.weather_effect(str(fresh.get("code", "sunny")))
-		for role in ["ling", "nai"]:
+		for role in ROLE_IDS:
 			Global.apply_life_updates(
 				role,
 				effect,
@@ -588,7 +597,7 @@ func _weather_prompt_context() -> String:
 	]
 	var health: Dictionary = HEALTH_SYSTEM.normalize_runtime(Global.life_runtime.get("health", {}))
 	var sick_roles: Array[String] = []
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		if HEALTH_SYSTEM.is_sick(health, role):
 			sick_roles.append("%s%s" % [ _role_name(role), HEALTH_SYSTEM.illness_label(health, role) ])
 	if not sick_roles.is_empty():
@@ -636,7 +645,7 @@ func _advance_needs(seconds: float, now: int) -> void:
 	Global.update_life_runtime(runtime, true)
 	# 生病时的额外属性消耗
 	var health: Dictionary = HEALTH_SYSTEM.normalize_runtime(runtime.get("health", {}))
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var effect := HEALTH_SYSTEM.sick_effect(health, role)
 		if not effect.is_empty():
 			Global.apply_life_updates(role, effect, "sick-%s-%d" % [role, now], false)
@@ -646,7 +655,7 @@ func _update_menstrual_cycles(now: int) -> void:
 	var roles_runtime: Dictionary = runtime.get("roles", {})
 	var runtime_changed := false
 	var emitted_changes: Array[Dictionary] = []
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		var cycle_runtime := MENSTRUAL_CYCLE.normalize_runtime(
 			role,
@@ -762,7 +771,7 @@ func _check_daily_plan(now: int) -> void:
 	var runtime := Global.life_runtime.duplicate(true)
 	var roles_runtime: Dictionary = runtime.get("roles", {})
 	var changed := false
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		var intent_variant = role_runtime.get("current_intent", {})
 		if intent_variant is Dictionary and str((intent_variant as Dictionary).get("status", "")) in [
@@ -829,7 +838,7 @@ func _check_daily_plan(now: int) -> void:
 		Global.update_life_runtime(runtime, true)
 
 func _execute_daily_plan_action(role: String, intent_id: String) -> void:
-	if role not in ["ling", "nai"] or intent_id.is_empty():
+	if role not in ROLE_IDS or intent_id.is_empty():
 		return
 	var now := int(Time.get_unix_time_from_system())
 	var runtime := Global.life_runtime.duplicate(true)
@@ -865,7 +874,7 @@ func _execute_daily_plan_action(role: String, intent_id: String) -> void:
 	var partner_changes: Array = []
 	var target_role := str(intent.get("target_role", ""))
 	var partner_updates = spec.get("partner_updates", {})
-	if target_role in ["ling", "nai"] and partner_updates is Dictionary:
+	if target_role in ROLE_IDS and partner_updates is Dictionary:
 		var partner_result := Global.apply_life_updates(
 			target_role,
 			partner_updates,
@@ -1035,7 +1044,7 @@ func _check_self_care(now: int) -> void:
 	var runtime := Global.life_runtime.duplicate(true)
 	var roles_runtime: Dictionary = runtime.get("roles", {})
 	var runtime_changed := false
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		if now - int(role_runtime.get("last_self_care_unix", 0)) < cooldown_seconds:
 			continue
@@ -1089,7 +1098,7 @@ func _check_personality_intents(now: int) -> void:
 		int(local_time.get("day", 1)),
 	]
 	var planned_roles: Array[String] = []
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		var existing = role_runtime.get("current_intent", {})
 		if existing is Dictionary and str((existing as Dictionary).get("status", "")) in [
@@ -1133,7 +1142,7 @@ func _recover_pending_personality_intents(now: int) -> void:
 	var roles_runtime: Dictionary = runtime.get("roles", {})
 	var changed := false
 	var recoveries: Array[Dictionary] = []
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		var intent_variant = role_runtime.get("current_intent", {})
 		if not intent_variant is Dictionary or intent_variant.is_empty():
@@ -1160,7 +1169,7 @@ func _recover_pending_personality_intents(now: int) -> void:
 		)
 
 func _execute_personality_intent(role: String, intent_id: String) -> void:
-	if role not in ["ling", "nai"] or intent_id.is_empty():
+	if role not in ROLE_IDS or intent_id.is_empty():
 		return
 	var now := int(Time.get_unix_time_from_system())
 	var runtime := Global.life_runtime.duplicate(true)
@@ -1208,7 +1217,7 @@ func _execute_personality_intent(role: String, intent_id: String) -> void:
 	var partner_changes: Array = []
 	var target_role := str(intent.get("target_role", ""))
 	var partner_updates = spec.get("partner_updates", {})
-	if target_role in ["ling", "nai"] and partner_updates is Dictionary:
+	if target_role in ROLE_IDS and partner_updates is Dictionary:
 		var partner_result := Global.apply_life_updates(
 			target_role,
 			partner_updates,
@@ -1302,7 +1311,7 @@ func _check_proactive_messages(now: int) -> void:
 	if now - int(runtime.get("last_user_activity_unix", now)) < _proactive_idle_seconds():
 		return
 	var roles_runtime: Dictionary = runtime.get("roles", {})
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {})
 		if now >= int(role_runtime.get("next_proactive_unix", 0)):
 			_request_proactive_message(role, "missing_player")
@@ -1383,12 +1392,12 @@ func _build_shared_history() -> Array[Dictionary]:
 			continue
 		var role := str(entry.get("role", ""))
 		var item := {"sender": sender, "text": text, "event_type": "chat"}
-		item["audience_roles"] = ["ling", "nai"]
-		if sender == "ai" and role in ["ling", "nai"]:
+		item["audience_roles"] = ROLE_IDS.duplicate()
+		if sender == "ai" and role in ROLE_IDS:
 			item["role_id"] = role
 			item["speaker"] = _role_name(role)
 			var target_role := str(entry.get("target_role", ""))
-			if target_role in ["ling", "nai"]:
+			if target_role in ROLE_IDS:
 				item["target_role"] = target_role
 			var kind := str(entry.get("kind", ""))
 			if not kind.is_empty():
@@ -1428,8 +1437,8 @@ func _check_ambient_dialogue(now: int) -> void:
 		_schedule_ambient_retry(now)
 		return
 	var last_starter := str(ambient.get("last_starter_role", ""))
-	var starter := _other_role(last_starter) if last_starter in ["ling", "nai"] else (
-		"ling" if _rng.randi_range(0, 1) == 0 else "nai"
+	var starter := _other_role(last_starter) if last_starter in ROLE_IDS else (
+		str(ROLE_IDS[_rng.randi_range(0, ROLE_IDS.size() - 1)])
 	)
 	_start_ambient_dialogue(
 		now,
@@ -1441,7 +1450,7 @@ func _check_ambient_dialogue(now: int) -> void:
 	)
 
 func _ambient_roles_available() -> bool:
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var stats := Global.get_role_stats(role)
 		if (
 			float(stats.get("stamina", 0.0)) < AMBIENT_MIN_STAMINA
@@ -1453,7 +1462,7 @@ func _ambient_roles_available() -> bool:
 func _start_ambient_dialogue(now: int, turn_count: int, starter_role: String) -> bool:
 	var ambient_config := Settings.get_ambient_dialogue_settings()
 	if (
-		starter_role not in ["ling", "nai"]
+		starter_role not in ROLE_IDS
 		or not _ambient_session.is_empty()
 		or not bool(ambient_config.get("enabled", true))
 		or not MessageScheduler.can_start_background()
@@ -1503,7 +1512,7 @@ func _request_ambient_turn() -> bool:
 		return false
 	var role := str(_ambient_session.get("current_role", ""))
 	var target_role := str(_ambient_session.get("target_role", ""))
-	if role not in ["ling", "nai"] or target_role not in ["ling", "nai"]:
+	if role not in ROLE_IDS or target_role not in ROLE_IDS:
 		_abort_ambient_dialogue("互聊角色状态无效")
 		return false
 	var turn_index := int(_ambient_session.get("turn_index", 0))
@@ -1662,7 +1671,7 @@ func _handle_core_life_delivery(delivery: Dictionary) -> bool:
 	var role := str(core_payload.get("role_id", delivery.get("role_id", "")))
 	var reply := TEXT_SANITIZER.strip_nul(str(core_payload.get("text", ""))).strip_edges()
 	var message_id := str(core_payload.get("message_id", "")).strip_edges().left(192)
-	if role not in ["ling", "nai"] or reply.is_empty() or message_id.is_empty():
+	if role not in ROLE_IDS or reply.is_empty() or message_id.is_empty():
 		return true
 	if _history_has_message_id(message_id):
 		return true
@@ -1686,7 +1695,7 @@ func _handle_core_life_delivery(delivery: Dictionary) -> bool:
 		"status": "sent",
 		"kind": "offline_life",
 		"event_type": "chat",
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": ROLE_IDS.duplicate(),
 		"created_at": int(core_payload.get("created_at", Time.get_unix_time_from_system())),
 		"life_event": event.duplicate(true),
 	}
@@ -1873,7 +1882,7 @@ func _schedule_missing_proactive_times(now: int) -> void:
 	var runtime := Global.life_runtime.duplicate(true)
 	var roles_runtime: Dictionary = runtime.get("roles", {})
 	var changed := false
-	for role in ["ling", "nai"]:
+	for role in ROLE_IDS:
 		var role_runtime: Dictionary = roles_runtime.get(role, {}).duplicate(true)
 		if int(role_runtime.get("next_proactive_unix", 0)) <= 0:
 			role_runtime["next_proactive_unix"] = now + _random_proactive_interval()
@@ -1999,7 +2008,16 @@ func _low_sensation(value: float, calm: String, medium: String, urgent: String) 
 	return urgent if value <= 25.0 else medium if value <= 50.0 else calm
 
 func _role_name(role: String) -> String:
-	return "小奈" if role == "nai" else "小玲"
+	if Global.ROLES.has(role):
+		return str((Global.ROLES[role] as Dictionary).get("name", "小玲"))
+	return "小玲"
 
 func _other_role(role: String) -> String:
-	return "nai" if role == "ling" else "ling"
+	# 环境对话接力者：按注册顺序轮换到下一位（双角色时代即二元翻转）。
+	for index in ROLE_IDS.size():
+		if str(ROLE_IDS[index]) == role:
+			var next := str(ROLE_IDS[(index + 1) % ROLE_IDS.size()])
+			if next != role:
+				return next
+			break
+	return str(ROLE_IDS[0])

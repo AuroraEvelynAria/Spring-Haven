@@ -10,6 +10,7 @@ const DEFAULT_SCOPE_COLORS := {
 	"*": Color("#E8C97A"),
 	"ling": Color("#72C7B8"),
 	"nai": Color("#E6A4BD"),
+	"xixi": Color("#7EC8E8"),
 }
 const MIN_ZOOM := 0.2
 const MAX_ZOOM := 2.4

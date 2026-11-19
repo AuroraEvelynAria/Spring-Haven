@@ -19,7 +19,7 @@ const HEALTH_INTERVAL_SECONDS := 8.0
 const MEMORY_INTERVAL_SECONDS := 6.0
 const MAX_HEALTH_RETRY_SECONDS := 30.0
 const DEFAULT_SAVE_ID := "default"
-const CHARACTERS := ["ling", "nai"]
+const CHARACTERS := ["ling", "nai", "xixi"]
 const MANAGED_CORE_HEALTH_DELAY_SECONDS := 1.5
 const CORE_KEY_FILE := "user://companion_core_key.txt"
 const USER_CORE_RUNTIME_DIR := "user://companion-core"
@@ -345,6 +345,31 @@ func diagnose_provider(capability: String) -> Dictionary:
 		CHAT_TIMEOUT_SECONDS
 	)
 
+
+## 首启向导的免保存直测:用表单当前值(base_url/model/api_key)打一次
+## 真实诊断,不落盘。草稿 Key 为空时后端回落到已存 Key(与保存语义一致)。
+func diagnose_provider_draft(
+	capability: String,
+	base_url: String,
+	model: String,
+	api_key: String
+) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	var payload := {
+		"capability": capability.strip_edges().to_lower(),
+		"base_url": base_url.strip_edges(),
+		"model": model.strip_edges(),
+	}
+	if not api_key.strip_edges().is_empty():
+		payload["api_key"] = api_key.strip_edges()
+	return await _request_json(
+		HTTPClient.METHOD_POST,
+		_url("/providers/diagnose"),
+		{"capability": capability.strip_edges().to_lower(), "draft": payload},
+		CHAT_TIMEOUT_SECONDS
+	)
+
 func is_provider_configured(capability: String) -> bool:
 	var profiles = _provider_status_cache.get("profiles", {})
 	if not profiles is Dictionary:
@@ -637,6 +662,28 @@ func get_life_status() -> Dictionary:
 		HTTPClient.METHOD_GET,
 		_url("/life/status") + "?save_id=" + _save_id.uri_encode(),
 		{},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
+func fetch_plot_state() -> Dictionary:
+	# ADR-016:「她的心事」——节拍状态、枢轴选项与时间线
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_GET,
+		_url("/plot/state") + "?save_id=" + _save_id.uri_encode(),
+		{},
+		HEALTH_TIMEOUT_SECONDS
+	)
+
+func submit_plot_choice(plot_id: String, choice_id: String) -> Dictionary:
+	# ADR-016:枢轴节拍的玩家选择(两选项;缺席走后端超时路径,不用报)
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	return await _request_json(
+		HTTPClient.METHOD_POST,
+		_url("/plot/choice"),
+		{"save_id": _save_id, "plot_id": plot_id, "choice_id": choice_id},
 		HEALTH_TIMEOUT_SECONDS
 	)
 
@@ -1080,8 +1127,10 @@ func _ensure_core_runtime(template_root: String, runtime_root: String) -> bool:
 		"roles.example.json": "roles.json",
 		"personas/ling.md": "personas/ling.md",
 		"personas/nai.md": "personas/nai.md",
+		"personas/xixi.md": "personas/xixi.md",
 		"memory_prompts/ling.md": "memory_prompts/ling.md",
 		"memory_prompts/nai.md": "memory_prompts/nai.md",
+		"memory_prompts/xixi.md": "memory_prompts/xixi.md",
 	}
 	for source_relative in required_templates:
 		var destination_relative := str(required_templates[source_relative])
@@ -1090,6 +1139,27 @@ func _ensure_core_runtime(template_root: String, runtime_root: String) -> bool:
 			runtime_root.path_join(destination_relative)
 		):
 			return false
+	# ADR-016:节拍剧本是目录型可选内容——逐个补缺(不覆盖已有文件,与
+	# personas 同纪律);模板目录缺失时静默跳过,没有剧本=没有故事,不算错误
+	var beats_template_dir := template_root.path_join("beats")
+	var beats_runtime_dir := runtime_root.path_join("beats")
+	if DirAccess.make_dir_recursive_absolute(beats_runtime_dir) != OK:
+		_local_runtime_error = "无法创建 Companion Core 子目录：beats"
+		return false
+	var beats_dir := DirAccess.open(beats_template_dir)
+	if beats_dir != null:
+		beats_dir.list_dir_begin()
+		var beat_file := beats_dir.get_next()
+		while not beat_file.is_empty():
+			if not beats_dir.current_is_dir() and beat_file.ends_with(".json"):
+				if not _copy_file_if_missing(
+					beats_template_dir.path_join(beat_file),
+					beats_runtime_dir.path_join(beat_file)
+				):
+					beats_dir.list_dir_end()
+					return false
+			beat_file = beats_dir.get_next()
+		beats_dir.list_dir_end()
 	# 可选模板：发行包自带知识库时复制到运行时目录，开发树缺失时跳过。
 	var optional_templates := {
 		"knowledge.sqlite3": "knowledge.sqlite3",

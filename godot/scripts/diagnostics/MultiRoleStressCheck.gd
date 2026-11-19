@@ -30,15 +30,16 @@ func _run() -> void:
 	var baseline: Dictionary = {}
 	for role_variant in role_data:
 		baseline[str(role_variant)] = model.call("get_role_stats", str(role_variant)).duplicate(true)
+	var stress_roles := ["ling", "nai", "xixi"]
 	for cycle in 400:
-		var role := "ling" if cycle % 2 == 0 else "nai"
+		var role := str(stress_roles[cycle % stress_roles.size()])
 		var stats: Dictionary = model.call("get_role_stats", role).duplicate(true)
 		var key := "mood" if cycle % 3 == 0 else "intimacy"
 		stats[key] = fmod(float(stats.get(key, 0.0)) + 0.5, 100.0)
 		if not model.call("persist_role_stats", role, stats):
 			_failures.append("阶段A：cycle %d 保存 %s 属性失败" % [cycle, role])
 			break
-		var other := "nai" if role == "ling" else "ling"
+		var other := str(stress_roles[(cycle + 1) % stress_roles.size()])
 		var other_before: Dictionary = model.call("get_role_stats", other).duplicate(true)
 		var other_after: Dictionary = model.call("get_role_stats", other)
 		for stat_key in other_before:
@@ -62,7 +63,7 @@ func _run() -> void:
 		var entry := {
 			"id": model.call("new_local_id", "stress"),
 			"sender": "user" if index % 2 == 0 else "ai",
-			"role": "ling" if index % 4 != 1 else "nai",
+			"role": "ling" if index % 4 != 1 else ("nai" if index % 8 != 5 else "xixi"),
 			"text": "压力消息 %d：小玲与小奈的交错对话内容。" % index,
 			"status": "failed" if index % 17 == 0 else "sent",
 			"created_at": 1700000000 + index,
@@ -132,7 +133,7 @@ func _run() -> void:
 			_failures.append("阶段C：排除 ID 后共享转写仍包含该消息")
 			break
 	var latest_role := CHAT_PIPELINE.latest_ai_speaker_role(history, role_data)
-	if latest_role not in ["ling", "nai"]:
+	if not role_data.has(latest_role):
 		_failures.append("阶段C：最近 AI 说话角色解析失败")
 	var dual_id := ""
 	for item in history:
@@ -149,8 +150,14 @@ func _run() -> void:
 	var visibility: Dictionary = state.get("conversation_visibility", {})
 	if str(visibility.get("mode", "")) != "shared_room":
 		_failures.append("阶段C：请求状态缺少 shared_room 可见性")
-	if (visibility.get("audience_roles", []) as Array).size() != 2:
-		_failures.append("阶段C：双目标消息的可见性没有覆盖两个受众")
+	# 三角色语义：共享房间 = 全体同住角色都在场（回复目标≠听众），
+	# 期望人数从 role_data 派生，第 4 位入住也不需要回来改这里。
+	var dual_audience: Array = visibility.get("audience_roles", [])
+	if dual_audience.size() != int(role_data.size()):
+		_failures.append("阶段C：双目标消息的可见性没有覆盖全部同住角色")
+	for target_variant in (dual_entry.get("target_roles", []) as Array):
+		if str(target_variant) not in dual_audience:
+			_failures.append("阶段C：双目标消息的可见性漏掉了目标角色 %s" % str(target_variant))
 	print("MULTI_ROLE_STRESS stage=pipeline failures=%d" % _failures.size())
 
 	# ---- 阶段 D：压力数据后的存档往返 ----

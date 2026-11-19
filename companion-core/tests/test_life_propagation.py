@@ -1,4 +1,4 @@
-"""Tests for the two-character memory propagation chain (heard_from)."""
+"""Tests for the memory propagation chain (heard_from): two-role and three-role registries."""
 
 import json
 import tempfile
@@ -11,34 +11,41 @@ from spring_haven_core.roles import RoleRegistry
 from spring_haven_core.service import CompanionService
 
 
-def _registry(root: Path) -> RoleRegistry:
+def _registry(root: Path, include_xixi: bool = False) -> RoleRegistry:
     personas = root / "personas"
     personas.mkdir()
     (personas / "ling.md").write_text("你是小玲。", encoding="utf-8")
     (personas / "nai.md").write_text("你是小奈。", encoding="utf-8")
+    roles = [
+        {
+            "role_id": "ling",
+            "display_name": "小玲",
+            "full_name": "春日铃音",
+            "aliases": ["小玲"],
+            "prompt_file": "personas/ling.md",
+        },
+        {
+            "role_id": "nai",
+            "display_name": "小奈",
+            "full_name": "白濑雪奈",
+            "aliases": ["小奈"],
+            "prompt_file": "personas/nai.md",
+        },
+    ]
+    if include_xixi:
+        (personas / "xixi.md").write_text("你是汐汐。", encoding="utf-8")
+        roles.append(
+            {
+                "role_id": "xixi",
+                "display_name": "汐汐",
+                "full_name": "汐汐",
+                "aliases": ["汐汐"],
+                "prompt_file": "personas/xixi.md",
+            }
+        )
     roles_path = root / "roles.json"
     roles_path.write_text(
-        json.dumps(
-            {
-                "roles": [
-                    {
-                        "role_id": "ling",
-                        "display_name": "小玲",
-                        "full_name": "春日铃音",
-                        "aliases": ["小玲"],
-                        "prompt_file": "personas/ling.md",
-                    },
-                    {
-                        "role_id": "nai",
-                        "display_name": "小奈",
-                        "full_name": "白濑雪奈",
-                        "aliases": ["小奈"],
-                        "prompt_file": "personas/nai.md",
-                    },
-                ]
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps({"roles": roles}, ensure_ascii=False),
         encoding="utf-8",
     )
     return RoleRegistry.load(roles_path)
@@ -76,6 +83,30 @@ class _FakeProvider:
         )
 
 
+async def _seed(store: HeartloomStore, save_id: str, role: str) -> None:
+    now = int(time.time())
+    day_start = int(time.mktime((2026, 2, 10, 0, 0, 0, -1, -1, -1)))
+    # 锚世界时钟:day_start == 世界第 0 天;世界随现实推进,该天早已结束
+    store._connection.execute(
+        "INSERT INTO journey_clock(save_id, anchor_real, world_value, rate) "
+        "VALUES (?, ?, 0.0, 1.0) "
+        "ON CONFLICT(save_id) DO UPDATE SET "
+        "anchor_real = excluded.anchor_real, world_value = 0.0, rate = 1.0",
+        (save_id, day_start),
+    )
+    store._connection.commit()
+    store.record_life_events(
+        save_id=save_id,
+        events=[{
+            "event_id": f"dailyplan-{role}-a-{now}",
+            "role_id": role,
+            "action": "sunbathe",
+            "description": "在窗边晒太阳，尾巴放松下来",
+            "occurred_at_unix": day_start + 1000,
+        }],
+    )
+
+
 class PropagationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -88,31 +119,8 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         self._tmp.cleanup()
 
-    async def _seed(self, save_id: str, role: str, importance: float) -> None:
-        now = int(time.time())
-        day_start = int(time.mktime((2026, 2, 10, 0, 0, 0, -1, -1, -1)))
-        # 锚世界时钟:day_start == 世界第 0 天;世界随现实推进,该天早已结束
-        self.store._connection.execute(
-            "INSERT INTO journey_clock(save_id, anchor_real, world_value, rate) "
-            "VALUES (?, ?, 0.0, 1.0) "
-            "ON CONFLICT(save_id) DO UPDATE SET "
-            "anchor_real = excluded.anchor_real, world_value = 0.0, rate = 1.0",
-            (save_id, day_start),
-        )
-        self.store._connection.commit()
-        self.store.record_life_events(
-            save_id=save_id,
-            events=[{
-                "event_id": f"dailyplan-{role}-a-{now}",
-                "role_id": role,
-                "action": "sunbathe",
-                "description": "在窗边晒太阳，尾巴放松下来",
-                "occurred_at_unix": day_start + 1000,
-            }],
-        )
-
     async def test_high_importance_digest_propagates_to_other_role(self) -> None:
-        await self._seed("s", "ling", 0.8)
+        await _seed(self.store, "s", "ling")
         result = await self.service.run_due_life_digests(now=int(time.time()))
         self.assertEqual(result["digested"], 2, result)  # 1 digest + 1 propagation
         # 小奈有"听说"记忆
@@ -138,7 +146,7 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(case=index, llm=llm_value):
                 save_id = f"s-clamp-{index}"
                 self.provider.propagation_importance = llm_value
-                await self._seed(save_id, "ling", 0.8)
+                await _seed(self.store, save_id, "ling")
                 result = await self.service.run_due_life_digests(now=int(time.time()))
                 self.assertEqual(result["digested"], 2, result)
                 heard = [
@@ -152,7 +160,7 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
     async def test_low_importance_digest_does_not_propagate(self) -> None:
         # 低 importance 记忆不传播（provider 返回 0.8 会传播——用 fallback 测低值）
         self.provider.fail = True  # 触发 fallback（importance 0.5）
-        await self._seed("s", "ling", 0.5)
+        await _seed(self.store, "s", "ling")
         result = await self.service.run_due_life_digests(now=int(time.time()))
         self.assertEqual(result["digested"], 1, result)  # 只有 digest，无传播
         nai_memories = self.store.list_memories(save_id="s", role_id="nai")
@@ -173,13 +181,46 @@ class PropagationTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("propagation provider down")
 
         self.service.provider = _FailAfterDigest()  # type: ignore[assignment]
-        await self._seed("s", "ling", 0.9)
+        await _seed(self.store, "s", "ling")
         result = await self.service.run_due_life_digests(now=int(time.time()))
         self.assertEqual(result["digested"], 2, result)
         nai_memories = self.store.list_memories(save_id="s", role_id="nai")
         heard = [m for m in nai_memories if m["source"] == "heard_from_ling"]
         self.assertEqual(len(heard), 1)
         self.assertIn("听说了", heard[0]["content"])
+
+
+class ThreeRolePropagationTests(unittest.IsolatedAsyncioTestCase):
+    """三角色传播链：高价值 digest 必须"被告诉"其余每一位（全连通）。"""
+
+    async def asyncSetUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.store = HeartloomStore(
+            self.root / "heartloom.sqlite3", ["ling", "nai", "xixi"]
+        )
+        self.provider = _FakeProvider()
+        self.service = CompanionService(
+            _registry(self.root, include_xixi=True), self.provider, self.store
+        )
+
+    async def asyncTearDown(self) -> None:
+        self.service.close()
+        self._tmp.cleanup()
+
+    async def test_high_importance_digest_propagates_to_all_others(self) -> None:
+        await _seed(self.store, "s3", "ling")
+        result = await self.service.run_due_life_digests(now=int(time.time()))
+        self.assertEqual(result["digested"], 3, result)  # 1 条 digest + 2 条传闻
+        for listener in ("nai", "xixi"):
+            heard = [
+                m
+                for m in self.store.list_memories(save_id="s3", role_id=listener)
+                if m["source"] == "heard_from_ling"
+            ]
+            self.assertEqual(len(heard), 1, listener)
+            self.assertEqual(heard[0]["scope_role_id"], listener)
+            self.assertIn("小玲", heard[0]["content"])
 
 
 class SecondHandPromptTests(unittest.TestCase):

@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlparse
 from aiohttp import ClientSession, ClientTimeout, FormData
 
 from .config import CoreConfig
-from .provider_settings import CAPABILITIES, ProviderSettingsStore
+from .provider_settings import CAPABILITIES, CapabilitySnapshot, ProviderSettingsStore
 
 MAX_PROVIDER_RESPONSE_BYTES = 16_000_000
 MAX_AUDIO_INPUT_BYTES = 8_000_000
@@ -190,6 +190,14 @@ class OpenAICompatibleProvider:
             user_text += "\n可信符号状态：" + json.dumps(
                 symbolic_context, ensure_ascii=False, separators=(",", ":")
             )[:12_000]
+        if str(getattr(provider, "protocol", "")) == "anthropic_messages_vision":
+            return await self._describe_image_anthropic(
+                provider,
+                system_prompt=system_prompt,
+                user_text=user_text,
+                image_base64=image_base64,
+                mime_type=mime_type,
+            )
         payload = {
             "temperature": 0.1,
             "max_tokens": min(2_200, self._config.max_output_tokens * 2),
@@ -224,6 +232,57 @@ class OpenAICompatibleProvider:
             text=json.dumps(structured, ensure_ascii=False) if structured else text,
             structured=structured,
             finish_reason=str(choice.get("finish_reason", "")),
+        )
+
+    async def _describe_image_anthropic(
+        self,
+        provider: Any,
+        *,
+        system_prompt: str,
+        user_text: str,
+        image_base64: str,
+        mime_type: str,
+    ) -> VisionReply:
+        """Anthropic Messages 方言的视觉转述(opencode.ai 等中转网关)。"""
+        payload = {
+            "system": system_prompt,
+            "temperature": 0.1,
+            "max_tokens": min(2_200, self._config.max_output_tokens * 2),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": str(mime_type),
+                                "data": str(image_base64),
+                            },
+                        },
+                        {"type": "text", "text": user_text},
+                    ],
+                }
+            ],
+        }
+        data = await self._post_with_invalid_json_recovery(
+            "vision", "/messages", payload
+        )
+        blocks = data.get("content", []) if isinstance(data, dict) else []
+        if not isinstance(blocks, list):
+            blocks = []
+        text = "\n".join(
+            str(block.get("text", ""))
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+        if not text:
+            raise ProviderError("vision provider returned an empty response")
+        structured = _json_object(text)
+        return VisionReply(
+            text=json.dumps(structured, ensure_ascii=False) if structured else text,
+            structured=structured,
+            finish_reason=str(data.get("stop_reason", "")) if isinstance(data, dict) else "",
         )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -363,11 +422,40 @@ class OpenAICompatibleProvider:
             speed=normalized_speed,
         )
 
-    async def diagnose(self, capability: str) -> dict[str, Any]:
+    async def diagnose(
+        self,
+        capability: str,
+        draft: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """诊断一个能力通道。draft 非空时用草稿参数做一次**免保存**直测:
+        只影响本次调用的快照(临时 OpenAICompatibleProvider 视角),不落盘、
+        不碰 DPAPI 持久化——首启向导的「测试连接」用它,用户确认后才走
+        保存路径。"""
         normalized = str(capability).strip().lower()
         if normalized not in set(CAPABILITIES):
             raise ProviderError("unknown provider capability")
         profile = self.settings.profile_snapshot(normalized)
+        if draft is not None:
+            if not isinstance(draft, dict):
+                raise ProviderError("draft provider settings must be a JSON object")
+            draft_base_url = str(draft.get("base_url", "")).strip()
+            draft_model = str(draft.get("model", "")).strip()
+            draft_api_key = str(draft.get("api_key", "")).strip()
+            if not draft_base_url or not draft_model:
+                raise ProviderError("draft diagnosis requires base_url and model")
+            # 草稿密钥为空时回落到已存密钥——与 configure_provider 的
+            # "空值表示保留现有 Key"语义一致(本地 LM Studio 可无 Key)。
+            profile = CapabilitySnapshot(
+                capability=profile.capability,
+                base_url=draft_base_url,
+                model=draft_model,
+                api_key=draft_api_key or profile.api_key,
+                enabled=True,
+                protocol="openai_chat",
+                inherit_chat_key=False,
+                allow_insecure_http=bool(draft.get("allow_insecure_http", False)),
+                extra_headers={},
+            )
         if not profile.enabled:
             raise ProviderError(f"{normalized} provider is disabled")
         profile_host = (urlparse(profile.base_url).hostname or "").lower()
@@ -897,7 +985,17 @@ class OpenAICompatibleProvider:
         timeout = ClientTimeout(total=self._config.request_timeout_seconds)
         url = provider.base_url.rstrip("/") + path
         headers = {"Content-Type": "application/json"}
-        if provider.api_key:
+        if str(getattr(provider, "protocol", "")) == "anthropic_messages_vision":
+            # Anthropic Messages 方言:x-api-key + 版本头;extra_headers 只在该
+            # 协议下透传(中转网关的自定义路由头,如 opencode 的 x-opencode-session)。
+            headers["anthropic-version"] = "2023-06-01"
+            if provider.api_key:
+                headers["x-api-key"] = str(provider.api_key)
+            for header_name, header_value in (
+                getattr(provider, "extra_headers", {}) or {}
+            ).items():
+                headers[str(header_name)] = str(header_value)
+        elif provider.api_key:
             headers["Authorization"] = f"Bearer {provider.api_key}"
         network_proxy = self.settings.proxy_config()
         proxy_mode = str(network_proxy.get("mode", "direct"))

@@ -62,14 +62,14 @@ static func entry_request_state(
 	if not source_message_id.is_empty():
 		state["source_message_id"] = source_message_id
 	var audience_roles: Array[String] = []
-	var audience_variant = entry.get("audience_roles", ["ling", "nai"])
+	var audience_variant = entry.get("audience_roles", role_data.keys())
 	if audience_variant is Array:
 		for audience_variant_role in audience_variant:
 			var audience_role := str(audience_variant_role)
 			if role_data.has(audience_role) and audience_role not in audience_roles:
 				audience_roles.append(audience_role)
 	if audience_roles.is_empty():
-		audience_roles.assign(["ling", "nai"])
+		audience_roles.assign(role_data.keys())
 	state["conversation_visibility"] = {
 		"protocol": visibility_protocol,
 		"mode": "shared_room",
@@ -140,14 +140,14 @@ static func build_shared_history(
 			"created_at": int(item.get("created_at", 0))
 		}
 		var audience_roles: Array[String] = []
-		var audience_variant = item.get("audience_roles", ["ling", "nai"])
+		var audience_variant = item.get("audience_roles", role_data.keys())
 		if audience_variant is Array:
 			for audience_role_variant in audience_variant:
 				var audience_role := str(audience_role_variant)
 				if role_data.has(audience_role) and audience_role not in audience_roles:
 					audience_roles.append(audience_role)
 		if audience_roles.is_empty():
-			audience_roles.assign(["ling", "nai"])
+			audience_roles.assign(role_data.keys())
 		entry["audience_roles"] = audience_roles
 		if sender == "ai":
 			entry["role_id"] = history_role
@@ -168,13 +168,13 @@ static func build_shared_history(
 	return transcript
 
 
-static func message_mentions_both_roles(text: String) -> bool:
-	for role in ["ling", "nai"]:
-		var mentioned := false
+static func mentioned_roles(text: String) -> Array[String]:
+	var mentioned: Array[String] = []
+	for role_variant in RECIPIENT_RESOLVER.ROLE_ALIASES:
+		var role := str(role_variant)
 		for alias_variant in RECIPIENT_RESOLVER.ROLE_ALIASES[role]:
 			if text.findn(str(alias_variant)) >= 0:
-				mentioned = true
+				if role not in mentioned:
+					mentioned.append(role)
 				break
-		if not mentioned:
-			return false
-	return true
+	return mentioned

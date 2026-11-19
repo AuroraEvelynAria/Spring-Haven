@@ -320,7 +320,7 @@ func _build_rag_editor(parent: VBoxContainer, data: Dictionary, subcategory: Str
 	)
 	library_heading.add_child(_rag_import_scope)
 	var file_button := Button.new()
-	file_button.text = "📄 导入文件"
+	file_button.text = "导入文件"
 	file_button.tooltip_text = "支持 TXT、Markdown、JSON、CSV、HTML、DOCX 和 PDF；使用左侧选择的导入作用域"
 	file_button.pressed.connect(func(): _rag_file_dialog.popup_centered_ratio(0.72))
 	library_heading.add_child(file_button)
@@ -352,6 +352,7 @@ func _build_rag_editor(parent: VBoxContainer, data: Dictionary, subcategory: Str
 		{"label": "共享 (*)", "value": "*"},
 		{"label": "小玲 (ling)", "value": "ling"},
 		{"label": "小奈 (nai)", "value": "nai"},
+		{"label": "汐汐 (xixi)", "value": "xixi"},
 	]:
 		var index := _rag_scope_filter.item_count
 		_rag_scope_filter.add_item(str(option.label))
@@ -499,13 +500,17 @@ func _create_rag_scope_select(for_search: bool = false) -> OptionButton:
 		select.set_item_metadata(0, "ling")
 		select.add_item("以小奈身份检索")
 		select.set_item_metadata(1, "nai")
+		select.add_item("以汐汐身份检索")
+		select.set_item_metadata(2, "xixi")
 	else:
-		select.add_item("两位角色共享")
+		select.add_item("全部角色共享")
 		select.set_item_metadata(0, "*")
 		select.add_item("仅小玲")
 		select.set_item_metadata(1, "ling")
 		select.add_item("仅小奈")
 		select.set_item_metadata(2, "nai")
+		select.add_item("仅汐汐")
+		select.set_item_metadata(3, "xixi")
 	select.custom_minimum_size = Vector2(144, 34)
 	return select
 
@@ -609,7 +614,7 @@ func _render_rag_document_list() -> void:
 		detail.add_theme_font_size_override("font_size", 10)
 		row.add_child(detail)
 		var delete_button := Button.new()
-		delete_button.text = "🗑"
+		delete_button.text = "删除"
 		delete_button.tooltip_text = "删除此文档"
 		delete_button.pressed.connect(func(): _request_delete_rag_document(document_id))
 		row.add_child(delete_button)

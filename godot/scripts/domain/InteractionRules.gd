@@ -62,6 +62,11 @@ const ROLE_MULTIPLIERS := {
 		"hug": 0.90, "kiss": 1.00, "eat": 0.90, "drink": 1.10,
 		"sleep": 0.85, "comfort": 1.20, "praise": 1.10,
 		"exercise": 1.15, "toilet": 1.00, "care": 1.00, "play": 1.15
+	},
+	"xixi": {
+		"hug": 1.10, "kiss": 1.05, "eat": 1.00, "drink": 1.00,
+		"sleep": 1.05, "comfort": 1.15, "praise": 1.05,
+		"exercise": 1.00, "toilet": 1.00, "care": 1.05, "play": 1.05
 	}
 }
 

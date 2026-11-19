@@ -42,6 +42,11 @@ const ROLE_DATA := {
 		"name": "小奈", "full_name": "白瀬 雪奈", "icon": "🐇", "sub": "兔娘 · 19岁", "mood": "🌸 活力满满", "color": "#B8A6D9",
 		"diary": "“嗯～今天排练的时候一直在想主人，跳错了好几个拍子。回来看到主人在，就对了。”",
 		"diary_footer": "—— 雪奈 · 傍晚"
+	},
+	"xixi": {
+		"name": "汐汐", "full_name": "汐汐", "icon": "🐋", "sub": "鲸鱼兽娘 · 20岁", "mood": "🌊 温温柔柔", "color": "#7EC8E8",
+		"diary": "“趴在窗边听了好久的水声……其实是雨啦。但一想到主人在这个家里，整片海都是暖的。”",
+		"diary_footer": "—— 汐汐 · 夜潮"
 	}
 }
 
@@ -99,8 +104,8 @@ var _connection_status: Label
 var _memory_status: Label
 var _memory_state := "idle"
 var _memory_pulse_elapsed := 0.0
-var _ling_button: Button
-var _nai_button: Button
+# 角色切换按钮（role_id -> Button），随 ROLE_DATA 数据驱动生成与同步。
+var _role_buttons: Dictionary = {}
 var _explore_button: Button
 var _archive_button: Button
 var _memory_network_button: Button
@@ -139,6 +144,13 @@ var _portrait_rig: Control
 var _life_status_clock: Label
 var _life_status_cadence: Label
 var _life_status_elapsed := 0.0
+# ADR-016:她的心事(节拍状态)——缓存 /plot/state 载荷,折进「此刻生活」板。
+# 初值拉满让首次条件满足的 tick 立刻取一次(Core 就绪前由 is_active 拦住)。
+const PLOT_POLL_SECONDS := 60.0
+var _plot_status: Dictionary = {}
+var _plot_poll_elapsed := 999.0
+var _plot_poll_in_flight := false
+var _plot_section: VBoxContainer
 var _log_bar: PanelContainer
 var _log_label: Label
 var _settings: Control
@@ -225,6 +237,7 @@ func _process(delta: float) -> void:
 		_life_mini_elapsed = 0.0
 		_refresh_life_mini_status()
 		_refresh_season_overlay()
+	_plot_poll_tick(delta)
 	if _network_waiting:
 		_thinking_elapsed += delta
 		if _thinking_elapsed >= THINKING_STEP_SECONDS:
@@ -475,10 +488,12 @@ func _build_nav(parent: VBoxContainer) -> void:
 	var roles := HBoxContainer.new()
 	roles.add_theme_constant_override("separation", 3)
 	_role_switch_panel.add_child(roles)
-	_ling_button = _role_button("🐾 小玲", "ling")
-	_nai_button = _role_button("🐇 小奈", "nai")
-	roles.add_child(_ling_button)
-	roles.add_child(_nai_button)
+	for role_variant in ROLE_DATA:
+		var role := str(role_variant)
+		var role_entry := ROLE_DATA[role] as Dictionary
+		var button := _role_button("%s %s" % [str(role_entry.icon), str(role_entry.name)], role)
+		_role_buttons[role] = button
+		roles.add_child(button)
 
 	_archive_button = Button.new()
 	_archive_button.text = "📚"
@@ -805,6 +820,20 @@ func _refresh_sidebar() -> void:
 		child.free()
 	var role: Dictionary = ROLE_DATA[_current_role]
 	if is_instance_valid(_portrait_rig):
+		# Live2D rig 的角色跟不上切换(该角色无 Live2D 资产,set_role 静默不动)
+		# 时,换装成程序化立绘——每位角色都该有正确的"脸"。
+		var rig_role := str(_portrait_rig.get("role_id"))
+		if rig_role != _current_role and _portrait_rig.get_script() == LIVE2D_RIG_SCRIPT:
+			var fallback_rig := PORTRAIT_RIG_SCENE.instantiate()
+			fallback_rig.name = "ActivePortraitRig"
+			fallback_rig.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+			fallback_rig.offset_left = 14.0
+			fallback_rig.offset_right = -14.0
+			fallback_rig.offset_top = -272.0
+			fallback_rig.offset_bottom = -18.0
+			_stage_portrait_holder.add_child(fallback_rig)
+			_portrait_rig.queue_free()
+			_portrait_rig = fallback_rig
 		_portrait_rig.call("set_role", _current_role)
 		_portrait_rig.call("set_body_state", LifeSim.build_role_state(_current_role))
 	_refresh_stage_identity()
@@ -941,7 +970,135 @@ func _hud_life_plate_build() -> PanelContainer:
 	_life_status_cadence.add_theme_color_override("font_color", Color(data.secondary, 0.62))
 	content.add_child(_life_status_cadence)
 	_life_status_clock = _life_status_cadence
+	# ADR-016:她的心事——作为「此刻生活」的延伸小节;无数据(Core 未连/
+	# 无剧本/脊椎未启动)时整段隐藏,不留空壳
+	_plot_section = VBoxContainer.new()
+	_plot_section.add_theme_constant_override("separation", 4)
+	_plot_section.visible = false
+	content.add_child(_plot_section)
+	_render_plot_section()
 	return plate
+
+
+# ===== ADR-016:她的心事(节拍状态) =====
+
+func _plot_poll_tick(delta: float) -> void:
+	_plot_poll_elapsed += delta
+	if _plot_poll_elapsed < PLOT_POLL_SECONDS or _plot_poll_in_flight:
+		return
+	if not CompanionCore.is_active() or not Global.is_state_loaded():
+		return
+	_plot_poll_elapsed = 0.0
+	_refresh_plot_status()
+
+func _refresh_plot_status() -> void:
+	_plot_poll_in_flight = true
+	var result := await CompanionCore.fetch_plot_state()
+	_plot_poll_in_flight = false
+	if not bool(result.get("ok", false)):
+		return
+	var data = result.get("data", {})
+	if data is Dictionary:
+		_plot_status = data
+		_render_plot_section()
+
+func _submit_plot_choice(plot_id: String, choice_id: String) -> void:
+	var result := await CompanionCore.submit_plot_choice(plot_id, choice_id)
+	if bool(result.get("ok", false)):
+		var data = result.get("data", {})
+		if data is Dictionary:
+			_plot_status = data  # 响应即最新状态,免二次拉取
+	_render_plot_section()
+
+func _render_plot_section() -> void:
+	if not is_instance_valid(_plot_section):
+		return
+	for child in _plot_section.get_children():
+		child.free()
+	var data := ThemeMgr.get_current_theme_data()
+	var active := _active_plot()
+	if active.is_empty():
+		_plot_section.visible = false
+		return
+	var beat: Dictionary = active.get("current_beat", {})
+	var since := int(float(beat.get("entered_world_day", 0.0)))
+	var header := Label.new()
+	header.text = "她的心事 · 第 %d 天起" % since
+	header.add_theme_font_size_override("font_size", 11)
+	header.add_theme_color_override("font_color", Color(data.primary, 0.85))
+	_plot_section.add_child(header)
+	# 谁的心事:当前角色看自己的就不重复名字,看对方的带上名字
+	var beat_role := str(beat.get("role", ""))
+	var who := ""
+	if beat_role != "" and beat_role != _current_role:
+		var role_name := str((ROLE_DATA.get(beat_role, {}) as Dictionary).get("name", ""))
+		who = "%s的" % role_name if not role_name.is_empty() else ""
+	var title_line := Label.new()
+	title_line.text = "%s「%s」" % [who, str(beat.get("title", ""))]
+	title_line.add_theme_font_size_override("font_size", 12)
+	title_line.add_theme_color_override("font_color", Color(data.text, 0.92))
+	_plot_section.add_child(title_line)
+	var goal_line := Label.new()
+	goal_line.text = str(beat.get("goal", "")).left(60)
+	goal_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	goal_line.add_theme_font_size_override("font_size", 11)
+	goal_line.add_theme_color_override("font_color", Color(data.secondary, 0.75))
+	_plot_section.add_child(goal_line)
+	# 枢轴:二选一(缺席走后端超时,是合法结局)
+	var choices: Array = beat.get("choices", [])
+	if not choices.is_empty():
+		var plot_id := str(active.get("plot_id", ""))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		for choice_variant in choices:
+			var choice: Dictionary = choice_variant if choice_variant is Dictionary else {}
+			var choice_id := str(choice.get("id", ""))
+			if choice_id.is_empty():
+				continue
+			var button := Button.new()
+			button.text = str(choice.get("label", choice_id))
+			button.add_theme_font_size_override("font_size", 11)
+			button.pressed.connect(func(): _submit_plot_choice(plot_id, choice_id))
+			row.add_child(button)
+		_plot_section.add_child(row)
+	# 时间线:最近两条了结(库里有节拍标题,直接可读)
+	var history: Array = active.get("history", [])
+	if history is Array and not (history as Array).is_empty():
+		var tail: Array = (history as Array).slice(maxi(0, (history as Array).size() - 2))
+		for entry_variant in tail:
+			var entry: Dictionary = entry_variant if entry_variant is Dictionary else {}
+			var line := Label.new()
+			line.text = "第 %d 天 · 「%s」· %s" % [
+				int(float(entry.get("exited_world_day", 0.0))),
+				str(entry.get("title", entry.get("beat_id", ""))),
+				_plot_resolution_label(str(entry.get("resolution", ""))),
+			]
+			line.add_theme_font_size_override("font_size", 10)
+			line.add_theme_color_override("font_color", Color(data.secondary, 0.6))
+			_plot_section.add_child(line)
+	_plot_section.visible = true
+
+func _active_plot() -> Dictionary:
+	"""第一条未收束且有当前节拍的脊椎(首版单脊椎;多条时按启动日排序)。"""
+	if _plot_status.is_empty():
+		return {}
+	var plots: Array = _plot_status.get("plots", [])
+	for plot_variant in plots:
+		var plot: Dictionary = plot_variant if plot_variant is Dictionary else {}
+		var current = plot.get("current_beat", {})
+		if not bool(plot.get("finished", false)) and current is Dictionary and not (current as Dictionary).is_empty():
+			return plot
+	return {}
+
+func _plot_resolution_label(resolution: String) -> String:
+	# 只认结构性结果;枢轴的 choice_id 原样露出(它的风味由记忆承担,不进引擎)
+	match resolution:
+		"completed":
+			return "了结"
+		"expired":
+			return "不了了之"
+		_:
+			return resolution
 
 func _hud_cycle_plate_build() -> PanelContainer:
 	var data := ThemeMgr.get_current_theme_data()
@@ -1582,8 +1739,8 @@ func _refresh_interaction_state() -> void:
 	# Role selection is a user preference, not part of the in-flight payload.
 	# It remains available while waiting; revision tracking protects it from a
 	# late callback that would otherwise apply the automatic next turn.
-	_ling_button.disabled = _intro_active
-	_nai_button.disabled = _intro_active
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).disabled = _intro_active
 	if is_instance_valid(_explore_button):
 		_explore_button.disabled = presentation_locked
 	if is_instance_valid(_voice_button):
@@ -2027,14 +2184,14 @@ func _send_message() -> void:
 		reply_roles.append(_current_role)
 	var reply_role := reply_roles[0]
 	var audience_roles: Array[String] = []
-	var audience_variant = recipient_result.get("audience_roles", ["ling", "nai"])
+	var audience_variant = recipient_result.get("audience_roles", ROLE_DATA.keys())
 	if audience_variant is Array:
 		for audience_role_variant in audience_variant:
 			var audience_role := str(audience_role_variant)
 			if ROLE_DATA.has(audience_role) and audience_role not in audience_roles:
 				audience_roles.append(audience_role)
 	if audience_roles.is_empty():
-		audience_roles.assign(["ling", "nai"])
+		audience_roles.assign(ROLE_DATA.keys())
 	var message_id := Global.new_local_id("user")
 	var event_type := "chat"
 	var action := ""
@@ -2148,7 +2305,7 @@ func _apply_action(action: String) -> void:
 		"sender": "user",
 		"role": response_role,
 		"target_role": response_role,
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": ROLE_DATA.keys(),
 		"text": user_message,
 		"status": "pending",
 		"kind": "action",
@@ -2182,8 +2339,8 @@ func _switch_role(role: String, _announce: bool, persist := true) -> bool:
 		_show_persistence_failure(Global.get_last_save_error(), "角色切换未保存")
 		return false
 	_current_role = role
-	_ling_button.button_pressed = role == "ling"
-	_nai_button.button_pressed = role == "nai"
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).button_pressed = str(role_variant) == role
 	_update_role_button_styles()
 	_apply_chat_input_theme(ThemeMgr.get_current_theme_data())
 	_refresh_sidebar()
@@ -2195,9 +2352,9 @@ func _switch_role(role: String, _announce: bool, persist := true) -> bool:
 
 func _update_role_button_styles() -> void:
 	var data := ThemeMgr.get_current_theme_data()
-	for entry in [[_ling_button, "ling"], [_nai_button, "nai"]]:
-		var button: Button = entry[0]
-		var active := str(entry[1]) == _current_role
+	for role_variant in _role_buttons:
+		var button: Button = _role_buttons[role_variant]
+		var active := str(role_variant) == _current_role
 		button.add_theme_color_override("font_color", Color.WHITE if active else Color(data.secondary))
 		button.add_theme_stylebox_override("normal", _panel_style(Color(data.primary) if active else Color.TRANSPARENT, Color.TRANSPARENT, 16, 3))
 		button.add_theme_stylebox_override("pressed", _panel_style(Color(data.primary), Color.TRANSPARENT, 16, 3))
@@ -2208,19 +2365,26 @@ func _intro_sequence() -> void:
 	var intro_lines: Array[Dictionary] = [
 		{"role": "ling", "text": "喵～你来了。我在窗台上晒了好一会儿太阳了。"},
 		{"role": "nai", "text": "嗯～小玲姐姐！主人来了怎么不叫我！"},
-		{"role": "ling", "text": "喵……你急什么，主人又不会跑。"}
+		{"role": "ling", "text": "喵……你急什么，主人又不会跑。"},
+		{"role": "xixi", "text": "呐呐……主人、小玲姐姐、小奈，晚上好呀。我是汐汐，今晚刚刚搬进来，请多照顾……尾巴有点紧张，啪嗒。"},
+		{"role": "nai", "text": "哇，汐汐的鲸鱼尾巴在拍诶！主人，以后家里更热闹啦！"}
 	]
 	await get_tree().create_timer(0.35).timeout
-	for line in intro_lines:
+	for line_index in intro_lines.size():
 		if _scene_exiting:
 			return
+		var line := intro_lines[line_index] as Dictionary
 		var role := str(line.get("role", "ling"))
 		var text := str(line.get("text", ""))
 		_switch_role(role, false, false)
 		var message_id := _append_history_message(
 			"ai", role, text, "sent", {"kind": "intro", "event_type": "intro"}
 		)
-		var next_role := _other_role(role)
+		# 引导序列的「下一角色」取下一句台词本身（双角色时代是二元翻转，
+		# 三角色起以台词顺序为准），最后一句收在它自己的角色上。
+		var next_role := role
+		if line_index + 1 < intro_lines.size():
+			next_role = str((intro_lines[line_index + 1] as Dictionary).get("role", role))
 		var next_role_saved := Global.set_current_character(next_role, true)
 		if not next_role_saved:
 			_show_persistence_failure(Global.get_last_save_error(), "引导轮次未保存")
@@ -2328,7 +2492,7 @@ func _on_core_reply(request_id: String, text: String, _attachments: Array) -> vo
 		"in_reply_to": history_id,
 		"event_type": event_type,
 		"kind": "action_reply" if event_type == "action" else "reply",
-		"audience_roles": ["ling", "nai"],
+		"audience_roles": ROLE_DATA.keys(),
 	}
 	var reply_target_role := ""
 	var pending_state_variant = pending.get("state", {})
@@ -2539,7 +2703,7 @@ func _update_recipient_hint() -> void:
 			if ROLE_DATA.has(role):
 				names.append(str((ROLE_DATA[role] as Dictionary).name))
 	var audience_names: Array[String] = []
-	var audience_variant = resolved.get("audience_roles", ["ling", "nai"])
+	var audience_variant = resolved.get("audience_roles", ROLE_DATA.keys())
 	if audience_variant is Array:
 		for role_variant in audience_variant:
 			var role := str(role_variant)
@@ -2561,26 +2725,27 @@ func _resolve_recipients(
 	if resolved.has("route"):
 		return resolved
 	var reason := str(resolved.get("reason", "selected"))
+	var default_reply_mode := str(Settings.get_runtime_tuning_value("default_reply_mode", "selected"))
+	var mentioned := CHAT_PIPELINE.mentioned_roles(text)
 	var should_reply_together := (
 		reason == "selected"
 		and (
-			str(Settings.get_runtime_tuning_value("default_reply_mode", "selected")) == "both"
+			default_reply_mode == "both"
 			or (
 				bool(Settings.get_runtime_tuning_value("both_names_trigger_dual", false))
-				and _message_mentions_both_roles(text)
+				and mentioned.size() >= 2
 			)
 		)
 	)
 	if should_reply_together:
-		resolved["roles"] = [selected_role, _other_role(selected_role)]
+		# 三角色时代：群回不再做 ling↔nai 二元翻转——默认 both 回全员，
+		# 点名 ≥2 位就回被点名的那几位。
+		if default_reply_mode == "both":
+			resolved["roles"] = ROLE_DATA.keys()
+		else:
+			resolved["roles"] = mentioned
 		resolved["reason"] = "developer_dual"
 	return resolved
-
-func _message_mentions_both_roles(text: String) -> bool:
-	return CHAT_PIPELINE.message_mentions_both_roles(text)
-
-func _other_role(role: String) -> String:
-	return "nai" if role == "ling" else "ling"
 
 func _add_waiting_message(request_id: String, role: String) -> void:
 	_remove_waiting_message(request_id)
@@ -2690,8 +2855,8 @@ func _apply_responsive_layout() -> void:
 	_connection_status.visible = width > 600.0
 	_memory_status.visible = width > 720.0
 	_explore_button.visible = width > 560.0
-	_ling_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
-	_nai_button.custom_minimum_size = Vector2(70 if narrow else 84, 28)
+	for role_variant in _role_buttons:
+		(_role_buttons[role_variant] as Button).custom_minimum_size = Vector2(70 if narrow else 84, 28)
 	_settings_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
 	_archive_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)
 	_memory_network_button.custom_minimum_size = Vector2(32 if narrow else 38, 34)

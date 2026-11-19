@@ -10,7 +10,7 @@ func _initialize() -> void:
 	_expect_roles("小玲来回答一下小奈的问题", "nai", ["ling"])
 	_expect_roles("小玲，你觉得小奈可爱吗", "nai", ["ling"])
 	_expect_roles("我今天很想小奈", "ling", ["nai"])
-	_expect_roles("你们都回答一下", "nai", ["nai", "ling"])
+	_expect_roles("你们都回答一下", "nai", ["ling", "nai", "xixi"])
 	_expect_roles("你们今天怎么样", "nai", ["nai"])
 	_expect_roles("小玲和小奈今天都很可爱", "ling", ["ling"])
 	_expect_roles("（我今天有点累，括号内容也让两个人看见）", "ling", ["ling"])
@@ -29,6 +29,11 @@ func _initialize() -> void:
 	_expect_context_delegation("你去问问小奈想吃什么？", "nai", "ling", "ling", "nai")
 	_expect_context_delegation("你去问小奈", "nai", "ling", "ling", "nai")
 	_expect_context_roles("你去问小奈", "ling", "nai", ["ling", "nai"])
+	# 三角色语义：点名对只回那两位；「你们都/三个都」回全员；汐汐全链路可用。
+	_expect_roles("问问汐汐想吃什么", "ling", ["xixi"])
+	_expect_roles("小玲和小奈都说说今天的事", "xixi", ["ling", "nai"])
+	_expect_roles("你们三个都回答", "ling", ["ling", "nai", "xixi"])
+	_expect_delegation("让她去问汐汐，晚饭吃什么", "ling", "ling", "xixi")
 	for _round in 100:
 		_expect_delegation("让她去问小奈，今晚吃什么", "ling", "ling", "nai")
 	if _failures.is_empty():
@@ -104,6 +109,6 @@ func _expect_context_roles(
 
 func _has_shared_visibility(result: Dictionary) -> bool:
 	return (
-		result.get("audience_roles", []) == ["ling", "nai"]
+		result.get("audience_roles", []) == ["ling", "nai", "xixi"]
 		and str(result.get("visibility", "")) == "shared_room"
 	)

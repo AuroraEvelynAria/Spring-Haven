@@ -76,7 +76,7 @@ func _run() -> void:
 		return
 	if (
 		str(user_entry.get("target_role", "")) != "ling"
-		or user_entry.get("audience_roles", []) != ["ling", "nai"]
+		or user_entry.get("audience_roles", []) != ["ling", "nai", "xixi"]
 		or str(user_entry.get("text", "")) != prompt
 		or str(user_entry.get("action", "")) != "drink"
 		or str(user_entry.get("event_type", "")) != "action"
@@ -100,7 +100,7 @@ func _run() -> void:
 	var visibility: Dictionary = visibility_variant if visibility_variant is Dictionary else {}
 	if (
 		str(visibility.get("protocol", "")) != "spring_heaven.conversation_visibility.v1"
-		or visibility.get("audience_roles", []) != ["ling", "nai"]
+		or visibility.get("audience_roles", []) != ["ling", "nai", "xixi"]
 		or str(visibility.get("responder_role", "")) != "ling"
 		or not bool(visibility.get("parenthetical_content_visible", false))
 	):

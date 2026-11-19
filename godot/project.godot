@@ -14,6 +14,10 @@ config/name="Spring Haven"
 run/main_scene="res://scenes/MainMenu/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
+boot_splash/bg_color=Color(0.051, 0.168, 0.298, 1)
+boot_splash/image="res://assets/boot_splash.png"
+boot_splash/fullsize=false
+boot_splash/use_filter=true
 
 [audio]
 
