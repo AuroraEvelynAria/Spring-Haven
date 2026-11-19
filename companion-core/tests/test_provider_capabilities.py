@@ -322,6 +322,26 @@ class ProviderCapabilityProtocolTests(unittest.IsolatedAsyncioTestCase):
                 extra_headers={"x-api-key": "nope"},
             )
 
+    async def test_diagnose_draft_tests_without_persisting(self):
+        # 首启向导的免保存直测:草稿参数生效,不落盘(保存的模型名不变)。
+        status = await self.provider.diagnose(
+            "chat",
+            {
+                "base_url": str(self.server.make_url("/v1")).rstrip("/"),
+                "model": "draft-model",
+                "api_key": "",
+            },
+        )
+        self.assertTrue(bool(status["ok"]))
+        self.assertEqual(status["model"], "draft-model")
+        # 已存档(测试夹具里 vision 的档案)不被草稿影响
+        saved = self.settings.profile_snapshot("chat")
+        self.assertNotEqual(saved.model, "draft-model")
+
+    async def test_diagnose_draft_requires_base_url_and_model(self):
+        with self.assertRaises(ProviderError):
+            await self.provider.diagnose("chat", {"base_url": "", "model": ""})
+
     async def test_openai_compatible_vision_embedding_and_rerank(self):
         vision = await self.provider.describe_image(
             image_base64="aW1hZ2U=",

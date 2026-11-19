@@ -30,6 +30,9 @@ var _model_setup_checked := false
 var _particles: Array = []
 var _rng := RandomNumberGenerator.new()
 var _intro_tween: Tween
+var _startup_status: StartupStatusLine
+var _first_run_wizard: FirstRunWizard
+var _core_ready_for_journeys := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -50,6 +53,15 @@ func _ready() -> void:
 	_refresh_active_journey_hint()
 	_animate_intro()
 	Audio.play_default_music()
+	# 启动状态行:Core 启动过程第一次有了看得见的反馈;就绪前旅程入口
+	# 不放出半成品体验(生活实验室/角色工坊/设置不依赖 Core,不受限)。
+	_startup_status = StartupStatusLine.new()
+	_startup_status.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_startup_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_startup_status.detail_requested.connect(func() -> void: _show_core_startup_failure())
+	add_child(_startup_status)
+	CompanionCore.health_changed.connect(_on_core_health_for_navigation)
+	_update_journey_navigation()
 	_check_first_run_model_setup.call_deferred()
 
 func _initialize_particles() -> void:
@@ -215,6 +227,7 @@ func _build_menu() -> void:
 	_core_startup_dialog.title = "Companion Core 未启动"
 	_core_startup_dialog.ok_button_text = "知道了"
 	_core_startup_dialog.add_button("📂 打开游戏目录", true, "open_game_directory")
+	_core_startup_dialog.add_button("🔄 重试连接", true, "retry_core_connection")
 	_core_startup_dialog.custom_action.connect(_on_core_startup_dialog_action)
 	add_child(_core_startup_dialog)
 
@@ -420,7 +433,36 @@ func _check_first_run_model_setup() -> void:
 		return
 	var provider_data = result.get("data", {})
 	if provider_data is Dictionary and not bool((provider_data as Dictionary).get("api_key_configured", false)):
-		_model_setup_dialog.popup_centered(Vector2i(540, 220))
+		_open_first_run_wizard()
+
+
+## 首启三步向导:替代旧的"连接聊天模型"弹窗惊吓(该对话框成员保留,
+## MainMenuStartupCheck 断言依赖,但不再是首启主动路径)。
+func _open_first_run_wizard() -> void:
+	if not is_instance_valid(_first_run_wizard):
+		_first_run_wizard = FirstRunWizard.new()
+		_first_run_wizard.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_first_run_wizard.wizard_completed.connect(func() -> void:
+			_refresh_active_journey_hint()
+		)
+		add_child(_first_run_wizard)
+	_first_run_wizard.open_wizard()
+
+
+func _on_core_health_for_navigation(active: bool, _message: String) -> void:
+	if active == _core_ready_for_journeys:
+		return
+	_core_ready_for_journeys = active
+	_update_journey_navigation()
+
+
+func _update_journey_navigation() -> void:
+	# Core 未就绪时只锁「继续旅程/新旅程」——点进去只会得到没有对话与
+	# 记忆的半成品;其余入口不依赖 Core,保持可用。
+	if _start_button:
+		_start_button.disabled = not _core_ready_for_journeys
+	if _new_game_button:
+		_new_game_button.disabled = not _core_ready_for_journeys
 
 func _show_core_startup_failure() -> void:
 	if not is_instance_valid(_core_startup_dialog):
@@ -439,9 +481,15 @@ func _show_core_startup_failure() -> void:
 	_core_startup_dialog.popup_centered(Vector2i(590, 280))
 
 func _on_core_startup_dialog_action(action: StringName) -> void:
-	if action != &"open_game_directory":
+	if action == &"open_game_directory":
+		OS.shell_open(OS.get_executable_path().get_base_dir())
 		return
-	OS.shell_open(OS.get_executable_path().get_base_dir())
+	if action == &"retry_core_connection":
+		# 重试不再需要重启游戏:health 轮询发现连不上会自动重新拉起本地
+		# Core;这里显式 reconnect 立即触发一轮,状态行会跟着回到启动中。
+		_core_startup_dialog.hide()
+		CompanionCore.connect_to_core()
+		return
 
 func _on_life_lab_pressed() -> void:
 	if not Global.is_state_loaded():

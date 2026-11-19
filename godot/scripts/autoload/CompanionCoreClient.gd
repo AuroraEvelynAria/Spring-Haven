@@ -345,6 +345,31 @@ func diagnose_provider(capability: String) -> Dictionary:
 		CHAT_TIMEOUT_SECONDS
 	)
 
+
+## 首启向导的免保存直测:用表单当前值(base_url/model/api_key)打一次
+## 真实诊断,不落盘。草稿 Key 为空时后端回落到已存 Key(与保存语义一致)。
+func diagnose_provider_draft(
+	capability: String,
+	base_url: String,
+	model: String,
+	api_key: String
+) -> Dictionary:
+	if not has_credentials():
+		return {"ok": false, "message": "未配置 Companion Core 本地密钥", "retryable": false}
+	var payload := {
+		"capability": capability.strip_edges().to_lower(),
+		"base_url": base_url.strip_edges(),
+		"model": model.strip_edges(),
+	}
+	if not api_key.strip_edges().is_empty():
+		payload["api_key"] = api_key.strip_edges()
+	return await _request_json(
+		HTTPClient.METHOD_POST,
+		_url("/providers/diagnose"),
+		{"capability": capability.strip_edges().to_lower(), "draft": payload},
+		CHAT_TIMEOUT_SECONDS
+	)
+
 func is_provider_configured(capability: String) -> bool:
 	var profiles = _provider_status_cache.get("profiles", {})
 	if not profiles is Dictionary:

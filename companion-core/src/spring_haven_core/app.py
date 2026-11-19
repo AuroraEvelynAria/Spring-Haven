@@ -271,7 +271,9 @@ async def _provider_diagnose(request: web.Request) -> web.Response:
         payload: Any = await request.json()
         if not isinstance(payload, dict):
             raise ProviderConfigurationError("request body must be a JSON object")
-        return _ok(await provider.diagnose(str(payload.get("capability", ""))))
+        draft_raw = payload.get("draft")
+        draft = draft_raw if isinstance(draft_raw, dict) else None
+        return _ok(await provider.diagnose(str(payload.get("capability", "")), draft))
     except ProviderConfigurationError as exc:
         return _error(400, str(exc), retryable=False)
     except ProviderError as exc:

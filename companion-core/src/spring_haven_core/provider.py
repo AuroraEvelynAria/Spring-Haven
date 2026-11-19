@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlparse
 from aiohttp import ClientSession, ClientTimeout, FormData
 
 from .config import CoreConfig
-from .provider_settings import CAPABILITIES, ProviderSettingsStore
+from .provider_settings import CAPABILITIES, CapabilitySnapshot, ProviderSettingsStore
 
 MAX_PROVIDER_RESPONSE_BYTES = 16_000_000
 MAX_AUDIO_INPUT_BYTES = 8_000_000
@@ -422,11 +422,40 @@ class OpenAICompatibleProvider:
             speed=normalized_speed,
         )
 
-    async def diagnose(self, capability: str) -> dict[str, Any]:
+    async def diagnose(
+        self,
+        capability: str,
+        draft: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """诊断一个能力通道。draft 非空时用草稿参数做一次**免保存**直测:
+        只影响本次调用的快照(临时 OpenAICompatibleProvider 视角),不落盘、
+        不碰 DPAPI 持久化——首启向导的「测试连接」用它,用户确认后才走
+        保存路径。"""
         normalized = str(capability).strip().lower()
         if normalized not in set(CAPABILITIES):
             raise ProviderError("unknown provider capability")
         profile = self.settings.profile_snapshot(normalized)
+        if draft is not None:
+            if not isinstance(draft, dict):
+                raise ProviderError("draft provider settings must be a JSON object")
+            draft_base_url = str(draft.get("base_url", "")).strip()
+            draft_model = str(draft.get("model", "")).strip()
+            draft_api_key = str(draft.get("api_key", "")).strip()
+            if not draft_base_url or not draft_model:
+                raise ProviderError("draft diagnosis requires base_url and model")
+            # 草稿密钥为空时回落到已存密钥——与 configure_provider 的
+            # "空值表示保留现有 Key"语义一致(本地 LM Studio 可无 Key)。
+            profile = CapabilitySnapshot(
+                capability=profile.capability,
+                base_url=draft_base_url,
+                model=draft_model,
+                api_key=draft_api_key or profile.api_key,
+                enabled=True,
+                protocol="openai_chat",
+                inherit_chat_key=False,
+                allow_insecure_http=bool(draft.get("allow_insecure_http", False)),
+                extra_headers={},
+            )
         if not profile.enabled:
             raise ProviderError(f"{normalized} provider is disabled")
         profile_host = (urlparse(profile.base_url).hostname or "").lower()
