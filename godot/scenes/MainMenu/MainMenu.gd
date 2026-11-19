@@ -7,6 +7,8 @@ const GLOW_SHADER := preload("res://shaders/glow.gdshader")
 const TITLE_SHADER := preload("res://shaders/gradient_text.gdshader")
 const BACKGROUND_SHADER := preload("res://shaders/menu_background.gdshader")
 const UIBREATH := preload("res://scripts/domain/UIBreath.gd")
+const BUTTON_TWEEN_META := "_menu_button_tween"
+const BUTTON_FLOAT_META := "_menu_button_float"
 
 var _content: VBoxContainer
 var _title: Label
@@ -267,8 +269,9 @@ func _make_menu_button(text: String, filled: bool) -> Button:
 	disabled_style.border_color = Color(disabled_style.border_color, 0.35)
 	disabled_style.shadow_color = Color(disabled_style.shadow_color, disabled_style.shadow_color.a * 0.5)
 	button.add_theme_stylebox_override("disabled", disabled_style)
-	button.mouse_entered.connect(func(): _scale_button(button, 1.04))
+	button.mouse_entered.connect(func(): _scale_button(button, 1.05))
 	button.mouse_exited.connect(func(): _scale_button(button, 1.0))
+	button.pressed.connect(func(): _press_bounce(button))
 	return button
 
 func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
@@ -303,18 +306,38 @@ func _menu_style(filled: bool, hover: bool) -> StyleBoxFlat:
 
 func _animate_intro() -> void:
 	await get_tree().process_frame
-	# 入场阶梯:标题→副标题→按钮逐个浮入,替代整块淡入
+	# 入场阶梯:标题→副标题→按钮逐个浮入,替代整块淡入;
+	# 按钮走 BACK 过冲——落位时轻微弹一下,像鱼入水。
 	var delay := 0.0
+	var menu_buttons: Array[Button] = []
+	# 重放入场(主题切换/回归主菜单)前先杀掉旧的浮动与缩放 tween,
+	# 防止两套动画叠乘。
+	for stale in _content.get_children():
+		if stale is Button:
+			(stale as Button).scale = Vector2.ONE
+			if (stale as Button).has_meta(BUTTON_FLOAT_META):
+				var old_float: Tween = (stale as Button).get_meta(BUTTON_FLOAT_META)
+				if old_float is Tween and old_float.is_valid():
+					old_float.kill()
+				(stale as Button).remove_meta(BUTTON_FLOAT_META)
+			_kill_button_tween(stale as Button)
 	for child in _content.get_children():
 		if not child is Control:
 			continue
+		var is_menu_button := child is Button
+		if is_menu_button:
+			menu_buttons.append(child)
 		var target_position: Vector2 = child.position
 		child.modulate.a = 0.0
 		child.position = target_position + Vector2(0, 22)
 		var tween := create_tween()
 		tween.tween_interval(delay)
 		tween.tween_property(child, "modulate:a", 1.0, 0.55).set_ease(Tween.EASE_OUT)
-		tween.tween_property(child, "position", target_position, 0.55).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tween.tween_property(
+			child, "position", target_position, 0.55
+		).set_ease(Tween.EASE_OUT).set_trans(
+			Tween.TRANS_BACK if is_menu_button else Tween.TRANS_CUBIC
+		)
 		delay += 0.09
 	# 呼吸感:入场结束后,标题与主按钮进入亮度呼吸(纯 modulate,零几何变化)
 	var breath_timer := create_tween()
@@ -324,11 +347,76 @@ func _animate_intro() -> void:
 			UIBREATH.breathe(_title, 0.05, 4.2)
 		if is_instance_valid(_start_button) and not _start_button.disabled:
 			UIBREATH.breathe(_start_button, 0.04, 2.8)
+		_start_button_float(menu_buttons)
 	)
 
+
+## 待机"水面漂浮":入场后每颗菜单按钮以错开的相位做 ±2px 上下浮动,
+## 悬停/按压时由 _scale_button/_press_bounce 接管(同一 meta 互斥)。
+func _start_button_float(buttons: Array[Button]) -> void:
+	for index in buttons.size():
+		var button := buttons[index]
+		if not is_instance_valid(button):
+			continue
+		var float_tween := create_tween().set_loops()
+		float_tween.tween_property(button, "position:y", button.position.y + 2.0, 1.6) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE) \
+			.set_delay(0.18 * index)
+		float_tween.tween_property(button, "position:y", button.position.y, 1.6) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		button.set_meta(BUTTON_FLOAT_META, float_tween)
+
 func _scale_button(button: Button, scale_value: float) -> void:
+	# Control.scale 绕 pivot_offset 转,默认在左上角——不把支点同步到中心,
+	# hover 放大就往右下歪着长(按钮"歪掉了"的真凶)。size 在布局后才稳定,
+	# 所以每次动画前同步而不是只设一次。
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size / 2.0
+	_kill_button_tween(button)
+	# 悬停接管时暂停待机漂浮;离开时恢复,让按钮重新浮起来。
+	if scale_value != 1.0:
+		_set_button_float(button, false)
+	else:
+		_set_button_float(button, true)
 	var tween := create_tween()
-	tween.tween_property(button, "scale", Vector2(scale_value, scale_value), 0.18).set_ease(Tween.EASE_OUT)
+	tween.tween_property(
+		button, "scale", Vector2(scale_value, scale_value), 0.24
+	).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	button.set_meta(BUTTON_TWEEN_META, tween)
+
+
+func _set_button_float(button: Button, floating: bool) -> void:
+	if not button.has_meta(BUTTON_FLOAT_META):
+		return
+	var float_tween: Tween = button.get_meta(BUTTON_FLOAT_META)
+	if float_tween is Tween and float_tween.is_valid():
+		if floating:
+			float_tween.play()
+		else:
+			float_tween.pause()
+
+
+## 按压果冻感:快速压扁 → 弹性回正。压扁走快出,回正带轻微过冲。
+func _press_bounce(button: Button) -> void:
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size / 2.0
+	_kill_button_tween(button)
+	var tween := create_tween()
+	tween.tween_property(button, "scale", Vector2(0.95, 0.95), 0.07) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_property(button, "scale", Vector2.ONE, 0.22) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	button.set_meta(BUTTON_TWEEN_META, tween)
+
+
+func _kill_button_tween(button: Button) -> void:
+	if button.has_meta(BUTTON_TWEEN_META):
+		var old: Tween = button.get_meta(BUTTON_TWEEN_META)
+		if old is Tween and old.is_valid():
+			old.kill()
+		button.remove_meta(BUTTON_TWEEN_META)
 
 func _on_start_pressed() -> void:
 	if not Global.is_state_loaded():
