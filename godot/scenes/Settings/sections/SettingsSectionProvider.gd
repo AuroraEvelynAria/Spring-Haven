@@ -294,6 +294,27 @@ func _build_ai_provider_section(parent: VBoxContainer, data: Dictionary, subcate
 	_provider_save_button = Button.new()
 	_provider_save_button.text = "保存并立即应用"
 	_provider_save_button.custom_minimum_size = Vector2(150, 34)
+	# 主操作实心化:与主菜单"唯一实心主按钮"同一层级语言——三个同色
+	# 平铺按钮没有主次(实拍评审记录),保存是这一组唯一的"前进"动作。
+	var theme_data := ThemeMgr.get_current_theme_data()
+	var filled := StyleBoxFlat.new()
+	filled.set_corner_radius_all(17)
+	filled.bg_color = Color(str(theme_data.primary)).darkened(0.22) if not bool(theme_data.is_dark) else Color(str(theme_data.primary))
+	filled.content_margin_left = 18.0
+	filled.content_margin_right = 18.0
+	_provider_save_button.add_theme_stylebox_override("normal", filled)
+	_provider_save_button.add_theme_stylebox_override("hover", filled)
+	_provider_save_button.add_theme_stylebox_override("pressed", filled)
+	_provider_save_button.add_theme_color_override("font_color", Color.WHITE if not bool(theme_data.is_dark) else Color(str(theme_data.bg)))
+	# 无改动时按钮置灰(_sync_provider_buttons 的 not _provider_dirty 是常态),
+	# disabled 必须也覆盖——否则跌回全局默认灰盒,实心主次在待机态就丢了。
+	var filled_disabled := filled.duplicate()
+	filled_disabled.bg_color = Color(filled.bg_color, 0.38)
+	_provider_save_button.add_theme_stylebox_override("disabled", filled_disabled)
+	_provider_save_button.add_theme_color_override(
+		"font_disabled_color",
+		Color(Color.WHITE if not bool(theme_data.is_dark) else Color(str(theme_data.bg)), 0.7)
+	)
 	_provider_save_button.pressed.connect(_save_provider_settings)
 	command_row.add_child(_provider_save_button)
 	_provider_clear_button = Button.new()

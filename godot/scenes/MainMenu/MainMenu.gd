@@ -180,27 +180,27 @@ func _build_menu() -> void:
 	menu.add_theme_constant_override("separation", 12)
 	_content.add_child(menu)
 
-	_start_button = _make_menu_button("🌸 继续旅程", true)
+	_start_button = _make_menu_button("❀ 继续旅程", true)
 	_start_button.name = "StartButton"
 	_start_button.pressed.connect(_on_start_pressed)
 	menu.add_child(_start_button)
-	_new_game_button = _make_menu_button("↻ 新旅程", false)
+	_new_game_button = _make_menu_button("◇ 新旅程", false)
 	_new_game_button.name = "NewGameButton"
 	_new_game_button.pressed.connect(_on_new_game_pressed)
 	menu.add_child(_new_game_button)
-	_journey_library_button = _make_menu_button("📚 旅程档案", false)
+	_journey_library_button = _make_menu_button("▤ 旅程档案", false)
 	_journey_library_button.name = "JourneyLibraryButton"
 	_journey_library_button.pressed.connect(_on_journey_library_pressed)
 	menu.add_child(_journey_library_button)
-	_life_lab_button = _make_menu_button("🍡 团子生活实验室", false)
+	_life_lab_button = _make_menu_button("◎ 团子生活实验室", false)
 	_life_lab_button.name = "LifeLabButton"
 	_life_lab_button.pressed.connect(_on_life_lab_pressed)
 	menu.add_child(_life_lab_button)
-	_studio_button = _make_menu_button("🎭 角色工坊", false)
+	_studio_button = _make_menu_button("◆ 角色工坊", false)
 	_studio_button.name = "CharacterStudioButton"
 	_studio_button.pressed.connect(_on_studio_pressed)
 	menu.add_child(_studio_button)
-	_settings_button = _make_menu_button("⚙️ 设置", false)
+	_settings_button = _make_menu_button("☰ 设置", false)
 	_settings_button.name = "SettingsButton"
 	_settings_button.pressed.connect(_on_settings_pressed)
 	menu.add_child(_settings_button)
@@ -351,18 +351,22 @@ func _animate_intro() -> void:
 	)
 
 
-## 待机"水面漂浮":入场后每颗菜单按钮以错开的相位做 ±2px 上下浮动,
-## 悬停/按压时由 _scale_button/_press_bounce 接管(同一 meta 互斥)。
+## 待机"水面脉动":入场后每颗菜单按钮以错开相位做极轻缩放呼吸
+## (1.0↔1.012,绕中心)。不碰 position——按钮在 VBox 里,任何 position
+## 写入都会与容器布局打架(实拍评审逮到的整列位移真凶);scale 绕
+## pivot_offset 转,零布局扰动。悬停/按压时由 _scale_button/_press_bounce
+## 接管(同一 meta 互斥)。
 func _start_button_float(buttons: Array[Button]) -> void:
 	for index in buttons.size():
 		var button := buttons[index]
 		if not is_instance_valid(button):
 			continue
+		button.pivot_offset = button.size / 2.0
 		var float_tween := create_tween().set_loops()
-		float_tween.tween_property(button, "position:y", button.position.y + 2.0, 1.6) \
+		float_tween.tween_property(button, "scale", Vector2(1.012, 1.012), 1.9) \
 			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE) \
-			.set_delay(0.18 * index)
-		float_tween.tween_property(button, "position:y", button.position.y, 1.6) \
+			.set_delay(0.22 * index)
+		float_tween.tween_property(button, "scale", Vector2.ONE, 1.9) \
 			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 		button.set_meta(BUTTON_FLOAT_META, float_tween)
 
